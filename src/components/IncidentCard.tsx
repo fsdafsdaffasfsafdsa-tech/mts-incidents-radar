@@ -57,7 +57,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
 
   return (
     <section className={`panel icard p-${inc.priority}`} aria-label={inc.title}>
-      <header className="pd-head">
+      <header className="pd-head" data-jv="top">
         <PrioDot p={inc.priority} text={inc.priorityText} />
         <span className={`chip-state st-${inc.status}`}>{STATUS_TEXT[inc.status]}</span>
         {inc.origin === 'complaints' ? (
@@ -90,7 +90,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
         <h3 className="step-h">
           <span className="step-n">1</span> Что случилось
         </h3>
-        <div className="facts">
+        <div className="facts" data-jv="level">
           {inc.origin === 'complaints' ? (
             <div className="fact">
               <span className="f-lbl">Жалоб</span>
@@ -120,7 +120,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           {inc.origin === 'complaints' ? `${inc.service} · ${inc.regionName}. ` : `${inc.service}. `}
           {inc.shortDescription}
         </p>
-        <div className="who-line">
+        <div className="who-line" data-jv="who">
           <span>
             Ведёт на пункте: <b>{inc.coordinatorName ?? 'никто'}</b>
             {mine && <span className="tag">вы</span>}
@@ -142,7 +142,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           </h3>
 
           {inc.p1Proposal && (
-            <div className="advice danger">
+            <div className="advice danger" data-jv="p1">
               <div className="adv-h">Поднять до «Наивысшего»</div>
               <div className="adv-why">{inc.p1Proposal.replace(/^ИИ предлагает «Наивысший»: /, 'Почему: ')}</div>
               <div className="adv-act">
@@ -157,7 +157,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           )}
 
           {sigs.map((s) => (
-            <div key={s.id} className="advice warn">
+            <div key={s.id} className="advice warn" data-jv="signal">
               <div className="adv-h">
                 <BellRing size={14} /> {s.kind === 'help' ? 'Сотрудник просит помощи' : s.kind === 'timer' ? 'Автоэскалация: команда не взяла' : 'Инцидент застрял'}
               </div>
@@ -203,7 +203,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           )}
 
           {best && bestTeam && (
-            <div className={`advice ${routedToBest ? 'done' : ''}`}>
+            <div className={`advice ${routedToBest ? 'done' : ''}`} data-jv="route">
               <div className="adv-h">
                 {routedToBest ? 'Передано туда, куда советовал ИИ: ' : 'Передать: '}«{bestTeam.name}»
                 <span className="score" title="Балл подбора, 0–100">
@@ -258,7 +258,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           <h3 className="step-h">
             <span className="step-n">3</span> Ваше решение
           </h3>
-          <div className="decide">
+          <div className="decide" data-jv="decide">
             {me.role === 'coordinator' && !mine && (
               <button className="btn btn-primary" onClick={() => takeAtPoint(inc.id)}>
                 <UserCheck size={15} /> Взять себе

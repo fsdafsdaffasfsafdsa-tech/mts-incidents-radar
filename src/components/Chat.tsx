@@ -33,7 +33,7 @@ export function Chat({ inc }: { inc: Incident }) {
     void sendComment(inc.id, t);
   };
   return (
-    <div className="chat">
+    <div className="chat" data-jv="chat">
       <h3 className="step-h small">
         <MessageSquare size={14} /> Переписка {inc.teamId && inc.teamId !== 'kp' ? `с «${teamName(inc.teamId)}»` : 'по инциденту'}
         {list.length > 0 && <span className="tag">{list.length}</span>}

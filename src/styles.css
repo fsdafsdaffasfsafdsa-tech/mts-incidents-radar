@@ -8428,6 +8428,11 @@ body.desk-resizing {
   font-size: 12px;
   color: var(--warn);
 }
+.jv-sub {
+  max-height: 38vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
 .jv-sub.user {
   font-style: italic;
   opacity: 0.85;

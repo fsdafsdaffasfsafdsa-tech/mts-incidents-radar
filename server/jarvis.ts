@@ -39,7 +39,9 @@ export type ClientAction =
   | { type: 'replay'; on: boolean }
   | { type: 'settings'; open: boolean }
   | { type: 'theme'; id: string }
-  | { type: 'team'; name: string };
+  | { type: 'team'; name: string }
+  | { type: 'show'; what: Show }; // прокрутить карточку к разделу, который изменился, и подсветить
+export type Show = 'top' | 'who' | 'route' | 'level' | 'p1' | 'signal' | 'chat' | 'decide';
 export interface JarvisAsk {
   text: string;
   selectedId: string | null;
@@ -66,7 +68,17 @@ function proxyAgent() {
   if (agent === undefined) agent = process.env.OPENROUTER_PROXY ? new SocksProxyAgent(process.env.OPENROUTER_PROXY) : null;
   return agent;
 }
+/** Сеть иногда рвётся на полуслове — один повтор через полсекунды. */
 async function openrouter(path: string, body: unknown, timeoutMs: number): Promise<{ status: number; buf: Buffer }> {
+  try {
+    return await openrouterOnce(path, body, timeoutMs);
+  } catch (err) {
+    if (err instanceof Error && /aborted|timeout|не ответил/i.test(err.message)) throw err; // долгий ответ не повторяем
+    await new Promise((r) => setTimeout(r, 500));
+    return openrouterOnce(path, body, timeoutMs);
+  }
+}
+async function openrouterOnce(path: string, body: unknown, timeoutMs: number): Promise<{ status: number; buf: Buffer }> {
   const url = `https://openrouter.ai/api/v1${path}`;
   const payload = JSON.stringify(body);
   const headers = { Authorization: `Bearer ${key()}`, 'Content-Type': 'application/json' };
@@ -282,6 +294,7 @@ class Exec {
       }
       case 'suggest_assignee': {
         const inc = this.inc(a.id);
+        if (this.mode === 'control') this.actions.push({ type: 'show', what: 'route' });
         const s = suggestions(p, inc);
         return [s.picks.length ? s.picks.map((x, k) => `${k + 1}) team_id=${x.teamId} «${teamName(x.teamId)}» ${x.score}%: ${x.reasons.slice(0, 2).join('; ')}`).join('\n') : 'команд по справочнику нет', s.coordName ? `вести на пункте: ${s.coordName} — ${s.coord!.why}` : ''].filter(Boolean).join('\n');
       }
@@ -297,7 +310,7 @@ class Exec {
       case 'open_incident': {
         this.control();
         const inc = this.inc(a.id);
-        this.actions.push({ type: 'open', id: inc.id });
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'top' });
         this.done.push(`Открыл «${inc.title}»`);
         return 'ok';
       }
@@ -333,7 +346,7 @@ class Exec {
         const inc = this.inc(a.id);
         if (!this.me.personId) throw new Error('нет учётки дежурного');
         p.assignCoordinator(inc.id, this.me.personId, this.me.name);
-        this.actions.push({ type: 'open', id: inc.id });
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'who' });
         this.done.push(`Взял на вас «${inc.title}»`);
         return 'взято';
       }
@@ -343,6 +356,7 @@ class Exec {
         const person = findCoordinator(String(a.person ?? ''));
         if (!person) throw new Error('такого дежурного нет на смене');
         p.assignCoordinator(inc.id, person.id, this.me.name);
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'who' });
         this.done.push(`Вести «${inc.title}» — ${person.name}`);
         return `назначено: ${person.name}`;
       }
@@ -353,7 +367,7 @@ class Exec {
         if (!team || team === POINT_ID) throw new Error('справочник не нашёл команду — назовите её');
         if (inc.status !== 'coordinators' && inc.teamId === team) throw new Error(`он уже у команды «${teamName(team)}»${inc.assigneeName ? `, в работе у ${inc.assigneeName}` : ''}`);
         p.route(inc.id, team, this.me.name);
-        this.actions.push({ type: 'open', id: inc.id });
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'route' });
         this.done.push(`Передал «${inc.title}» команде «${teamName(team)}»`);
         return `передано команде «${teamName(team)}»`;
       }
@@ -363,6 +377,7 @@ class Exec {
         const lvl = String(a.level) as Priority;
         if (!['P1', 'P2', 'P3', 'P4'].includes(lvl)) throw new Error('уровень — P1…P4');
         p.setLevel(inc.id, lvl, this.me.name, String(a.reason ?? 'по команде дежурного через Джарвиса'));
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'level' });
         this.done.push(`Уровень «${inc.title}»: ${PRIORITY_TEXT[lvl]}`);
         return 'ok';
       }
@@ -371,6 +386,7 @@ class Exec {
         const inc = this.inc(a.id);
         if (a.confirm) p.setLevel(inc.id, 'P1', this.me.name, 'подтверждено дежурным по предложению ИИ');
         else p.dismissP1(inc.id, this.me.name);
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'level' });
         this.done.push(a.confirm ? `Поднял до «Наивысшего»: «${inc.title}»` : `Отклонил «Наивысший» для «${inc.title}»`);
         return 'ok';
       }
@@ -380,6 +396,7 @@ class Exec {
         const sig = [...p.signals.values()].find((s) => s.incidentId === inc.id && s.status === 'open');
         if (!sig) throw new Error('по этому инциденту нет открытого сигнала');
         p.notifyLead(sig.id, this.me.name);
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'signal' });
         this.done.push(`Указал руководителю команды «${teamName(sig.teamId)}»`);
         return 'ok';
       }
@@ -389,6 +406,7 @@ class Exec {
         const text = String(a.text ?? '').trim();
         if (!text) throw new Error('пустое сообщение');
         p.comment(inc.id, { name: this.me.name, personId: this.me.personId, side: 'point', teamId: null }, text);
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'chat' });
         this.done.push(`Написал в переписку «${inc.title}»`);
         return 'ok';
       }
@@ -396,7 +414,7 @@ class Exec {
         this.control();
         const inc = p.createFromCluster(String(a.key), this.me.name);
         this.focus = inc.id;
-        this.actions.push({ type: 'open', id: inc.id });
+        this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'top' });
         this.done.push(`Создал инцидент «${inc.title}»`);
         return `создан id=${inc.id}`;
       }
@@ -464,7 +482,8 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 - «Кому дать?», «кому передать?» — назови команду из совета ИИ и почему (и кто из дежурных подходит вести, если инцидент без дежурного). Пока не попросят — не передавай.
 - «Выдай», «давай», «передавай», «да, отдай» после твоего предложения — выполни именно то, что предложил.
 - «Он», «его», «этот» — инцидент в фокусе разговора или открытый на экране.
-- Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.`;
+- Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.
+- Пометки «(Сделано: …)» в истории — действия, которые уже выполнены на самом деле. Не оспаривай их и не повторяй без просьбы.`;
 const CONTROL_NOTE = `Режим «Джарвис управляет экраном» включён: ты можешь открывать вкладки, инциденты, настройки, менять тему, запускать перемотку, брать, поручать, передавать, менять уровень и писать в переписку. Когда объясняешь инцидент — обязательно открой его на экране (open_incident). «Открой вкладку и объясни ситуацию» — открой вкладку и самый важный инцидент на ней, потом объясни.`;
 const CHAT_NOTE = `Режим только ответов: ты ничего не открываешь и не меняешь. Если просят действие — скажи, что для этого нужно включить «Джарвис управляет экраном» в настройках.`;
 
@@ -594,7 +613,8 @@ function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
     const tab = TAB_WORDS.find(([re]) => re.test(text));
     // «Открой входящие и объясни» — самый горящий на пункте; «у команд» — самый горящий у команд.
     const onTab = tab?.[1] === 'inbox' ? hot(point, now).find((i) => i.status === 'coordinators') : tab?.[1] === 'teams' ? hot(point, now).find((i) => i.status !== 'coordinators') : undefined;
-    const inc = findIncidents(point, text, 1)[0] ?? (wantsExplain ? onTab ?? focus() ?? hot(point, now)[0] : undefined);
+    const wantsTop = /срочн|горящ|главн|важн/.test(text);
+    const inc = findIncidents(point, text, 1)[0] ?? (wantsExplain || wantsTop ? onTab ?? (wantsTop ? hot(point, now)[0] : focus() ?? hot(point, now)[0]) : undefined);
     const parts: string[] = [];
     if (tab) parts.push(tryRun('switch_tab', { tab: tab[1] }));
     if (inc) parts.push(tryRun('open_incident', { id: inc.id }));

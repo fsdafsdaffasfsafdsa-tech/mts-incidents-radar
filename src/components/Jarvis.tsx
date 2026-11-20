@@ -15,7 +15,8 @@ type Action =
   | { type: 'replay'; on: boolean }
   | { type: 'settings'; open: boolean }
   | { type: 'theme'; id: string }
-  | { type: 'team'; name: string };
+  | { type: 'team'; name: string }
+  | { type: 'show'; what: string };
 interface Status {
   llm: boolean;
   tts: boolean;
@@ -210,23 +211,71 @@ const TABS = ['map', 'inbox', 'teams', 'done', 'requests', 'signals', 'shift', '
 const SUGGEST_CONTROL = ['Что горит?', 'Открой входящие и объясни ситуацию', 'Кому можно дать?', 'Кто на смене?', 'Перемотай карту'];
 const SUGGEST_CHAT = ['Что горит?', 'Кто на смене?', 'Сколько жалоб?', 'Что с самым срочным?'];
 
+function flashEl(el: Element) {
+  el.classList.remove('jv-flash');
+  void (el as HTMLElement).offsetWidth;
+  el.classList.add('jv-flash');
+  setTimeout(() => el.classList.remove('jv-flash'), 1600);
+}
 function flash(sel: string) {
   setTimeout(() => {
     const el = document.querySelector(sel);
-    if (!el) return;
-    el.classList.remove('jv-flash');
-    void (el as HTMLElement).offsetWidth;
-    el.classList.add('jv-flash');
-    setTimeout(() => el.classList.remove('jv-flash'), 1600);
+    if (el) flashEl(el);
   }, 80);
 }
 
+// Что изменилось — туда и прокручиваем карточку (раздел может быть внизу, за краем экрана).
+const SHOW: Record<string, string[]> = {
+  top: ['[data-jv="top"]'],
+  who: ['[data-jv="who"]'],
+  route: ['[data-jv="route"]', '[data-jv="who"]'],
+  level: ['[data-jv="level"]'],
+  p1: ['[data-jv="p1"]', '[data-jv="level"]'],
+  signal: ['[data-jv="signal"]', '[data-jv="who"]'],
+  chat: ['[data-jv="chat"]'],
+  decide: ['[data-jv="decide"]'],
+};
+const smooth = (): ScrollBehavior => (document.documentElement.dataset.motion === 'off' ? 'auto' : 'smooth');
+/** Ждём, пока карточка отрисуется (до 2 с), прокручиваем к разделу и подсвечиваем его. */
+function reveal(what: string) {
+  const sels = SHOW[what] ?? [];
+  const started = Date.now();
+  const attempt = () => {
+    for (const s of sels) {
+      const el = document.querySelector(`.icard ${s}`) ?? document.querySelector(s);
+      if (!el) continue;
+      el.scrollIntoView({ behavior: smooth(), block: what === 'top' ? 'start' : 'center' });
+      if (what === 'chat') {
+        const list = el.querySelector('.chat-list');
+        list?.scrollTo({ top: list.scrollHeight, behavior: smooth() });
+      }
+      flashEl(el);
+      return;
+    }
+    if (Date.now() - started < 2000) setTimeout(attempt, 150);
+  };
+  setTimeout(attempt, 350);
+}
+/** Строка открытого инцидента в списке — тоже в поле зрения. */
+function revealRow() {
+  setTimeout(() => document.querySelector('.prow.sel, .trow.sel')?.scrollIntoView({ behavior: smooth(), block: 'nearest' }), 400);
+}
+
 function runActions(actions: Action[]) {
+  // Прокручиваем только к последнему изменению — иначе экран дёргается между разделами.
+  const lastShow = [...actions].reverse().find((a) => a.type === 'show');
   for (const a of actions) {
+    if (a.type === 'show' && a !== lastShow) continue;
     switch (a.type) {
       case 'open':
-        if (getState().incidents.has(a.id)) openIncident(a.id);
+        if (getState().incidents.has(a.id)) {
+          openIncident(a.id);
+          revealRow();
+        }
         window.dispatchEvent(new CustomEvent('radar:jarvis-open', { detail: a.id }));
+        break;
+      case 'show':
+        reveal(a.what);
         break;
       case 'tab':
         if (TABS.includes(a.tab)) {
@@ -351,6 +400,9 @@ export function Jarvis() {
       if (data.focus) focus.current = data.focus;
       setLines((l) => [...l, { role: 'assistant', content: data.reply, llm: data.llm, done: data.done }]);
       runActions(data.actions ?? []);
+      // Джарвис показывает изменение в карточке — сворачиваем окно, чтобы оно его не закрывало
+      // (ответ виден подписью у шара; окно — по клику на шар).
+      if (data.actions?.some((a) => a.type === 'show') && window.innerWidth < 2200) setOpen(false);
       if (jarvisPrefs.speak) await say(data.reply);
       setPhase('idle');
       follow();
@@ -588,7 +640,20 @@ export function Jarvis() {
           </form>
         </div>
       )}
-      {!open && last && phase === 'speak' && <div className="jv-sub">{last.content}</div>}
+      {!open && last && (phase === 'speak' || awaiting) && (
+        <div className="jv-sub">
+          {last.content}
+          {!!last.done?.length && (
+            <span className="jv-done">
+              {last.done.map((d, j) => (
+                <span key={j}>
+                  <Check size={11} /> {d}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
       {!open && heard && <div className="jv-sub user">{heard}</div>}
       <div className="jv-dock">
         {(phase !== 'idle' || awaiting || (control && !open)) && <span className="jv-label">{label}</span>}
