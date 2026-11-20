@@ -138,3 +138,17 @@ export function EscTimer({ inc, now }: { inc: Incident; now: number }) {
     </span>
   );
 }
+
+/**
+ * «Температура» инцидента 0…1: сколько срока уже прошло, с поправкой на уровень.
+ * Строка краснеет по мере приближения дедлайна — горящее видно, не читая цифр.
+ */
+export function heatOf(inc: Incident, now: number): number {
+  if (inc.status === 'resolved') return 0;
+  const total = Math.max(1, inc.slaDeadline - inc.createdAt);
+  const used = Math.min(1.2, Math.max(0, (now - inc.createdAt) / total));
+  const boost = inc.priority === 'P1' ? 0.25 : inc.priority === 'P2' ? 0.1 : 0;
+  return Math.min(1, used * 0.85 + boost + (inc.p1Proposal ? 0.2 : 0));
+}
+export const heatStyle = (h: number) => ({ ['--heat' as string]: h.toFixed(2) }) as React.CSSProperties;
+export const heatClass = (h: number) => (h >= 0.85 ? 'heat hot' : h >= 0.5 ? 'heat warm' : 'heat');

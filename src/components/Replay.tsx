@@ -19,6 +19,15 @@ export function Replay() {
 
   // Уходим со страницы — возвращаем реальное время.
   useEffect(() => () => setReplay(null), []);
+  // Запуск по голосовой команде Джарвиса.
+  useEffect(() => {
+    const go = () => {
+      setReplay(from);
+      setPlaying(true);
+    };
+    window.addEventListener('radar:replay', go);
+    return () => window.removeEventListener('radar:replay', go);
+  }, [from]);
 
   useEffect(() => {
     if (!playing || replayAt === null) return;

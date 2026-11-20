@@ -15,6 +15,7 @@ import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
 import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
+import { ask as askJarvis, jarvisStatus, speak } from './jarvis.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -199,6 +200,22 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       }
       if (what === 'p1') return json(res, 200, body.confirm ? point.setLevel(id, 'P1', actor, 'подтверждено дежурным по предложению ИИ') : point.dismissP1(id, actor));
       if (what === 'resolve') return json(res, 200, point.resolveAtPoint(id, actor));
+    }
+
+    // ─── Джарвис: голосовой помощник дежурного ───
+    if (p === '/api/jarvis/status') return json(res, 200, jarvisStatus());
+    if (p === '/api/jarvis' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      const history = Array.isArray(body.history) ? (body.history as { role: string; content: string }[]).filter((h) => (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : [];
+      return json(res, 200, await askJarvis(point, me, str(body.text).slice(0, 500), str(body.selectedId) || null, history as { role: 'user' | 'assistant'; content: string }[]));
+    }
+    if (p === '/api/jarvis/speak' && post) {
+      const body = await readBody(req);
+      const audio = await speak(str(body.text), str(body.voice));
+      if (!audio) return void res.writeHead(204).end();
+      res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length, 'Cache-Control': 'no-store' });
+      return void res.end(audio);
     }
 
     if (p === '/api/point/assign' && post) {

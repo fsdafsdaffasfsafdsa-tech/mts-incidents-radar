@@ -44,6 +44,9 @@ function run(action: HotAction) {
     case 'settings':
       setSettings(true);
       return;
+    case 'jarvis':
+      if (point) window.dispatchEvent(new Event('radar:jarvis'));
+      return;
     default: {
       const n = Number(action.slice(3)) - 1;
       const tab = hotNav.tabs[n];

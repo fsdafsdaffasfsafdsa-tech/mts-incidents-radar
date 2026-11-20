@@ -8,7 +8,7 @@ import { useNow } from '../lib/hooks';
 import { Deadline, Initials, PrioDot } from './ui';
 import { RFMap } from './RFMap';
 import { IncidentCard, TeamSearch } from './IncidentCard';
-import { STATUS_TEXT } from './kit';
+import { STATUS_TEXT, heatClass, heatOf, heatStyle } from './kit';
 
 type Scope = 'mine' | 'all' | 'free';
 const TZ: { id: string; label: string; test: (i: Incident) => boolean }[] = [
@@ -120,8 +120,9 @@ export function IncidentRow({ inc, sel, onClick }: { inc: Incident; sel: boolean
   // Сколько инцидент ждёт на пункте: для новых — с появления, для записей выгрузки — с запуска.
   const waitMin = Math.max(0, Math.floor((now - (inc.origin === 'dataset' ? inc.updatedAt : inc.createdAt)) / 60_000));
   const fresh = now - inc.createdAt < 8000;
+  const heat = heatOf(inc, now);
   return (
-    <div className={`prow p-${inc.priority} ${sel ? 'sel' : ''} ${fresh ? 'is-new' : ''}`} role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
+    <div className={`prow p-${inc.priority} ${sel ? 'sel' : ''} ${fresh ? 'is-new' : ''} ${heatClass(heat)}`} style={heatStyle(heat)} role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
       <PrioDot p={inc.priority} />
       <span className="pr-main">
         <span className="pr-title">{inc.title}</span>

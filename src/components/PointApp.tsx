@@ -2,7 +2,7 @@
 //   Дежурный: Жалобы → Входящие → У команд → Решено · Запросы · Сигналы · Смена пункта · ИИ-помощник · Справочник
 //   Новые инциденты, которые никто не взял, распределяет ИИ; дежурные передают друг другу сами.
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, BellRing, BookUser, CheckCircle2, ChevronRight, Inbox, MessageSquareShare, MonitorPlay, Sparkles, Users, Workflow } from 'lucide-react';
+import { Activity, BellRing, BookUser, CheckCircle2, ChevronRight, Inbox, LayoutDashboard, MessageSquareShare, MonitorPlay, Sparkles, Users, Workflow } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { openIncident, savedTab, select, setTab, teamName, useStore } from '../store';
 import { fmtDur, urgency } from '../lib/format';
@@ -12,13 +12,14 @@ import { RFMap } from './RFMap';
 import { IncidentCard } from './IncidentCard';
 import { Detector, IncidentRow, RequestCard, Signals } from './PointScreen';
 import { Roster, Shift } from './CommanderScreen';
-import { EscTimer, isOn } from './kit';
+import { EscTimer, heatClass, heatOf, heatStyle, isOn } from './kit';
 import { AiPage } from './AiPage';
 import { Replay } from './Replay';
 import { WallPage } from './WallPage';
 import { hotNav } from '../lib/hotkeys';
 import { MyShift } from './ShiftTools';
 import { Directory } from './Directory';
+import { Desk } from './Desk';
 
 interface TabDef {
   id: string;
@@ -56,6 +57,7 @@ function useTabs(): TabDef[] {
       { id: 'signals', label: 'Сигналы', icon: BellRing, count: sig, tone: sig ? 'hot' : undefined, hint: 'Застрявшие инциденты и просьбы о помощи. «Указать руководителю» — и руководитель команды увидит это у себя.' },
     ];
     return [
+      { id: 'desk', label: 'Мой стол', icon: LayoutDashboard, hint: 'Ваше рабочее место из блоков: входящие, карточка, карта, сигналы… «Настроить стол» — добавить, убрать, перетащить и растянуть. У каждого дежурного своя раскладка.' },
       { id: 'map', label: 'Жалобы', icon: Activity, count: stats?.flowPerMin, flow: true, hint: 'Жалобы абонентов приходят на карту. ИИ замечает всплески и сам собирает их в инциденты.' },
       { id: 'inbox', label: 'Входящие', icon: Inbox, count: inbox.length, tone: free.length ? 'warn' : undefined, flow: true, hint: 'Новые инциденты на пункте: ваши и без дежурного. Возьмите себе или передайте коллеге, затем — команде. ИИ подсказывает, кому подходит, решаете вы.' },
       ...common,
@@ -96,6 +98,7 @@ export function PointApp() {
       </nav>
       <div className="stage-hint">{cur.hint}</div>
       <div className="stage-body">
+        {cur.id === 'desk' && <Desk />}
         {cur.id === 'map' && <MapPage />}
         {cur.id === 'inbox' && <InboxPage />}
         {cur.id === 'teams' && <TeamsPage />}
@@ -222,7 +225,7 @@ function TeamsPage() {
         ) : undefined
       }
       row={(i, sel) => (
-        <div className={`trow p-${i.priority} ${sel ? 'sel' : ''} ${now - i.updatedAt < 6000 ? 'is-new' : ''}`} role="button" tabIndex={0} onClick={() => select(i.id)} onKeyDown={(e) => e.key === 'Enter' && select(i.id)}>
+        <div className={`trow p-${i.priority} ${sel ? 'sel' : ''} ${now - i.updatedAt < 6000 ? 'is-new' : ''} ${heatClass(heatOf(i, now))}`} style={heatStyle(heatOf(i, now))} role="button" tabIndex={0} onClick={() => select(i.id)} onKeyDown={(e) => e.key === 'Enter' && select(i.id)}>
           <PrioDot p={i.priority} />
           <span className="tr-main">
             <span className="pr-title">{i.title}</span>

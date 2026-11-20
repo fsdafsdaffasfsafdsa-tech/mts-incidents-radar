@@ -18,6 +18,15 @@ const C = {
   light: { P1: '#e3142d', P2: '#e06a00', P3: '#c79600', P4: '#2f6bed', dot: '#e06a00', linked: '#e3142d', stroke: '#ffffff', text: '#ffffff', label: '#1d2433' },
 };
 const HALO_BASE = ['interpolate', ['linear'], ['get', 'n'], 5, 20, 50, 30, 200, 42];
+// Подложка спокойнее: без POI, номеров домов и подписей улиц, дороги проявляются только вблизи, границы регионов — пунктиром.
+const BASE = {
+  dark: { bg: '#0c121c', water: '#05080d', state: '#2b3547', country: '#4a566c' },
+  light: { bg: '#eef1f5', water: '#d3dce8', state: '#b4bfcf', country: '#8592a8' },
+};
+const HEAT = {
+  dark: ['rgba(0,0,0,0)', 'rgba(255,138,43,0.22)', 'rgba(255,106,43,0.5)', 'rgba(255,49,80,0.78)', 'rgba(255,214,190,0.95)'],
+  light: ['rgba(255,255,255,0)', 'rgba(255,138,43,0.25)', 'rgba(240,96,30,0.5)', 'rgba(227,20,45,0.72)', 'rgba(150,0,20,0.9)'],
+};
 const fallback = (theme: 'dark' | 'light'): StyleSpecification => ({ version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': theme === 'dark' ? '#0b0f16' : '#e9edf3' } }] });
 
 export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
@@ -165,8 +174,34 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
   );
 }
 
+function soften(m: MlMap, theme: 'dark' | 'light') {
+  const B = BASE[theme];
+  for (const l of m.getStyle().layers) {
+    const id = l.id;
+    try {
+      if (/^(poi_|housenumber|roadname_|waterway_label|watername_lake|aeroway|place_hamlet|place_suburbs|place_villages|place_continent|building)/.test(id)) m.setLayoutProperty(id, 'visibility', 'none');
+      else if (l.type === 'line' && /^(road_|tunnel_|bridge_|rail)/.test(id)) m.setPaintProperty(id, 'line-opacity', ['interpolate', ['linear'], ['zoom'], 5, 0, 8, 0.35, 11, 0.75]);
+      else if (l.type === 'fill' && /^(landcover|park_|landuse)/.test(id)) m.setPaintProperty(id, 'fill-opacity', theme === 'dark' ? 0.2 : 0.3);
+      else if (id === 'background') m.setPaintProperty(id, 'background-color', B.bg);
+      else if (id === 'water') m.setPaintProperty(id, 'fill-color', B.water);
+      else if (id === 'boundary_state') {
+        m.setLayerZoomRange(id, 2, 24);
+        m.setPaintProperty(id, 'line-color', B.state);
+        m.setPaintProperty(id, 'line-opacity', 0.9);
+        m.setPaintProperty(id, 'line-width', ['interpolate', ['linear'], ['zoom'], 2, 0.5, 7, 1.2]);
+        m.setPaintProperty(id, 'line-dasharray', [3, 2]);
+      } else if (id === 'boundary_country_outline' || id === 'boundary_country_inner') m.setPaintProperty(id, 'line-color', B.country);
+      else if (id === 'place_town') m.setLayerZoomRange(id, 7, 24);
+      else if (l.type === 'symbol' && /^place_/.test(id)) m.setPaintProperty(id, 'text-opacity', 0.8);
+    } catch {
+      /* в запасной подложке таких слоёв нет */
+    }
+  }
+}
+
 function install(m: MlMap, theme: 'dark' | 'light') {
   const P = C[theme];
+  soften(m, theme);
   const fonts = m
     .getStyle()
     .layers.map((l) => (l.layout as Record<string, unknown> | undefined)?.['text-font'])
@@ -182,6 +217,34 @@ function install(m: MlMap, theme: 'dark' | 'light') {
   const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
   m.addSource('complaints', { type: 'geojson', data: empty, cluster: true, clusterRadius: 38, clusterMaxZoom: 8, clusterProperties: { linked: ['+', ['case', ['get', 'linked'], 1, 0]] } });
   m.addSource('incs', { type: 'geojson', data: empty });
+  m.addSource('heat', { type: 'geojson', data: empty });
+  // Тепловая карта жалоб: на всю страну видно, где «горит», без россыпи точек. Ближе — уступает кластерам.
+  const H = HEAT[theme];
+  m.addLayer({
+    id: 'heat',
+    type: 'heatmap',
+    source: 'heat',
+    maxzoom: 9,
+    paint: {
+      'heatmap-weight': ['*', ['interpolate', ['linear'], ['get', 'age'], 0, 1, 60, 0.25], ['case', ['get', 'linked'], 1.3, 0.7]],
+      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 2, 0.7, 8, 1.8],
+      'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 2, 16, 5, 24, 8, 36],
+      'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, H[0], 0.15, H[1], 0.4, H[2], 0.7, H[3], 1, H[4]],
+      'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.95, 6, 0.6, 9, 0],
+    },
+  });
+  m.addLayer({
+    id: 'cl-glow',
+    type: 'circle',
+    source: 'complaints',
+    filter: ['has', 'point_count'],
+    paint: {
+      'circle-color': ['case', ['>', ['/', ['get', 'linked'], ['get', 'point_count']], 0.5], P.linked, P.dot],
+      'circle-radius': ['interpolate', ['linear'], ['get', 'point_count'], 2, 18, 20, 26, 100, 36, 400, 46],
+      'circle-blur': 1,
+      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.15, 6, 0.35],
+    },
+  });
   m.addLayer({
     id: 'cl-circle',
     type: 'circle',
@@ -189,10 +252,10 @@ function install(m: MlMap, theme: 'dark' | 'light') {
     filter: ['has', 'point_count'],
     paint: {
       'circle-color': ['case', ['>', ['/', ['get', 'linked'], ['get', 'point_count']], 0.5], P.linked, P.dot],
-      'circle-opacity': 0.85,
-      'circle-radius': ['interpolate', ['linear'], ['get', 'point_count'], 2, 10, 20, 16, 100, 24, 400, 32],
-      'circle-stroke-color': P.stroke,
-      'circle-stroke-width': 2,
+      'circle-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.6, 5, 0.92],
+      'circle-radius': ['interpolate', ['linear'], ['get', 'point_count'], 2, 9, 20, 14, 100, 21, 400, 28],
+      'circle-stroke-color': theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.9)',
+      'circle-stroke-width': 1.5,
     },
   });
   // Без подложки (нет сети) нет и шрифтов: подписи пропускаем, точки и кольца остаются.
@@ -202,7 +265,7 @@ function install(m: MlMap, theme: 'dark' | 'light') {
     type: 'symbol',
     source: 'complaints',
     filter: ['has', 'point_count'],
-    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': font, 'text-size': 12, 'text-allow-overlap': true },
+    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': font, 'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 12], 'text-allow-overlap': true },
     paint: { 'text-color': P.text },
   });
   m.addLayer({
@@ -216,6 +279,18 @@ function install(m: MlMap, theme: 'dark' | 'light') {
       'circle-opacity': ['interpolate', ['linear'], ['get', 'age'], 0, 1, 60, 0.35],
       'circle-stroke-color': P.stroke,
       'circle-stroke-width': 1,
+    },
+  });
+  // Мягкая заливка под кольцом инцидента — «зона поражения».
+  m.addLayer({
+    id: 'inc-fill',
+    type: 'circle',
+    source: 'incs',
+    paint: {
+      'circle-color': ['match', ['get', 'p'], 'P1', P.P1, 'P2', P.P2, 'P3', P.P3, P.P4],
+      'circle-radius': ['+', HALO_BASE, 6] as any,
+      'circle-blur': 0.7,
+      'circle-opacity': ['case', ['get', 'sel'], 0.32, 0.16],
     },
   });
   // Расходящееся кольцо вокруг инцидента — заметно, но не мешает (анимация в компоненте).
@@ -247,8 +322,8 @@ function install(m: MlMap, theme: 'dark' | 'light') {
     id: 'inc-label',
     type: 'symbol',
     source: 'incs',
-    layout: { 'text-field': ['get', 'label'], 'text-font': font, 'text-size': 12, 'text-offset': [0, 2.6], 'text-anchor': 'top', 'text-allow-overlap': false, 'text-optional': true },
-    paint: { 'text-color': P.label, 'text-halo-color': P.stroke, 'text-halo-width': 1.6 },
+    layout: { 'text-field': ['get', 'label'], 'text-font': font, 'text-size': ['case', ['get', 'sel'], 13, 11.5], 'text-offset': [0, 2.7], 'text-anchor': 'top', 'text-allow-overlap': false, 'text-optional': true, 'text-letter-spacing': 0.02 },
+    paint: { 'text-color': ['case', ['get', 'sel'], ['match', ['get', 'p'], 'P1', P.P1, 'P2', P.P2, P.label], P.label], 'text-halo-color': P.stroke, 'text-halo-width': 2, 'text-halo-blur': 0.5 },
   });
 }
 
@@ -263,6 +338,7 @@ function push(m: MlMap) {
     properties: { linked: !!c.incidentId, age: Math.round((now - c.at) / 60_000) },
   }));
   (m.getSource('complaints') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pts });
+  (m.getSource('heat') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pts });
   const incs: GeoJSON.Feature[] = [];
   for (const i of s.incidents.values()) {
     if (i.origin !== 'complaints') continue;

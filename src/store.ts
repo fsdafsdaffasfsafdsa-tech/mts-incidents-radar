@@ -75,6 +75,7 @@ export interface State {
   replayAt: number | null; // перемотка карты: момент времени или null — реальное время
   hotkeys: Record<HotAction, string>;
   hotkeysOn: boolean;
+  alarmOn: boolean; // тревога для критических: мигание экрана и сирена
   toasts: Toast[];
   sound: boolean;
   theme: 'dark' | 'light'; // подложка: от неё зависит карта
@@ -135,6 +136,7 @@ let state: State = {
   replayAt: null,
   hotkeys: { ...DEFAULT_HOTKEYS, ...readPref<Partial<Record<HotAction, string>>>('radar.hotkeys', {}) },
   hotkeysOn: readPref('radar.hotkeysOn', true),
+  alarmOn: readPref('radar.alarmOn', true),
   toasts: [],
   sound: readPref('radar.sound', true),
   theme: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).base,
@@ -548,7 +550,9 @@ export function setTab(tab: string) {
 export function openIncident(id: string) {
   const inc = state.incidents.get(id);
   const role = state.me?.role;
-  if (inc && role === 'coordinator') setTab(inc.status === 'resolved' ? 'done' : inc.status === 'coordinators' ? 'inbox' : 'teams'); else if (inc) setTab('work');
+  if (inc && role === 'coordinator' && state.tab === 'desk') {
+    // На «Моём столе» не уходим со стола: инцидент откроется в блоке карточки.
+  } else if (inc && role === 'coordinator') setTab(inc.status === 'resolved' ? 'done' : inc.status === 'coordinators' ? 'inbox' : 'teams'); else if (inc) setTab('work');
   select(id);
 }
 export const savedTab = (role: string) => readPref<string>(`radar.tab.${role}`, '');
@@ -570,6 +574,10 @@ export function setHotkey(action: HotAction, code: string) {
 export function resetHotkeys() {
   writePref('radar.hotkeys', DEFAULT_HOTKEYS);
   setState({ hotkeys: { ...DEFAULT_HOTKEYS } });
+}
+export function setAlarmOn(alarmOn: boolean) {
+  writePref('radar.alarmOn', alarmOn);
+  setState({ alarmOn });
 }
 export function setHotkeysOn(hotkeysOn: boolean) {
   writePref('radar.hotkeysOn', hotkeysOn);

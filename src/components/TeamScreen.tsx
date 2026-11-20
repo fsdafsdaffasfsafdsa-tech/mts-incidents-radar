@@ -7,7 +7,7 @@ import { loadRoute, select, setAway, setTab, teamAssign, teamHelp, teamName, tea
 import { fmtClock, urgency } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, Elapsed, PRIO_COLORS, PrioDot } from './ui';
-import { Duty, EscTimer, PersonRow, STATUS_TEXT, ScheduleStrip, Spark, isOn, shiftHint } from './kit';
+import { Duty, EscTimer, PersonRow, STATUS_TEXT, ScheduleStrip, Spark, heatClass, heatOf, heatStyle, isOn, shiftHint } from './kit';
 import { Chat } from './Chat';
 import { TeamSearch } from './IncidentCard';
 import { Directory } from './Directory';
@@ -119,7 +119,7 @@ function TeamQueue({ list, selected }: { list: Incident[]; selected: string | nu
       <div className="pl-rows">
         {!rows.length && <div className="empty">Пусто</div>}
         {rows.slice(0, 60).map((i) => (
-          <div key={i.id} className={`prow p-${i.priority} ${selected === i.id ? 'sel' : ''}`} role="button" tabIndex={0} onClick={() => select(i.id)} onKeyDown={(e) => e.key === 'Enter' && select(i.id)}>
+          <div key={i.id} className={`prow p-${i.priority} ${selected === i.id ? 'sel' : ''} ${heatClass(heatOf(i, now))}`} style={heatStyle(heatOf(i, now))} role="button" tabIndex={0} onClick={() => select(i.id)} onKeyDown={(e) => e.key === 'Enter' && select(i.id)}>
             <PrioDot p={i.priority} />
             <span className="pr-main">
               <span className="pr-title">{i.title}</span>

@@ -5,7 +5,8 @@ import { Check, Play, Settings2, Volume2, VolumeX, X } from 'lucide-react';
 import { CUE_TEXT, SOUND_PACKS, type Cue } from '../lib/sound';
 import { HOT_ACTIONS, keyLabel, type HotAction } from '../lib/hotkeys';
 import { THEMES } from '../lib/themes';
-import { previewCue, resetHotkeys, setHotkey, setHotkeysOn, setMotion, setSettings, setSkin, setSoundEvent, setSoundPack, setVolume, toggleSound, useStore } from '../store';
+import { JarvisSettings } from './Jarvis';
+import { previewCue, resetHotkeys, setAlarmOn, setHotkey, setHotkeysOn, setMotion, setSettings, setSkin, setSoundEvent, setSoundPack, setVolume, toggleSound, useStore } from '../store';
 
 const CUES: Cue[] = ['p1', 'coord', 'warn', 'request', 'resolved'];
 
@@ -17,6 +18,8 @@ export function Settings() {
   const volume = useStore((s) => s.volume);
   const events = useStore((s) => s.soundEvents);
   const motion = useStore((s) => s.motion);
+  const alarmOn = useStore((s) => s.alarmOn);
+  const role = useStore((s) => s.me?.role);
   useEffect(() => {
     if (!open) return;
     const k = (e: KeyboardEvent) => e.key === 'Escape' && setSettings(false);
@@ -98,6 +101,19 @@ export function Settings() {
             </div>
           </div>
         </section>
+
+        {role === 'coordinator' && (
+          <section>
+            <h3>Тревога для критических</h3>
+            <label className="chk">
+              <input type="checkbox" checked={alarmOn} onChange={(e) => setAlarmOn(e.target.checked)} /> Новый критический инцидент или предложение ИИ поднять до «Наивысшего» — экран мигает красным и звучит сирена «БУУМ-БУУМ», пока кто-то не нажмёт «Принял»
+            </label>
+            <button className="btn btn-sm" onClick={() => (setSettings(false), window.dispatchEvent(new Event('radar:alarm-test')))}>
+              Проверить тревогу
+            </button>
+          </section>
+        )}
+        {role === 'coordinator' && <JarvisSettings />}
 
         <HotkeySettings />
 

@@ -155,3 +155,57 @@ export function play(cue: Cue, preview?: SoundPack) {
   }
   for (const [f, at, dur, g, type] of PACKS[p][cue]) tone(f, t + at, dur, g, type);
 }
+
+/**
+ * Сирена тревоги «БУУМ-БУУМ»: два низких удара с падением тона и вой сирены — по кругу, пока не остановят.
+ * Возвращает функцию остановки. Сама выключается через 45 секунд.
+ */
+export function siren(): () => void {
+  if (!ctx || ctx.state !== 'running') return () => undefined;
+  const c = ctx;
+  const boom = (t: number) => {
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(110, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.45);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, 0.55 * volume), t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+    o.connect(g).connect(c.destination);
+    o.start(t);
+    o.stop(t + 0.6);
+  };
+  const wail = (t: number) => {
+    const o = c.createOscillator();
+    const f = c.createBiquadFilter();
+    const g = c.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(520, t);
+    o.frequency.linearRampToValueAtTime(880, t + 0.55);
+    o.frequency.linearRampToValueAtTime(520, t + 1.1);
+    f.type = 'lowpass';
+    f.frequency.value = 1800;
+    const v = Math.max(0.0002, 0.07 * volume);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(v, t + 0.08);
+    g.gain.setValueAtTime(v, t + 1.0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.15);
+    o.connect(f).connect(g).connect(c.destination);
+    o.start(t);
+    o.stop(t + 1.2);
+  };
+  const cycle = () => {
+    const t = c.currentTime + 0.02;
+    boom(t);
+    boom(t + 0.42);
+    wail(t + 0.5);
+  };
+  cycle();
+  const timer = setInterval(cycle, 1800);
+  const auto = setTimeout(() => clearInterval(timer), 45_000);
+  return () => {
+    clearInterval(timer);
+    clearTimeout(auto);
+  };
+}

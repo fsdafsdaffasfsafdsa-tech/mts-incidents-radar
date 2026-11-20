@@ -12,6 +12,8 @@ import { QuickSearch } from './components/QuickSearch';
 import { WallPage } from './components/WallPage';
 import { Hotkeys } from './components/Hotkeys';
 import { Settings } from './components/Settings';
+import { Alarm } from './components/Alarm';
+import { Jarvis } from './components/Jarvis';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -75,6 +77,8 @@ export function App() {
       <QuickSearch />
       <Settings />
       <Hotkeys />
+      {atPoint && loaded && <Alarm />}
+      {atPoint && loaded && <Jarvis />}
     </div>
   );
 }

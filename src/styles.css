@@ -7647,3 +7647,734 @@ kbd {
 .pack-grid {
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
 }
+
+/* ═══ «Температура» строки: чем ближе дедлайн, тем краснее фон ═══ */
+.heat {
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--p1) calc(var(--heat, 0) * 26%), transparent) 0%, transparent 85%);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--p1) calc(var(--heat, 0) * 100%), transparent);
+}
+.heat.hot {
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--p1) 30%, transparent) 0%, color-mix(in srgb, var(--p1) 8%, transparent) 90%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion='off']) .heat.hot {
+    animation: heat-pulse 2.4s ease-in-out infinite;
+  }
+}
+@keyframes heat-pulse {
+  0%,
+  100% {
+    box-shadow: inset 3px 0 0 var(--p1);
+  }
+  50% {
+    box-shadow: inset 6px 0 0 var(--p1), 0 0 0 1px color-mix(in srgb, var(--p1) 30%, transparent);
+  }
+}
+
+/* ═══ Тревога: мигающий экран ═══ */
+.alarm {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(120, 0, 10, 0.25);
+  box-shadow: inset 0 0 0 10px #ff1f3d, inset 0 0 160px 40px rgba(255, 31, 61, 0.65);
+  animation: alarm-flash 0.9s steps(2, jump-none) infinite;
+}
+@keyframes alarm-flash {
+  0% {
+    background: rgba(160, 0, 16, 0.42);
+    box-shadow: inset 0 0 0 14px #ff1f3d, inset 0 0 220px 70px rgba(255, 31, 61, 0.8);
+  }
+  100% {
+    background: rgba(20, 0, 2, 0.12);
+    box-shadow: inset 0 0 0 4px #7a0010, inset 0 0 60px 10px rgba(255, 31, 61, 0.25);
+  }
+}
+.alarm-card {
+  width: min(560px, calc(100vw - 32px));
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 28px 26px 22px;
+  border-radius: 22px;
+  border: 2px solid #ff1f3d;
+  background: #13060a;
+  color: #fff;
+  text-align: center;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+.alarm-ico {
+  color: #ff1f3d;
+  animation: alarm-shake 0.45s ease-in-out infinite;
+}
+@keyframes alarm-shake {
+  0%,
+  100% {
+    transform: rotate(-8deg) scale(1);
+  }
+  50% {
+    transform: rotate(8deg) scale(1.1);
+  }
+}
+.alarm-h {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ff6b80;
+}
+.alarm-title {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.alarm-sub {
+  font-size: 14px;
+  color: #f2b6bf;
+}
+.alarm-act {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.alarm-act .btn {
+  min-height: 44px;
+  padding: 0 20px;
+  font-size: 15px;
+}
+:root[data-motion='off'] .alarm {
+  animation: none !important;
+}
+
+/* ═══ Джарвис: светящийся шар и окно разговора ═══ */
+.jv {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 70;
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  pointer-events: none;
+}
+.jv > * {
+  pointer-events: auto;
+}
+.jv-dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.jv-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+.jv-orb {
+  --lvl: 0;
+  --jv: var(--coord);
+  position: relative;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.jv-listen .jv-orb {
+  --jv: var(--p1);
+}
+.jv-think .jv-orb {
+  --jv: var(--ai);
+}
+.jv-speak .jv-orb {
+  --jv: #4fd8ff;
+}
+.jv-core {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff 0%, color-mix(in srgb, var(--jv) 70%, #fff) 18%, var(--jv) 45%, color-mix(in srgb, var(--jv) 40%, #000) 100%);
+  box-shadow:
+    0 0 calc(14px + var(--lvl) * 40px) color-mix(in srgb, var(--jv) 70%, transparent),
+    inset 0 -6px 14px rgba(0, 0, 0, 0.35);
+  transform: scale(calc(1 + var(--lvl) * 0.22));
+  transition: background 0.3s, box-shadow 0.08s linear;
+}
+.jv-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: color-mix(in srgb, var(--jv) 85%, #fff);
+  border-left-color: color-mix(in srgb, var(--jv) 40%, transparent);
+  animation: jv-spin 3.2s linear infinite;
+  opacity: 0.9;
+}
+.jv-ring.r2 {
+  inset: -6px;
+  border-width: 1px;
+  border-top-color: transparent;
+  border-right-color: color-mix(in srgb, var(--jv) 60%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--jv) 30%, transparent);
+  animation-duration: 5.5s;
+  animation-direction: reverse;
+}
+.jv-think .jv-ring {
+  animation-duration: 0.9s;
+}
+.jv-think .jv-ring.r2 {
+  animation-duration: 1.6s;
+}
+.jv-ico {
+  position: relative;
+  display: grid;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+.jv-speak .jv-ico,
+.jv-think .jv-ico {
+  opacity: 0;
+}
+@keyframes jv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+:root[data-motion='off'] .jv-ring {
+  animation: none;
+}
+.jv-panel {
+  width: min(380px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 140px));
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  backdrop-filter: blur(14px);
+  border: 1px solid color-mix(in srgb, var(--coord) 35%, var(--line));
+  border-radius: 18px;
+  box-shadow: var(--shadow), 0 0 40px color-mix(in srgb, var(--coord) 14%, transparent);
+  overflow: hidden;
+  animation: jv-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  transform-origin: bottom right;
+}
+@keyframes jv-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(8px);
+  }
+}
+.jv-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--coord);
+}
+.jv-head b {
+  color: var(--text);
+  font-size: 14px;
+}
+.jv-head .jv-mode {
+  margin-right: auto;
+}
+.jv-mode {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--text-3);
+  border: 1px solid var(--line-2);
+  margin-left: 8px;
+}
+.jv-mode.on {
+  color: var(--ai);
+  border-color: color-mix(in srgb, var(--ai) 45%, transparent);
+  background: color-mix(in srgb, var(--ai) 10%, transparent);
+}
+.jv-log {
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 140px;
+}
+.jv-hello {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.jv-sug {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.jv-sug .chip {
+  cursor: pointer;
+  background: var(--panel-2);
+}
+.jv-sug .chip:hover {
+  border-color: var(--coord);
+  color: var(--text);
+}
+.jv-line {
+  max-width: 88%;
+  padding: 8px 11px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  animation: jv-in 0.18s ease-out;
+}
+.jv-line.user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--coord) 18%, var(--panel-2));
+  border-bottom-right-radius: 4px;
+}
+.jv-line.user.interim {
+  opacity: 0.6;
+  font-style: italic;
+}
+.jv-line.assistant {
+  align-self: flex-start;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 4px;
+}
+.jv-rule {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.jv-dots {
+  display: flex;
+  gap: 4px;
+  padding: 12px 14px;
+}
+.jv-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ai);
+  animation: jv-dot 1s ease-in-out infinite;
+}
+.jv-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.jv-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes jv-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+.jv-err {
+  font-size: 12.5px;
+  color: var(--p1);
+}
+.jv-input {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+}
+.jv-input input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.jv-input input:focus {
+  outline: none;
+  border-color: var(--coord);
+}
+.jv-sub {
+  max-width: min(420px, calc(100vw - 100px));
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid color-mix(in srgb, #4fd8ff 40%, var(--line));
+  font-size: 13px;
+  line-height: 1.4;
+  animation: jv-in 0.2s ease-out;
+}
+.jv-set {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.jv-set label {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.jv-set select {
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+@media (max-width: 640px) {
+  .jv {
+    right: 12px;
+    bottom: 12px;
+  }
+}
+
+/* ═══ «Мой стол»: рабочее место из блоков ═══ */
+.desk {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px 14px;
+  overflow: auto;
+}
+.desk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--coord);
+}
+.desk-bar b {
+  color: var(--text);
+}
+.desk-bar .muted {
+  font-size: 12.5px;
+}
+.desk-sp {
+  flex: 1;
+}
+.desk-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.desk-add {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  animation: jv-in 0.18s ease-out;
+}
+.desk-add-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: center;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-2);
+  background: var(--panel);
+  color: var(--coord);
+  cursor: pointer;
+}
+.desk-add-item b {
+  color: var(--text);
+  font-size: 13px;
+}
+.desk-add-item .muted {
+  grid-column: 2;
+  font-size: 11.5px;
+}
+.desk-add-item:hover:not(:disabled) {
+  border-color: var(--coord);
+  border-style: solid;
+}
+.desk-add-item.used {
+  opacity: 0.45;
+  cursor: default;
+}
+.desk-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 104px;
+  grid-auto-flow: row dense;
+  gap: 10px;
+}
+.desk-block {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: box-shadow 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.desk-h {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.desk-h > span:not(.desk-size) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.desk-size {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.desk-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+/* Компоненты внутри блока — без своей рамки: рамка у блока. */
+.desk-body > .panel,
+.desk-body > section {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  height: 100%;
+}
+.desk-body > .panel > .cm-h:first-child {
+  display: none;
+}
+.db-map .desk-body {
+  overflow: hidden;
+}
+.db-map .desk-body > * {
+  position: absolute;
+  inset: 0;
+}
+.db-card .desk-body > * {
+  min-height: 100%;
+}
+.desk-seg {
+  margin: 8px 10px 4px;
+}
+.desk-cards {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+.desk-kpi {
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  align-items: stretch;
+}
+.dk-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 4px 14px;
+  border-right: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.dk-tile:last-child {
+  border-right: 0;
+}
+.dk-tile .num {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--text);
+}
+.dk-tile.warn .num {
+  color: var(--warn);
+}
+.dk-tile.hot .num {
+  color: var(--p1);
+}
+.db-kpi .desk-h {
+  display: none;
+}
+.desk-edit .db-kpi .desk-h {
+  display: flex;
+}
+.desk-ai {
+  display: grid;
+}
+.dai-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.dai-row:hover {
+  background: var(--panel-2);
+}
+.desk-empty {
+  grid-column: 1 / -1;
+  grid-row: span 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: var(--text-2);
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius);
+}
+/* режим настройки */
+.desk-edit .desk-block {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--coord) 45%, var(--line));
+}
+.desk-edit .desk-body {
+  pointer-events: none;
+  opacity: 0.8;
+}
+.desk-edit .desk-h {
+  cursor: grab;
+  color: var(--coord);
+}
+.desk-edit .desk-h .icon-btn {
+  pointer-events: auto;
+}
+.desk-block.dragging {
+  opacity: 0.4;
+}
+.desk-block.over {
+  box-shadow: 0 0 0 2px var(--coord), 0 0 30px color-mix(in srgb, var(--coord) 25%, transparent);
+}
+.desk-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 22px;
+  height: 22px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--coord) 50%, var(--coord) 60%, transparent 60%, transparent 70%, var(--coord) 70%, var(--coord) 80%, transparent 80%);
+  opacity: 0.85;
+  touch-action: none;
+}
+body.desk-resizing {
+  cursor: nwse-resize !important;
+  user-select: none;
+}
+.desk-plus {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  border: 1px dashed var(--line-2) !important;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.desk-plus:hover {
+  color: var(--coord);
+  border-color: var(--coord) !important;
+}
+@media (max-width: 900px) {
+  .desk-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .desk-block {
+    grid-column: span 6 !important;
+  }
+}
+
+/* ═══ Карта: виньетка и «стеклянная» легенда ═══ */
+.rfmap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.18);
+  border-radius: inherit;
+}
+:root[data-theme='dark'] .rfmap::after {
+  box-shadow: inset 0 0 120px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+.rf-legend {
+  z-index: 2;
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  backdrop-filter: blur(10px);
+}
+.lg-c {
+  box-shadow: 0 0 8px var(--p2);
+}
+.lg-l {
+  box-shadow: 0 0 8px var(--p1);
+}
+.lg-r {
+  box-shadow: 0 0 10px color-mix(in srgb, var(--p2) 60%, transparent);
+}
+.rfmap .maplibregl-ctrl-group {
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+:root[data-theme='dark'] .rfmap .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1);
+}
+.rfmap .maplibregl-ctrl-attrib {
+  opacity: 0.6;
+}
+
+/* Тревога: вторичная кнопка на тёмной карточке; «Моя смена» в узком блоке стола. */
+.alarm-act .btn:not(.btn-danger) {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+.alarm-act .btn:not(.btn-danger):hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.db-myshift .ms-grid {
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+}
