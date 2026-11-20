@@ -7644,3 +7644,6 @@ kbd {
     font-size: clamp(20px, 4.6vh, 64px);
   }
 }
+.pack-grid {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}

@@ -139,13 +139,17 @@ let state: State = {
   sound: readPref('radar.sound', true),
   theme: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).base,
   skin: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).id,
-  soundPack: readPref<SoundPack>('radar.soundPack', 'classic'),
+  soundPack: readPref('radar.soundPackV2', false) ? readPref<SoundPack>('radar.soundPack', 'ring') : 'ring',
   volume: readPref('radar.volume', 0.8),
   soundEvents: readPref<Record<Cue, boolean>>('radar.soundEvents', { p1: true, coord: true, warn: true, request: true, resolved: true }),
   motion: readPref('radar.motion', true),
   settings: false,
 };
 configureSound({ pack: state.soundPack, volume: state.volume, events: state.soundEvents });
+if (!readPref('radar.soundPackV2', false)) {
+  writePref('radar.soundPack', 'ring');
+  writePref('radar.soundPackV2', true);
+}
 
 const listeners = new Set<() => void>();
 export const getState = () => state;
