@@ -5,9 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Incident, Insight, Intensity, ScenarioKind, ServerMessage, Snapshot } from '../shared/types.ts';
-import { SYSTEMS, TEAMS } from './catalog.ts';
+import { COORDINATORS_GROUP, GROUPS, PRODUCTS } from './catalog.ts';
 import { Sim } from './sim.ts';
-import { buildContext, heuristicInsight } from './ai-heuristic.ts';
+import { heuristicInsight } from './ai-heuristic.ts';
 import { aiStatus, handleLlmError, llmEnabled, refineWithClaude } from './ai-llm.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,8 +40,10 @@ function snapshot(): Snapshot {
     serverTime: Date.now(),
     incidents: [...sim.incidents.values()],
     feed: sim.feed.slice(0, 120),
-    systems: SYSTEMS.map(({ id, name, short, icon, dependsOn }) => ({ id, name, short, icon, dependsOn })),
-    teams: TEAMS.map(({ id, name, short, members, isCoordinators }) => ({ id, name, short, members, isCoordinators })),
+    systems: PRODUCTS.map(({ id, name, short, icon }) => ({ id, name, short, icon, dependsOn: [] })),
+    teams: GROUPS.map(({ id, name, short }) => ({ id, name, short, members: [], isCoordinators: id === COORDINATORS_GROUP })),
+    workers: sim.workers,
+    offices: sim.offices,
     stats: sim.stats(),
     intensity: sim.intensity,
     ai: aiStatus(),
@@ -60,8 +62,7 @@ function versionKey(inc: Incident) {
 }
 
 function insightFor(inc: Incident): Insight {
-  const ctx = buildContext(sim.incidents, Date.now());
-  const base = heuristicInsight(inc, ctx);
+  const base = heuristicInsight(inc, sim.ctx());
   const cached = llmCache.get(inc.id);
   if (cached && cached.key === versionKey(inc)) {
     // Свежие цифры риска и SLA — из эвристики, тексты — от Claude.
@@ -87,8 +88,7 @@ function pumpLlm() {
     if (!inc) continue;
     inFlight.add(id);
     const key = versionKey(inc);
-    const ctx = buildContext(sim.incidents, Date.now());
-    const base = heuristicInsight(inc, ctx);
+    const base = heuristicInsight(inc, sim.ctx());
     const related = (base.correlation?.ids ?? []).map((r) => sim.incidents.get(r)).filter(Boolean) as Incident[];
     refineWithClaude(inc, base, related)
       .then((insight) => {
@@ -131,7 +131,7 @@ async function readBody(req: http.IncomingMessage): Promise<any> {
 }
 
 const INTENSITIES: Intensity[] = ['calm', 'normal', 'storm'];
-const SCENARIOS: ScenarioKind[] = ['billing_outage', 'network_cut', 'coord_flood', 'ddos'];
+const SCENARIOS: ScenarioKind[] = ['mass_outage', 'field_wave', 'coord_flood'];
 
 async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
   const p = url.pathname;
@@ -163,6 +163,11 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       const body = await readBody(req);
       const inc = sim.act(m[1], String(body.type), body);
       return json(res, 200, inc);
+    }
+    m = p.match(/^\/api\/workers\/([\w.-]+)$/);
+    if (m && req.method === 'POST') {
+      const body = await readBody(req);
+      return json(res, 200, sim.workerAct(m[1], body));
     }
     if (p === '/api/bulk-assign' && req.method === 'POST') {
       const body = await readBody(req);

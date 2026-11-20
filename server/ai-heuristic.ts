@@ -1,217 +1,83 @@
-// Эвристический ИИ: работает всегда, без ключей и сети.
-// Три задачи кейса: кратко объяснить, что случилось; подсказать команду; оценить риск эскалации.
-import type { AiBrief, Incident, Insight, Priority, RiskFactor, RiskLevel, TeamScore } from '../shared/types.ts';
-import { COORDINATORS_ID, SYSTEMS, TEAMS, systemById, teamById } from './catalog.ts';
+// Эвристический ИИ на наборе данных: кому назначить, риск, связанные инциденты, короткое резюме.
+// Работает всегда, без ключей и сети.
+import type { AiBrief, Incident, Insight, Priority, RiskFactor, RiskLevel, TeamScore, Worker, WorkerScore } from '../shared/types.ts';
+import { distanceKm, experience, groupById, groupForService, officeById } from './catalog.ts';
 
 export interface AiContext {
   now: number;
   incidents: Map<string, Incident>;
-  teamLoad: Record<string, number>;
+  workers: Worker[];
+  load: Map<string, number>; // активных задач у сотрудника
 }
 
-export function buildContext(incidents: Map<string, Incident>, now: number): AiContext {
-  const teamLoad: Record<string, number> = {};
-  for (const inc of incidents.values()) {
-    if (inc.status === 'resolved' || !inc.teamId) continue;
-    teamLoad[inc.teamId] = (teamLoad[inc.teamId] ?? 0) + 1;
+export function buildContext(incidents: Map<string, Incident>, now: number, workers: Worker[] = []): AiContext {
+  const load = new Map<string, number>();
+  for (const i of incidents.values()) {
+    if (i.status !== 'resolved' && i.assignee) load.set(i.assignee, (load.get(i.assignee) ?? 0) + 1);
   }
-  return { now, incidents, teamLoad };
+  return { now, incidents, workers, load };
 }
-
-// ─── Текст и ключевые слова ────────────────────────────────────────────────
-
-const WORD = /[\p{L}\p{N}]/u;
-
-function incidentText(inc: Incident): string {
-  return `${inc.title}. ${inc.description} ${inc.signals.join('. ')} ${inc.service}`.toLowerCase().replace(/ё/g, 'е');
-}
-
-/** Ищет ключевое слово; короткие (до 3 символов) — только целым словом. Возвращает найденное слово из текста. */
-function findKeyword(text: string, kw: string): string | null {
-  const k = kw.toLowerCase().replace(/ё/g, 'е').trim();
-  let from = 0;
-  while (from <= text.length) {
-    const i = text.indexOf(k, from);
-    if (i < 0) return null;
-    const before = i > 0 ? text[i - 1] : ' ';
-    const after = text[i + k.length] ?? ' ';
-    const whole = !WORD.test(before) && !WORD.test(after);
-    if (k.length > 3 || whole) {
-      // Расширяем до целого слова, чтобы показать человеку, что именно совпало.
-      let s = i;
-      let e = i + k.length;
-      while (s > 0 && WORD.test(text[s - 1])) s--;
-      while (e < text.length && WORD.test(text[e])) e++;
-      return text.slice(s, e);
-    }
-    from = i + 1;
-  }
-  return null;
-}
-
-// ─── Связанные инциденты ───────────────────────────────────────────────────
 
 const PRIO_RANK: Record<Priority, number> = { P1: 1, P2: 2, P3: 3, P4: 4 };
 const MIN = 60_000;
 
-function dependsOn(a: string, b: string): boolean {
-  return systemById(a).dependsOn.includes(b);
-}
+// ─── кому назначить ────────────────────────────────────────────────────────
 
-export type Relation = 'upstream' | 'downstream' | 'same' | 'region';
-
-/**
- * Как инцидент b связан с инцидентом a.
- * upstream — b в системе, от которой зависит a, и случился раньше: кандидат в первопричину.
- * Причина не может быть позже следствия, а слабые P3/P4 не тянут за собой цепочки.
- */
-export function relationOf(a: Incident, b: Incident): Relation | null {
-  const pa = PRIO_RANK[a.priority];
-  const pb = PRIO_RANK[b.priority];
-  const dt = a.createdAt - b.createdAt; // > 0: b раньше
-  // Причина возникла раньше следствия и не менее критична, чем оно.
-  if (dependsOn(a.systemId, b.systemId) && dt >= 0 && dt <= 12 * MIN && pb <= 2 && pb <= pa && pa <= 3 && (pb === 1 || dt <= 6 * MIN))
-    return 'upstream';
-  if (dependsOn(b.systemId, a.systemId) && dt <= 0 && -dt <= 12 * MIN && pa <= 2 && pa <= pb && pb <= 3 && (pa === 1 || -dt <= 6 * MIN))
-    return 'downstream';
-  const adt = Math.abs(dt);
-  if (a.systemId === b.systemId && adt <= 10 * MIN && pa <= 2 && pb <= 2) return 'same';
-  if (a.region === b.region && adt <= 10 * MIN && pa <= 2 && pb <= 2 && (pa === 1 || pb === 1)) return 'region';
-  return null;
-}
-
-/** Внешние и физические сбои — атака, обрыв, перегрев, питание — сами себе первопричина. */
-const PRIMARY_MARKERS = [
-  'ddos', 'атак', 'обрыв', 'перегрев', 'отказ ибп', 'пропало питание', 'земляных работ', 'истёк сертификат',
-  'после обновления', 'после релиза', 'после выкладки',
-];
-export function isPrimaryFailure(inc: Incident): boolean {
-  const text = `${inc.title} ${inc.description}`.toLowerCase().replace(/ё/g, 'е');
-  return PRIMARY_MARKERS.some((m) => text.includes(m.replace(/ё/g, 'е')));
-}
-
-const byImportance = (x: Incident, y: Incident) => PRIO_RANK[x.priority] - PRIO_RANK[y.priority] || x.createdAt - y.createdAt;
-
-export function findCorrelation(inc: Incident, ctx: AiContext): Insight['correlation'] {
-  const related: { other: Incident; rel: Relation | 'linked' }[] = [];
-  for (const other of ctx.incidents.values()) {
-    if (other.id === inc.id || other.status === 'resolved') continue;
-    const rel = relationOf(inc, other);
-    if (rel) related.push({ other, rel });
-    else if (inc.relatedIds.includes(other.id) || other.id === inc.parentId || other.parentId === inc.id) related.push({ other, rel: 'linked' });
-  }
-  if (related.length === 0) return null;
-
-  const parent = inc.parentId ? ctx.incidents.get(inc.parentId) : undefined;
-  const primary = isPrimaryFailure(inc);
-  // «Следом пошли»: зависимые системы или та же система, но позже.
-  const followers = related.filter(
-    (r) => r.rel === 'downstream' || r.other.parentId === inc.id || (r.rel === 'same' && r.other.createdAt >= inc.createdAt && PRIO_RANK[r.other.priority] >= PRIO_RANK[inc.priority]),
-  );
-  // Кандидаты в причину: раньше по времени и не слабее. Чем ближе по времени и региону, тем вероятнее.
-  const causes = primary
-    ? []
-    : related
-        .filter(
-          (r) =>
-            r.rel === 'upstream' ||
-            ((r.rel === 'same' || r.rel === 'region') && r.other.createdAt <= inc.createdAt && PRIO_RANK[r.other.priority] <= PRIO_RANK[inc.priority]),
-        )
-        .map((r) => {
-          const gap = (inc.createdAt - r.other.createdAt) / MIN;
-          const score = gap + 4 * (PRIO_RANK[r.other.priority] - 1) + (r.rel === 'region' ? 0.5 : 0) - (r.other.region === inc.region ? 0.5 : 0);
-          return { other: r.other, score };
-        })
-        .sort((a, b) => a.score - b.score);
-  let root: Incident;
-  if (parent) root = parent;
-  else if (causes.length) root = causes[0].other;
-  else if (followers.length || primary) root = inc;
-  else root = [inc, ...related.map((r) => r.other)].sort(byImportance)[0];
-
-  const ids = related.map((r) => r.other.id);
-  const sys = systemById(inc.systemId);
-  const rootSys = systemById(root.systemId);
-  let text: string;
-  if (root.id !== inc.id) {
-    const why = dependsOn(inc.systemId, root.systemId)
-      ? `«${sys.short}» зависит от «${rootSys.short}», сбой там начался ${agoBetween(root.createdAt, inc.createdAt)} раньше`
-      : root.systemId === inc.systemId
-        ? `та же система, сбой там начался ${agoBetween(root.createdAt, inc.createdAt)} раньше`
-        : `тот же регион (${inc.region}) и одно время`;
-    text = `Похоже на последствие ${root.id} (${rootSys.short}): ${why}. Лучше связать как дочерний и не дублировать работу команд.`;
-  } else if (followers.length) {
-    const names = [...new Set(followers.map((r) => systemById(r.other.systemId).short))].slice(0, 4).join(', ');
-    text = `Вероятная первопричина: следом пошли ${followers.length} ${plural(followers.length, 'инцидент', 'инцидента', 'инцидентов')} (${names}). Вести как один массовый сбой.`;
-  } else {
-    text = `Рядом по времени ещё ${related.length} ${plural(related.length, 'инцидент', 'инцидента', 'инцидентов')} с тем же масштабом — возможен общий сбой.`;
-  }
-  return { rootId: root.id, ids, text };
-}
-
-// ─── Подсказка команды ─────────────────────────────────────────────────────
-
-export function recommendTeams(inc: Incident, ctx: AiContext, corr = findCorrelation(inc, ctx)): TeamScore[] {
-  const text = incidentText(inc);
-  const sys = systemById(inc.systemId);
-  const root = corr?.rootId && corr.rootId !== inc.id ? ctx.incidents.get(corr.rootId) : undefined;
-  const rootTeam = root
-    ? root.teamId && root.teamId !== COORDINATORS_ID
-      ? root.teamId
-      : recommendTeams(root, ctx, null)[0]?.teamId
-    : undefined;
-
-  const scored = TEAMS.filter((t) => t.id !== COORDINATORS_ID).map((team) => {
+export function recommendWorkers(inc: Incident, ctx: AiContext): WorkerScore[] {
+  const pool = ctx.workers.filter((w) => w.mode === inc.mode && w.status !== 'break');
+  if (!pool.length) return [];
+  const scored = pool.map((w) => {
     let s = 0;
     const reasons: string[] = [];
-    const ownerIdx = sys.owners.indexOf(team.id);
-    if (ownerIdx === 0) {
-      s += 1.0;
-      reasons.push(`Владеет системой «${sys.short}»`);
-    } else if (ownerIdx > 0) {
-      s += 0.5;
-      reasons.push(`Совладелец системы «${sys.short}»`);
+    const exp = experience(w.id, inc.productName, inc.service);
+    if (exp.sameService) {
+      s += 1.4 * Math.min(3, exp.sameService);
+      reasons.push(`решал «${inc.service}»: ${exp.sameService}`);
+    } else if (exp.sameProduct) {
+      s += 0.6 * Math.min(3, exp.sameProduct);
+      reasons.push(`знает продукт: ${exp.sameProduct}`);
     }
-    const hits: string[] = [];
-    for (const kw of team.keywords) {
-      const w = findKeyword(text, kw);
-      if (w && !hits.includes(w)) hits.push(w);
-      if (hits.length >= 3) break;
-    }
-    if (hits.length) {
-      s += 0.9 * hits.length;
-      reasons.push(`В описании: ${hits.map((h) => `«${h}»`).join(', ')}`);
-    }
-    if (rootTeam === team.id) {
+    const g = groupForService(inc.productName, inc.service);
+    if (g && w.groups.includes(g)) {
       s += 0.8;
-      reasons.push(root!.teamId === team.id ? `Первопричина ${root!.id} уже у этой команды` : `Профиль первопричины ${root!.id}`);
+      reasons.push(`группа ${groupById(g)?.short ?? ''}`);
     }
-    const load = ctx.teamLoad[team.id] ?? 0;
-    const ratio = load / team.capacity;
-    if (ratio > 1) {
-      // Загрузка — повод показать альтернативу, но не перебить профиль команды.
-      s -= Math.min(0.35, (ratio - 1) * 0.3);
-      reasons.push(`Перегружена: ${load} в работе при норме ${team.capacity}`);
-    } else if (s > 0) {
-      reasons.push(`Загрузка ${load} из ${team.capacity}`);
+    const active = ctx.load.get(w.id) ?? 0;
+    if (active === 0 && w.status === 'free') {
+      s += 0.8;
+      reasons.push('свободен');
+    } else {
+      s -= 0.7 * active;
+      reasons.push(`в работе: ${active}`);
     }
-    return { teamId: team.id, s, reasons };
+    if (inc.mode === 'offline') {
+      const office = officeById(w.office);
+      if (office) {
+        const km = Math.round(distanceKm(office, inc.geo));
+        s -= Math.min(3, km / 250);
+        reasons.push(`до места ${km} км`);
+      }
+    }
+    return { workerId: w.id, s, reasons };
   });
-
-  const T = 0.75;
+  const T = 0.8;
   const max = Math.max(...scored.map((x) => x.s));
   const exps = scored.map((x) => Math.exp((x.s - max) / T));
   const sum = exps.reduce((a, b) => a + b, 0);
   return scored
-    .map((x, i) => ({ teamId: x.teamId, confidence: exps[i] / sum, reasons: x.reasons }))
+    .map((x, i) => ({ workerId: x.workerId, confidence: exps[i] / sum, reasons: x.reasons }))
     .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 3)
-    .filter((t, i) => i === 0 || t.confidence >= 0.04);
+    .slice(0, 3);
 }
 
-// ─── Риск эскалации ────────────────────────────────────────────────────────
+export function recommendGroup(inc: Incident): TeamScore[] {
+  const g = groupForService(inc.productName, inc.service);
+  return g ? [{ teamId: g, confidence: 0.8, reasons: ['чаще всего решала этот сервис в данных'] }] : [];
+}
 
-const PRIO_W: Record<Priority, number> = { P1: 1.4, P2: 0.7, P3: -0.1, P4: -0.8 };
+// ─── риск ──────────────────────────────────────────────────────────────────
+
+const PRIO_W: Record<Priority, number> = { P1: 1.6, P2: 1.0, P3: 0.2, P4: -0.6 };
 
 export function riskLevel(score: number): RiskLevel {
   if (score >= 75) return 'critical';
@@ -220,122 +86,85 @@ export function riskLevel(score: number): RiskLevel {
   return 'low';
 }
 
-export function assessRisk(inc: Incident, ctx: AiContext, corr = findCorrelation(inc, ctx)): Insight['risk'] {
+export function assessRisk(inc: Incident, ctx: AiContext): Insight['risk'] {
   const factors: RiskFactor[] = [];
-  const add = (label: string, weight: number) => {
-    if (Math.abs(weight) >= 0.12) factors.push({ label, weight: Math.round(weight * 100) / 100 });
-    return weight;
+  const add = (label: string, w: number) => {
+    if (Math.abs(w) >= 0.12) factors.push({ label, weight: Math.round(w * 100) / 100 });
+    return w;
   };
-  let z = -1.6;
-  z += add(`Приоритет ${inc.priority}`, PRIO_W[inc.priority]);
-
-  const total = inc.slaDeadline - inc.createdAt;
+  let z = -1.4;
+  z += add(`Приоритет: ${inc.priorityText.toLowerCase()}`, PRIO_W[inc.priority]);
+  const total = Math.max(1, inc.slaDeadline - inc.createdAt);
   const remaining = inc.slaDeadline - ctx.now;
   const f = (ctx.now - inc.createdAt) / total;
-  if (remaining <= 0) z += add('SLA уже нарушен', 2.4 + Math.min(0.8, (-remaining / 3_600_000) * 0.8));
-  else {
-    const c = 2.4 * Math.pow(Math.min(1, Math.max(0, (f - 0.4) / 0.6)), 1.5);
-    z += add(`Прошло ${Math.round(f * 100)}% времени SLA`, c);
-  }
-
-  if (inc.affectedUsers > 0) {
-    const c = Math.max(-0.6, Math.min(1.2, 0.55 * Math.log10(inc.affectedUsers / 10_000)));
-    z += add(`Затронуто ≈ ${fmtUsers(inc.affectedUsers)} абонентов`, c);
-  } else {
-    const dependents = SYSTEMS.filter((s) => s.dependsOn.includes(inc.systemId)).length;
-    z += add(`От системы зависят ещё ${dependents} ${plural(dependents, 'сервис', 'сервиса', 'сервисов')}`, Math.min(1.4, 0.35 * dependents));
-  }
-
-  if (inc.trend === 'growing') z += add('Метрики ухудшаются', 0.8);
-  if (inc.trend === 'declining') z += add('Метрики восстанавливаются', -0.7);
-
-  if (inc.status === 'coordinators') z += add('Никто не назначен — ждёт координатора', 0.6);
-  else if (inc.status === 'assigned') z += add('Команда ещё не взяла в работу', 0.3);
-  else if (inc.status === 'in_progress') z += add('Исполнитель уже работает', -0.4);
-  else if (inc.status === 'escalated') z += add('Под контролем руководителя смены', -0.2);
-
-  if (inc.reassignCount > 0) z += add(`Переназначался ${inc.reassignCount} раз`, Math.min(1.2, 0.4 * inc.reassignCount));
-  const relatedCount = corr?.ids.length ?? 0;
-  if (relatedCount > 0) z += add(`${relatedCount} ${plural(relatedCount, 'связанный инцидент', 'связанных инцидента', 'связанных инцидентов')} рядом`, 0.35 * Math.min(4, relatedCount));
-
+  if (remaining <= 0) z += add('Дедлайн прошёл', 2.4 + Math.min(0.8, (-remaining / 3_600_000) * 0.4));
+  else z += add(`Прошло ${Math.round(f * 100)}% срока`, 2.4 * Math.pow(Math.min(1, Math.max(0, (f - 0.4) / 0.6)), 1.5));
+  if (/наивысш/i.test(inc.impact)) z += add('Влияние наивысшее', 0.8);
+  else if (/высок/i.test(inc.impact)) z += add('Влияние высокое', 0.4);
+  if (/наивысш/i.test(inc.urgency)) z += add('Срочность наивысшая', 0.4);
+  if (inc.serviceType === 'Клиентский') z += add('Затронуты клиенты', 0.5);
+  else if (inc.serviceType === 'Пользовательский') z += add('Затронуты пользователи', 0.2);
+  if (inc.isMaster) z += add('Массовый (есть дубли)', 0.6);
+  if (!inc.assignee || inc.status === 'coordinators') z += add('Никто не назначен', 0.6);
+  else if (inc.status === 'in_progress') z += add('Уже в работе', -0.4);
   const score = Math.round(100 / (1 + Math.exp(-z)));
-  const level = riskLevel(score);
   factors.sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
-  const minutesToBreach = Math.round(remaining / 60_000);
-
-  let note: string;
-  if (remaining <= 0) note = `SLA нарушен ${fmtMin(-minutesToBreach)} назад. Нужна эскалация руководителю смены.`;
-  else if ((level === 'critical' || level === 'high') && inc.priority !== 'P1' && inc.trend === 'growing')
-    note = `Метрики ухудшаются: вероятно повышение до ${higher(inc.priority)} в ближайшие ${fmtMin(Math.min(minutesToBreach, 30))}.`;
-  else if (level === 'critical' || level === 'high') note = `До нарушения SLA ${fmtMin(minutesToBreach)}. Держать на контроле.`;
-  else if (level === 'medium') note = 'Ситуация под контролем, проверить статус через 15 минут.';
-  else note = 'Риск низкий, обычный порядок работы.';
-
-  return { score, level, factors: factors.slice(0, 6), minutesToBreach, note };
+  const minutesToBreach = Math.round(remaining / MIN);
+  const level = riskLevel(score);
+  const note =
+    remaining <= 0
+      ? 'Дедлайн прошёл — нужна эскалация.'
+      : level === 'critical' || level === 'high'
+        ? `До дедлайна ${fmtMin(minutesToBreach)}.`
+        : 'Риск под контролем.';
+  return { score, level, factors: factors.slice(0, 5), minutesToBreach, note };
 }
 
-// ─── Резюме ────────────────────────────────────────────────────────────────
+// ─── связанные инциденты ───────────────────────────────────────────────────
+
+export function findCorrelation(inc: Incident, ctx: AiContext): Insight['correlation'] {
+  const related: Incident[] = [];
+  for (const o of ctx.incidents.values()) {
+    if (o.id === inc.id || o.status === 'resolved') continue;
+    const sameService = o.productName === inc.productName && o.service === inc.service;
+    if ((sameService && Math.abs(o.createdAt - inc.createdAt) <= 30 * MIN) || inc.relatedIds.includes(o.id) || o.id === inc.parentId || o.parentId === inc.id) {
+      related.push(o);
+    }
+  }
+  if (!related.length) return null;
+  const group = [inc, ...related];
+  const root =
+    (inc.parentId && ctx.incidents.get(inc.parentId)) ||
+    group.find((g) => g.isMaster || g.isEffect) ||
+    [...group].sort((a, b) => PRIO_RANK[a.priority] - PRIO_RANK[b.priority] || a.createdAt - b.createdAt)[0];
+  const text =
+    root.id === inc.id
+      ? `Главный инцидент: рядом ещё ${related.length} по «${inc.service}».`
+      : `Похоже на дубль ${root.id} — тот же сервис.`;
+  return { rootId: root.id, ids: related.map((r) => r.id), text };
+}
+
+// ─── резюме ────────────────────────────────────────────────────────────────
 
 export function heuristicInsight(inc: Incident, ctx: AiContext, started = Date.now()): Insight {
+  const workers = recommendWorkers(inc, ctx);
+  const risk = assessRisk(inc, ctx);
   const corr = findCorrelation(inc, ctx);
-  const teams = recommendTeams(inc, ctx, corr);
-  const risk = assessRisk(inc, ctx, corr);
-  const sys = systemById(inc.systemId);
-  const top = teamById(teams[0]?.teamId);
-  const team = teamById(inc.teamId);
-
-  const firstSentence = inc.description.split(/(?<=[.!?])\s/)[0] ?? inc.description;
-  const parts: string[] = [];
-  parts.push(`В системе «${sys.short}» (${inc.service}, ${inc.region}): ${lowerFirst(firstSentence)}`);
-  const dependents = SYSTEMS.filter((s) => s.dependsOn.includes(inc.systemId)).map((s) => s.short);
-  const impact =
-    inc.affectedUsers > 0
-      ? `Затронуто ≈ ${fmtUsers(inc.affectedUsers)} абонентов`
-      : dependents.length
-        ? `Абоненты напрямую не затронуты, но от «${sys.short}» зависят ${dependents.slice(0, 3).join(', ')}`
-        : 'Абоненты напрямую не затронуты';
-  const trend = inc.trend === 'growing' ? ', ситуация ухудшается' : inc.trend === 'declining' ? ', метрики восстанавливаются' : '';
-  parts.push(`${impact}${trend}.`);
-  const who =
-    inc.status === 'coordinators'
-      ? 'Инцидент ждёт решения координатора'
-      : inc.status === 'resolved'
-        ? 'Инцидент решён'
-        : inc.assignee
-          ? `Решает ${inc.assignee} (${team?.short ?? '—'})`
-          : `Передан команде «${team?.short ?? '—'}», исполнитель ещё не назначен`;
-  const sla =
-    inc.status === 'resolved' ? '' : risk.minutesToBreach! > 0 ? `; до нарушения SLA ${fmtMin(risk.minutesToBreach!)}` : '; SLA уже нарушен';
-  parts.push(`${who}${sla}.`);
-
-  const rootInc = corr?.rootId && corr.rootId !== inc.id ? ctx.incidents.get(corr.rootId) : undefined;
-  const cause = rootInc
-    ? `Вероятно, следствие ${rootInc.id}: «${rootInc.title}».`
-    : inc.signals[0]
-      ? `Первичный сигнал мониторинга: ${inc.signals[0]}.`
-      : null;
-
+  const top = ctx.workers.find((w) => w.id === workers[0]?.workerId);
+  const summary = `${inc.shortDescription} ${inc.productName} › ${inc.service}.`;
   const steps: string[] = [];
-  if (inc.status === 'coordinators' && top) steps.push(`Передать команде «${top.name}» (уверенность ${Math.round(teams[0].confidence * 100)}%)`);
-  if (inc.teamId && inc.teamId !== COORDINATORS_ID && top && top.id !== inc.teamId && teams[0].confidence > 0.6)
-    steps.push(`Проверить маршрут: профильнее команда «${top.short}»`);
-  if (rootInc && inc.parentId !== rootInc.id) steps.push(`Связать с ${rootInc.id} как дочерний`);
-  if (corr && corr.rootId === inc.id && corr.ids.length >= 2) steps.push(`Объявить массовый сбой и связать ${corr.ids.length} инцидента`);
-  if ((risk.level === 'high' || risk.level === 'critical') && inc.priority !== 'P1' && inc.trend === 'growing')
-    steps.push(`Рассмотреть повышение до ${higher(inc.priority)}`);
-  if (risk.minutesToBreach !== null && risk.minutesToBreach <= 30 && inc.status !== 'escalated' && inc.status !== 'resolved')
-    steps.push(risk.minutesToBreach <= 0 ? 'Эскалировать руководителю смены: SLA нарушен' : `Предупредить руководителя смены: SLA через ${fmtMin(risk.minutesToBreach)}`);
-  if (inc.affectedUsers >= 100_000 && PRIO_RANK[inc.priority] <= 2) steps.push('Дать контакт-центру готовый ответ для абонентов');
-  if (inc.status === 'assigned' && ctx.now - inc.updatedAt > 8 * 60_000) steps.push('Напомнить команде: инцидент ещё не взят в работу');
-  if (inc.status === 'in_progress' && inc.assignee) steps.push(`Запросить у ${inc.assignee} оценку времени решения`);
-
+  if (!inc.assignee && top) steps.push(`Назначить: ${top.name}`);
+  if (corr && corr.rootId !== inc.id) steps.push(`Связать с ${corr.rootId}`);
+  if (risk.minutesToBreach !== null && risk.minutesToBreach <= 30 && inc.status !== 'resolved') steps.push('Эскалировать: дедлайн близко');
+  if (inc.mode === 'offline' && inc.status !== 'resolved' && !inc.crew) steps.push('Отправить выездного');
   return {
     incidentId: inc.id,
     source: 'heuristic',
-    summary: parts.join(' '),
-    cause,
-    nextSteps: steps.slice(0, 4),
-    teams,
+    summary,
+    cause: corr && corr.rootId !== inc.id ? `Вероятно, дубль ${corr.rootId}` : null,
+    nextSteps: steps.slice(0, 3),
+    teams: recommendGroup(inc),
+    workers,
     risk,
     correlation: corr,
     generatedAt: Date.now(),
@@ -344,47 +173,25 @@ export function heuristicInsight(inc: Incident, ctx: AiContext, started = Date.n
 }
 
 export function briefOf(inc: Incident, ctx: AiContext): AiBrief {
-  const corr = findCorrelation(inc, ctx);
-  const risk = assessRisk(inc, ctx, corr);
-  const teams = recommendTeams(inc, ctx, corr);
-  return { risk: risk.score, level: risk.level, teamId: teams[0]?.teamId ?? null, confidence: teams[0]?.confidence ?? 0 };
+  const risk = assessRisk(inc, ctx);
+  const w = recommendWorkers(inc, ctx)[0];
+  const g = recommendGroup(inc)[0];
+  return {
+    risk: risk.score,
+    level: risk.level,
+    teamId: g?.teamId ?? null,
+    confidence: g?.confidence ?? 0,
+    workerId: w?.workerId ?? null,
+    workerConfidence: w?.confidence ?? 0,
+  };
 }
 
-// ─── Форматирование ────────────────────────────────────────────────────────
-
-export function plural(n: number, one: string, few: string, many: string): string {
-  const a = Math.abs(n) % 100;
-  const b = a % 10;
-  if (a > 10 && a < 20) return many;
-  if (b > 1 && b < 5) return few;
-  if (b === 1) return one;
-  return many;
-}
-
-export function fmtUsers(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',').replace(',0', '')} млн`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)} тыс.`;
-  return String(n);
-}
+// ─── форматирование ────────────────────────────────────────────────────────
 
 export function fmtMin(min: number): string {
   const m = Math.max(0, Math.round(min));
   if (m < 60) return `${m} мин`;
   const h = Math.floor(m / 60);
-  const r = m % 60;
-  return r ? `${h} ч ${r} мин` : `${h} ч`;
-}
-
-function agoBetween(a: number, b: number): string {
-  const sec = Math.round(Math.abs(a - b) / 1000);
-  return sec < 60 ? `на ${Math.max(1, sec)} с` : `на ${Math.round(sec / 60)} мин`;
-}
-
-
-function lowerFirst(s: string): string {
-  return s ? s[0].toLowerCase() + s.slice(1) : s;
-}
-
-export function higher(p: Priority): Priority {
-  return p === 'P4' ? 'P3' : p === 'P3' ? 'P2' : 'P1';
+  if (h < 48) return `${h} ч ${m % 60 ? `${m % 60} мин` : ''}`.trim();
+  return `${Math.round(h / 24)} дн`;
 }

@@ -1,8 +1,9 @@
-// Генератор потока инцидентов и их жизненный цикл.
-// Состояние живёт на сервере, клиенты получают снимок и поток изменений.
+// Центр инцидентов на наборе данных МТС: 44 записи из data/character_problems.json (время сдвинуто к «сейчас»)
+// плюс живой поток новых инцидентов по их образцу. Сотрудники берут задачи, выездные едут на место.
 import {
   AT_RISK_MIN,
   PRIORITY_SLA_MIN,
+  PRIORITY_TEXT,
   type AiBrief,
   type FeedEvent,
   type FeedKind,
@@ -14,71 +15,81 @@ import {
   type Source,
   type Stats,
   type Status,
-  type Trend,
+  type Worker,
+  type WorkMode,
 } from '../shared/types.ts';
 import {
-  CHANNELS,
-  CITY,
-  COORDINATORS_ID,
-  CREW_TEAMS,
-  DC_SITES,
-  PARTNERS,
-  REGIONS,
-  REG_CODES,
-  SYSTEMS,
-  TEAMS,
-  TEMPLATES,
-  systemById,
-  teamById,
-  type Template,
+  COORDINATORS_GROUP,
+  DESCRIPTION_TEMPLATES,
+  EMPLOYEES,
+  FIELD_DESCRIPTION,
+  GROUPS,
+  HEADER_TEMPLATES,
+  OFFICES,
+  PRODUCTS,
+  RAW,
+  SHORT_TEMPLATES,
+  SOLUTION_TEMPLATES,
+  employeeById,
+  employeeLogin,
+  groupById,
+  groupByName,
+  groupForService,
+  isOfflineRecord,
+  officeById,
+  priorityFromId,
+  productByName,
+  serviceName,
+  type ProductDef,
+  type RawIncident,
 } from './catalog.ts';
-import { briefOf, buildContext, higher, relationOf } from './ai-heuristic.ts';
+import { briefOf, buildContext, recommendWorkers } from './ai-heuristic.ts';
 
 type Listener = (msg: ServerMessage) => void;
 
 const rnd = Math.random;
 const pick = <T>(arr: readonly T[]): T => arr[Math.floor(rnd() * arr.length)];
 const between = (a: number, b: number) => a + rnd() * (b - a);
-const int = (a: number, b: number) => Math.floor(between(a, b + 1));
-const pad = (n: number, w: number) => String(n).padStart(w, '0');
+const MIN = 60_000;
 
-const INTENSITY: Record<Intensity, { spawnPerSec: number; speed: number; label: string }> = {
-  calm: { spawnPerSec: 1 / 14, speed: 0.7, label: 'спокойно' },
-  normal: { spawnPerSec: 1 / 7, speed: 1, label: 'норма' },
-  storm: { spawnPerSec: 1 / 2.4, speed: 1.6, label: 'шторм' },
-};
-
-const TARGET_OPEN = 190;
-const RESOLVED_TTL_MS = 3 * 60_000;
-
-interface Hidden {
-  truthTeam: string;
-  template: string;
-  warned: boolean;
-  breached: boolean;
+function weighted<T extends string>(w: Record<T, number>): T {
+  const entries = Object.entries(w) as [T, number][];
+  let x = rnd() * entries.reduce((a, [, v]) => a + v, 0);
+  for (const [k, v] of entries) {
+    x -= v;
+    if (x <= 0) return k;
+  }
+  return entries[0][0];
 }
 
-interface SpawnOpts {
-  template?: Template;
-  priority?: Priority;
-  status?: Status;
-  region?: string;
-  createdAt?: number;
-  users?: number;
-  trend?: Trend;
-  acknowledged?: boolean;
-  seed?: boolean;
-  quiet?: boolean;
-  crew?: boolean; // сразу отправить бригаду
+/** Детерминированный «случай» по строке — чтобы точка инцидента из данных не прыгала между перезапусками. */
+function hash(s: string): number {
+  let h = 2166136261;
+  for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return (h >>> 0) / 4294967295;
+}
+
+const INTENSITY: Record<Intensity, number> = { calm: 1 / 45, normal: 1 / 22, storm: 1 / 7 };
+const STREAM_RESOLVED_TTL = 30 * MIN;
+const ACTOR_DISPATCH = 'Дежурный координатор';
+
+interface Hidden {
+  warned: boolean;
+  breached: boolean;
+  finishAt: number | null;
 }
 
 export class Sim {
   incidents = new Map<string, Incident>();
+  workers: Worker[] = [];
+  offices = OFFICES;
   feed: FeedEvent[] = [];
   intensity: Intensity = 'normal';
   private hidden = new Map<string, Hidden>();
+  private manualUntil = new Map<string, number>();
+  private breakUntil = new Map<string, number>();
   private listeners = new Set<Listener>();
-  private seq = 48_210 + int(0, 600);
+  private seq = 21_942_000;
   private feedSeq = 1;
   private createdLog: number[] = [];
   private resolvedLog: { at: number; ttr: number }[] = [];
@@ -88,7 +99,6 @@ export class Sim {
   private lastBriefs = new Map<string, AiBrief>();
   private timer: NodeJS.Timeout | null = null;
   private ticks = 0;
-  aiAccuracy: number | null = null;
 
   onMessage(fn: Listener): () => void {
     this.listeners.add(fn);
@@ -99,10 +109,8 @@ export class Sim {
     for (const fn of this.listeners) fn(msg);
   }
 
-  // ─── Запуск ──────────────────────────────────────────────────────────────
-
   start() {
-    this.seedInitial();
+    this.seed();
     this.timer = setInterval(() => this.tick(), 1000);
   }
 
@@ -110,333 +118,446 @@ export class Sim {
     if (this.timer) clearInterval(this.timer);
   }
 
-  private seedInitial() {
+  ctx(now = Date.now()) {
+    return buildContext(this.incidents, now, this.workers);
+  }
+
+  // ─── загрузка набора данных ──────────────────────────────────────────────
+
+  private seed() {
     const now = Date.now();
-    for (let i = 0; i < 175; i++) {
-      const template = this.pickTemplate();
-      let priority = this.pickPriority(template, 0.12);
-      const sla = PRIORITY_SLA_MIN[priority] * 60_000;
-      // Доля прошедшего SLA: большинство свежие, немного на грани, единицы уже нарушены.
-      const r = rnd();
-      const f = r < 0.035 ? between(1.0, 1.12) : r < 0.12 ? between(0.85, 0.99) : Math.pow(rnd(), 1.3) * 0.85;
-      const createdAt = now - f * sla;
-      const s = rnd();
-      const status: Status = s < 0.08 ? 'coordinators' : s < 0.3 ? 'assigned' : s < 0.95 ? 'in_progress' : priority <= 'P2' ? 'escalated' : 'in_progress';
-      this.spawn({ template, priority, status, createdAt, seed: true, quiet: true, acknowledged: s >= 0.04 });
+    const parse = (s: string | null) => (s ? Date.parse(s) : NaN);
+    const latest = Math.max(...RAW.map((r) => parse(r.submitDate)));
+    // Сдвигаем время так, чтобы последняя запись была 5 минут назад: дедлайны тикают вживую.
+    const shift = now - latest - 5 * MIN;
+    this.workers = EMPLOYEES.map((e) => ({
+      id: e.id,
+      name: e.name,
+      mode: e.mode,
+      groups: e.groups,
+      office: e.office,
+      status: 'free',
+      currentId: null,
+      queue: [],
+      focus: '',
+      done: 0,
+      manual: false,
+    }));
+    const maxId = Math.max(...RAW.map((r) => Number(r.id.replace(/\D/g, '')) || 0));
+    if (maxId) this.seq = maxId + 1;
+
+    for (const r of RAW) {
+      const inc = this.fromRaw(r, shift);
+      this.incidents.set(inc.id, inc);
+      const remaining = inc.slaDeadline - now;
+      this.hidden.set(inc.id, { warned: remaining <= AT_RISK_MIN * MIN, breached: remaining <= 0, finishAt: null });
     }
-    // История ленты за последние минуты, чтобы экран не был пустым.
-    const recent = [...this.incidents.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 14).reverse();
-    for (const inc of recent) this.pushFeed(feedKindForNew(inc), inc, newIncidentText(inc), undefined, inc.createdAt, true);
+    // Связи мастер — дубль по одному сервису.
+    for (const inc of this.incidents.values()) {
+      if (!inc.isDouble && !inc.isReason) continue;
+      const master = [...this.incidents.values()].find((m) => m.id !== inc.id && (m.isMaster || m.isEffect) && m.service === inc.service);
+      if (master) {
+        inc.parentId = master.id;
+        master.relatedIds.push(inc.id);
+        inc.relatedIds.push(master.id);
+      }
+    }
+    // Состояние сотрудников из данных.
+    for (const w of this.workers) {
+      const mine = [...this.incidents.values()].filter((i) => i.assignee === w.id && i.status !== 'resolved');
+      const current = mine.find((i) => i.status === 'in_progress');
+      if (current) {
+        w.currentId = current.id;
+        w.status = w.mode === 'offline' ? 'onsite' : 'busy';
+        this.hidden.get(current.id)!.finishAt = now + between(2, 8) * MIN;
+      }
+      w.queue = mine.filter((i) => i.id !== current?.id).sort((a, b) => a.slaDeadline - b.slaDeadline).map((i) => i.id);
+      w.done = [...this.incidents.values()].filter((i) => i.assignee === w.id && i.status === 'resolved').length;
+    }
+    const recent = [...this.incidents.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 10).reverse();
+    for (const inc of recent) this.pushFeed(inc.status === 'coordinators' ? 'coordinators' : 'created', inc, 'Зарегистрирован', undefined, inc.createdAt, true);
     this.feed.sort((a, b) => b.at - a.at);
-    for (let i = 40; i > 0; i--) this.series.push({ at: now - i * 15_000, ...this.counts(now - i * 15_000, true) });
-    // Журналы последнего часа, чтобы счётчики «за час» не стартовали с нуля.
-    const perHour = INTENSITY[this.intensity].spawnPerSec * 3600;
-    for (let i = 0; i < perHour; i++) {
-      const at = now - rnd() * 3_600_000;
-      this.createdLog.push(at);
-      this.resolvedLog.push({ at: now - rnd() * 3_600_000, ttr: between(12, 180) * 60_000 });
-    }
-    for (let i = 0; i < 6; i++) this.breachedLog.push(now - rnd() * 3_600_000);
+    for (let i = 40; i > 0; i--) this.series.push({ at: now - i * 15_000, ...this.counts(now) });
     this.recomputeBriefs(true);
   }
 
-  // ─── Генерация инцидента ─────────────────────────────────────────────────
-
-  /** Шаблон, которого сейчас нет среди открытых, чтобы очередь не пестрела одинаковыми заголовками. */
-  private pickTemplate(): Template {
-    const busy = new Map<string, number>();
-    for (const inc of this.incidents.values()) {
-      if (inc.status === 'resolved') continue;
-      const tpl = this.hidden.get(inc.id)?.template;
-      if (tpl) busy.set(tpl, (busy.get(tpl) ?? 0) + 1);
-    }
-    let best = pick(TEMPLATES);
-    for (let i = 0; i < 8; i++) {
-      const cand = pick(TEMPLATES);
-      if ((busy.get(cand.title) ?? 0) < (busy.get(best.title) ?? 0)) best = cand;
-      if (!busy.get(best.title)) break;
-    }
-    return best;
-  }
-
-  private pickPriority(t: Template, p1Keep: number): Priority {
-    let p = rnd() < 0.7 || t.prio.length === 1 ? t.prio[0] : t.prio[1];
-    if (p === 'P1' && rnd() > p1Keep) p = 'P2';
-    if (p === 'P2' && rnd() > 0.36) p = 'P3';
-    if (p === 'P3' && rnd() < 0.3) p = 'P4';
-    return p;
-  }
-
-  spawn(opts: SpawnOpts = {}): Incident {
-    const now = Date.now();
-    const t = opts.template ?? this.pickTemplate();
-    const priority = opts.priority ?? this.pickPriority(t, this.intensity === 'storm' ? 0.45 : 0.2);
-    const region = opts.region ?? t.region ?? pickRegion();
-    const vars = makeVars(region);
-    const fill = (s: string) => s.replace(/\{(\w+)\}/g, (_, k: string) => vars(k));
-    const component = t.host ? fill(t.host) : t.service ?? '';
-    vars.set('host', component);
-    const createdAt = opts.createdAt ?? now;
-    const slaMinutes = PRIORITY_SLA_MIN[priority];
-    const users = opts.users ?? roundUsers(logUniform(t.users[0], t.users[1]));
-
-    let status: Status = opts.status ?? (rnd() < 0.45 ? 'coordinators' : 'assigned');
-    let teamId: string = COORDINATORS_ID;
-    let assignee: string | null = null;
-    if (status !== 'coordinators') {
-      // Автомаршрутизация мониторинга ошибается примерно в каждом пятом случае.
-      teamId = rnd() < 0.82 ? t.team : pick(systemById(t.system).owners.concat(TEAMS[int(1, TEAMS.length - 1)].id));
-      if (status === 'in_progress' || status === 'escalated') assignee = pick(teamById(teamId)!.members);
-    }
-    const id = `INC-${this.seq++}`;
-    const source: Source = t.source ?? 'monitoring';
-    const trend: Trend = opts.trend ?? (rnd() < 0.3 ? 'growing' : rnd() < 0.72 ? 'stable' : 'declining');
-    const inc: Incident = {
-      id,
-      title: fill(t.title),
-      description: fill(t.description),
+  private fromRaw(r: RawIncident, shift: number): Incident {
+    const created = Date.parse(r.submitDate) + shift;
+    const priority = priorityFromId(r.priorityId);
+    let deadline = r.deadline ? Date.parse(r.deadline) + shift : NaN;
+    if (!(deadline > created)) deadline = created + PRIORITY_SLA_MIN[priority] * MIN; // в данных бывает дедлайн раньше регистрации
+    const closed = r.stateId === 7 || r.stateId === 10;
+    const group = groupByName(r.assignedGroupName);
+    const login = employeeLogin(r.assignedEmployee);
+    const emp = employeeById(login);
+    const mode: WorkMode = isOfflineRecord(r) ? 'offline' : 'online';
+    const status: Status = closed ? 'resolved' : r.stateId === 2 || r.stateId === 20 ? 'in_progress' : group?.id === COORDINATORS_GROUP ? 'coordinators' : 'assigned';
+    const geo = this.placeFor(r.id, mode, emp?.office ?? (/Приморье/.test(r.assignedGroupName ?? '') ? 'vvo' : /Санкт-Петербург/.test(r.assignedGroupName ?? '') ? 'spb' : null));
+    const resolvedAt = closed && r.completionDate ? Date.parse(r.completionDate) + shift : closed ? created + 60 * MIN : null;
+    return this.make({
+      id: r.id,
+      title: r.header,
+      description: r.description,
+      shortDescription: r.shortDescription,
+      solution: r.solution,
+      mode,
       priority,
+      priorityText: r.priority || PRIORITY_TEXT[priority],
+      impact: r.impact,
+      urgency: r.urgency,
+      stateText: r.state,
+      stateReason: r.stateReason,
+      productName: r.productName,
+      service: serviceName(r.service),
+      component: r.scenarioName,
+      serviceType: r.serviceType,
+      channel: r.receivingChannel,
+      groupId: group?.id ?? null,
+      groupName: group?.name ?? '—',
+      assignee: status === 'coordinators' ? null : login,
+      createdAt: created,
+      deadline,
       status,
-      systemId: t.system,
-      service: t.service ?? systemById(t.system).services[0],
-      component,
-      region,
-      geo: placeIncident(t, region),
+      resolvedAt,
+      geo,
+      region: geo.city,
+      flags: { isMaster: r.isMaster, isDouble: r.isDouble, isEffect: r.isEffect, isReason: r.isReason },
+      origin: 'dataset',
+    });
+  }
+
+  private placeFor(id: string, mode: WorkMode, officeId: string | null) {
+    const office = officeById(officeId) ?? OFFICES[Math.floor(hash(id) * OFFICES.length)];
+    if (mode === 'online') return { lat: office.lat, lon: office.lon, city: office.city };
+    // Точное место в данных не указано: ставим точку в 5–45 км от офиса (условно, для демо).
+    const km = 5 + hash(`${id}r`) * 40;
+    const a = hash(`${id}a`) * Math.PI * 2;
+    return {
+      lat: office.lat + (km / 111) * Math.sin(a),
+      lon: office.lon + (km / (111 * Math.cos((office.lat * Math.PI) / 180))) * Math.cos(a),
+      city: office.city,
+    };
+  }
+
+  private make(o: {
+    id: string;
+    title: string;
+    description: string;
+    shortDescription: string;
+    solution: string | null;
+    mode: WorkMode;
+    priority: Priority;
+    priorityText: string;
+    impact: string;
+    urgency: string;
+    stateText: string;
+    stateReason: string | null;
+    productName: string;
+    service: string;
+    component: string;
+    serviceType: string;
+    channel: string;
+    groupId: string | null;
+    groupName: string;
+    assignee: string | null;
+    createdAt: number;
+    deadline: number;
+    status: Status;
+    resolvedAt: number | null;
+    geo: { lat: number; lon: number; city: string };
+    region: string;
+    flags: { isMaster: boolean; isDouble: boolean; isEffect: boolean; isReason: boolean };
+    origin: 'dataset' | 'stream';
+  }): Incident {
+    const emp = employeeById(o.assignee);
+    const product = productByName(o.productName);
+    const source: Source = /монитор/i.test(o.channel) ? 'monitoring' : /жалоб/i.test(o.channel) ? 'user' : 'support';
+    return {
+      id: o.id,
+      title: o.title,
+      description: o.description,
+      shortDescription: o.shortDescription,
+      solution: o.solution,
+      mode: o.mode,
+      priority: o.priority,
+      priorityText: o.priorityText,
+      impact: o.impact,
+      urgency: o.urgency,
+      stateText: o.stateText,
+      stateReason: o.stateReason,
+      productName: o.productName,
+      serviceType: o.serviceType,
+      channel: o.channel,
+      groupName: o.groupName,
+      assigneeName: emp?.name ?? null,
+      isMaster: o.flags.isMaster,
+      isDouble: o.flags.isDouble,
+      isEffect: o.flags.isEffect,
+      isReason: o.flags.isReason,
+      origin: o.origin,
+      takenAt: null,
+      startedAt: o.status === 'in_progress' ? o.createdAt : null,
+      status: o.status,
+      systemId: product?.id ?? 'p1',
+      service: o.service,
+      component: o.component,
+      region: o.region,
+      geo: { lat: o.geo.lat, lon: o.geo.lon },
       path: null,
       crew: null,
-      teamId,
-      assignee,
-      createdAt,
-      updatedAt: createdAt,
-      slaMinutes,
-      slaDeadline: createdAt + slaMinutes * 60_000,
-      affectedUsers: users,
-      signals: t.signals.map(fill),
+      teamId: o.groupId,
+      assignee: o.assignee,
+      createdAt: o.createdAt,
+      updatedAt: o.createdAt,
+      slaMinutes: Math.round((o.deadline - o.createdAt) / MIN),
+      slaDeadline: o.deadline,
+      affectedUsers: 0,
+      signals: [o.shortDescription],
       source,
-      trend,
+      trend: 'stable',
       reassignCount: 0,
       relatedIds: [],
       parentId: null,
-      acknowledged: opts.acknowledged ?? false,
+      acknowledged: o.origin === 'dataset',
+      resolvedAt: o.resolvedAt,
+      history: [{ at: o.createdAt, kind: 'system', text: `Зарегистрирован: ${o.channel}` }],
+      ai: { risk: 0, level: 'low', teamId: null, confidence: 0, workerId: null, workerConfidence: 0 },
+    };
+  }
+
+  // ─── живой поток по образцу набора ───────────────────────────────────────
+
+  spawn(opts: { mode?: WorkMode; product?: ProductDef; service?: string; priority?: Priority; master?: boolean; parentId?: string; quiet?: boolean } = {}): Incident {
+    const now = Date.now();
+    const p = opts.product ?? pick(PRODUCTS);
+    const svc = p.services.find((s) => s.name === opts.service) ?? pick(p.services);
+    const sc = pick(svc.scenarios);
+    const mode: WorkMode = opts.mode ?? (rnd() < 0.3 ? 'offline' : 'online');
+    const priority: Priority = opts.priority ?? weighted<Priority>({ P1: 0.03, P2: 0.12, P3: 0.5, P4: 0.35 });
+    const fill = (t: string) => t.replace(/\{s\}/g, sc).replace(/\{svc\}/g, svc.name).replace(/\{p\}/g, p.name);
+    const officeId = mode === 'offline' ? weighted({ msk: 3, spb: 2, kzn: 1, ekb: 1, nsk: 1, vvo: 1 }) : null;
+    const id = `INC0000${this.seq++}`;
+    const geo = this.placeFor(id, mode, officeId);
+    const fieldGroup = officeId === 'vvo' ? GROUPS.find((g) => /Приморье/.test(g.name)) : officeId === 'spb' ? GROUPS.find((g) => /Санкт-Петербург/.test(g.name)) : undefined;
+    const groupId = (mode === 'offline' ? fieldGroup?.id : undefined) ?? groupForService(p.name, svc.name) ?? COORDINATORS_GROUP;
+    const inc = this.make({
+      id,
+      title: fill(pick(HEADER_TEMPLATES)),
+      description: fill(mode === 'offline' ? FIELD_DESCRIPTION : pick(DESCRIPTION_TEMPLATES)),
+      shortDescription: fill(pick(SHORT_TEMPLATES)),
+      solution: null,
+      mode,
+      priority,
+      priorityText: PRIORITY_TEXT[priority],
+      impact: priority === 'P1' ? 'Наивысшее' : priority === 'P2' ? 'Высокое' : 'Среднее',
+      urgency: weighted({ Наивысшая: 0.55, Низкая: 0.27, Средняя: 0.12, Высокая: 0.06 }),
+      stateText: 'Назначен',
+      stateReason: null,
+      productName: p.name,
+      service: svc.name,
+      component: sc,
+      serviceType: weighted({ Технологический: 0.6, Пользовательский: 0.2, Клиентский: 0.2 }),
+      channel: weighted({ 'Мониторинг 9го королевства': 1, 'Жалоба от народа': 1, 'Анонимное письмо': 1 }),
+      groupId,
+      groupName: groupById(groupId)?.name ?? '—',
+      assignee: null,
+      createdAt: now,
+      deadline: now + PRIORITY_SLA_MIN[priority] * MIN,
+      status: 'coordinators',
       resolvedAt: null,
-      history: [],
-      ai: { risk: 0, level: 'low', teamId: null, confidence: 0 },
-    };
-    const srcText: Record<Source, string> = {
-      monitoring: 'мониторинг',
-      support: 'обращения абонентов',
-      partner: 'партнёр',
-      user: 'жалоба абонента',
-    };
-    inc.history.push({ at: createdAt, kind: 'system', text: `Создан, источник: ${srcText[source]}. ${inc.signals[0] ?? ''}`.trim() });
-    if (status === 'coordinators') inc.history.push({ at: createdAt + 1000, kind: 'system', text: 'Назначен на группу координаторов: автоматическая маршрутизация не уверена' });
-    else inc.history.push({ at: createdAt + 1000, kind: 'system', text: `Автомаршрутизация: команда «${teamById(teamId)!.short}»` });
-    if (assignee) inc.history.push({ at: createdAt + int(2, 15) * 60_000 * (opts.seed ? 1 : 0), kind: 'team', text: `${assignee} взял(а) в работу`, actor: assignee });
-
-    // Магистраль между двумя городами рисуем линией.
-    const second = t.pathTo ?? (t.title.includes('{region2}') ? vars('region2') : null);
-    if (second && CITY[second] && CITY[region]) inc.path = [[CITY[region].lon, CITY[region].lat], [CITY[second].lon, CITY[second].lat]];
-
-    const remaining = inc.slaDeadline - now;
-    this.hidden.set(id, {
-      truthTeam: t.team,
-      template: t.title,
-      warned: remaining <= AT_RISK_MIN * 60_000,
-      breached: remaining <= 0,
+      geo,
+      region: geo.city,
+      flags: { isMaster: !!opts.master, isDouble: !!opts.parentId, isEffect: !!opts.master, isReason: !!opts.parentId },
+      origin: 'stream',
     });
-    this.incidents.set(id, inc);
-    if (opts.crew || ((status === 'in_progress' || status === 'escalated') && opts.seed)) {
-      this.dispatchCrew(inc, opts.seed ? now - rnd() * 600_000 : now, opts.crew ? 1 : 0.5, true);
+    if (opts.parentId) {
+      const parent = this.incidents.get(opts.parentId);
+      if (parent) {
+        inc.parentId = parent.id;
+        inc.relatedIds.push(parent.id);
+        parent.relatedIds.push(inc.id);
+        this.emit({ type: 'incident', data: parent });
+      }
     }
-    if (!opts.seed) this.createdLog.push(now);
-    const ctx = buildContext(this.incidents, now);
-    inc.ai = briefOf(inc, ctx);
+    this.incidents.set(id, inc);
+    this.hidden.set(id, { warned: false, breached: false, finishAt: null });
+    this.createdLog.push(now);
+    inc.ai = briefOf(inc, this.ctx(now));
     if (!opts.quiet) {
-      // ИИ сразу связывает новый инцидент с соседями, если видит общую причину.
-      this.autoRelate(inc);
       this.emit({ type: 'incident', data: inc });
-      this.pushFeed(feedKindForNew(inc), inc, newIncidentText(inc));
+      this.pushFeed(priority === 'P1' ? 'p1' : 'coordinators', inc, mode === 'offline' ? 'Новый, нужен выезд' : 'Новый, ждёт назначения');
     }
     return inc;
   }
 
-  private autoRelate(inc: Incident) {
-    const ctx = buildContext(this.incidents, Date.now());
-    for (const other of this.incidents.values()) {
-      if (other.id === inc.id || other.status === 'resolved') continue;
-      if (relationOf(inc, other)) {
-        if (!inc.relatedIds.includes(other.id)) inc.relatedIds.push(other.id);
-        if (!other.relatedIds.includes(inc.id)) {
-          other.relatedIds.push(inc.id);
-          other.ai = briefOf(other, ctx);
-          this.emit({ type: 'incident', data: other });
-        }
-      }
-    }
-  }
-
-  // ─── Такт симуляции ──────────────────────────────────────────────────────
+  // ─── такт ────────────────────────────────────────────────────────────────
 
   private tick() {
     const now = Date.now();
     this.ticks++;
-    const cfg = INTENSITY[this.intensity];
-
     for (const s of this.scheduled.filter((x) => x.at <= now)) s.fn();
     this.scheduled = this.scheduled.filter((x) => x.at > now);
+    if (rnd() < INTENSITY[this.intensity]) this.spawn();
 
-    if (rnd() < cfg.spawnPerSec) this.spawn();
-    if (this.intensity === 'storm' && rnd() < cfg.spawnPerSec / 3) this.spawn();
-
-    const open = [...this.incidents.values()].filter((i) => i.status !== 'resolved');
-    const balance = Math.pow(Math.min(2, Math.max(0.5, open.length / TARGET_OPEN)), 2);
-
-    for (const inc of open) {
+    for (const inc of this.incidents.values()) {
+      if (inc.status === 'resolved') continue;
       const h = this.hidden.get(inc.id)!;
       const remaining = inc.slaDeadline - now;
-      if (!h.warned && remaining <= AT_RISK_MIN * 60_000 && remaining > 0) {
+      if (!h.warned && remaining > 0 && remaining <= AT_RISK_MIN * MIN) {
         h.warned = true;
-        if (inc.priority <= 'P2') this.pushFeed('sla_warning', inc, `До нарушения SLA ${Math.round(remaining / 60_000)} мин`);
+        if (inc.priority <= 'P2') this.pushFeed('sla_warning', inc, `До дедлайна ${Math.round(remaining / MIN)} мин`);
       }
       if (!h.breached && remaining <= 0) {
         h.breached = true;
         this.breachedLog.push(now);
-        inc.history.push({ at: now, kind: 'system', text: 'SLA нарушен' });
-        this.touch(inc, now);
-        this.pushFeed('sla_breach', inc, 'SLA нарушен');
+        this.pushFeed('sla_breach', inc, 'Дедлайн прошёл');
       }
-
+      // Коллеги-координаторы разбирают то, что вы не взяли за 3 минуты.
+      if (inc.status === 'coordinators' && !inc.takenAt && now - inc.createdAt > 3 * MIN && rnd() < 0.02) {
+        const best = recommendWorkers(inc, this.ctx(now))[0];
+        if (best) this.assign(inc, best.workerId, ACTOR_DISPATCH);
+      }
+      // Бригада доехала.
       if (inc.crew && !inc.crew.arrived && now >= inc.crew.dispatchedAt + inc.crew.etaMs) {
         inc.crew.arrived = true;
-        inc.history.push({ at: now, kind: 'team', text: `${inc.crew.name} на месте` });
+        const w = this.workers.find((x) => x.id === inc.assignee);
+        if (w && w.status === 'enroute') {
+          w.status = 'onsite';
+          this.emit({ type: 'worker', data: w });
+        }
+        inc.history.push({ at: now, kind: 'team', text: `${inc.assigneeName ?? 'Специалист'} на месте` });
         this.touch(inc, now);
-        if (inc.priority <= 'P3') this.pushFeed('crew', inc, `${inc.crew.name} на месте`);
-      }
-
-      const sp = cfg.speed;
-      if (inc.status === 'coordinators') {
-        // Коллеги-координаторы тоже разбирают очередь, но новые и непросмотренные оставляют вам.
-        if (inc.acknowledged || now - inc.createdAt > 6 * 60_000) {
-          if (rnd() < 0.004 * sp) this.assign(inc, h.truthTeam, pick(TEAMS[0].members.slice(1)), false);
-        }
-      } else if (inc.status === 'assigned') {
-        if (rnd() < 0.012 * sp) {
-          inc.status = 'in_progress';
-          inc.assignee = pick(teamById(inc.teamId)!.members);
-          inc.history.push({ at: now, kind: 'team', text: `${inc.assignee} взял(а) в работу`, actor: inc.assignee });
-          this.dispatchCrew(inc, now, 0.7, false);
-          this.touch(inc, now);
-          if (inc.priority <= 'P2') this.pushFeed('in_progress', inc, `${inc.assignee} взял(а) в работу`, inc.assignee);
-        }
-      } else if (inc.status === 'in_progress' || inc.status === 'escalated') {
-        const wrongTeam = inc.teamId !== h.truthTeam;
-        if (wrongTeam && rnd() < 0.006 * sp) {
-          const team = teamById(inc.teamId)!;
-          inc.status = 'coordinators';
-          inc.history.push({ at: now, kind: 'team', text: `«${team.short}» вернули инцидент: не их профиль`, actor: inc.assignee ?? team.short });
-          inc.teamId = COORDINATORS_ID;
-          inc.assignee = null;
-          inc.crew = null;
-          inc.reassignCount++;
-          inc.acknowledged = false;
-          this.touch(inc, now);
-          this.pushFeed('coordinators', inc, `«${team.short}» вернули на координаторов: не их профиль`);
-          continue;
-        }
-        const base: Record<Priority, number> = { P1: 0.0016, P2: 0.0016, P3: 0.0013, P4: 0.0011 };
-        const p = base[inc.priority] * balance * sp * (inc.trend === 'declining' ? 1.6 : 1);
-        if (rnd() < p) {
-          this.resolve(inc, inc.assignee ?? undefined);
-          continue;
-        }
-      }
-
-      // Эскалация приоритета при ухудшении.
-      const raiseAt = inc.priority === 'P2' ? 75 : 60;
-      if (inc.trend === 'growing' && (inc.priority === 'P2' || inc.priority === 'P3') && inc.ai.risk >= raiseAt && rnd() < 0.0004 * sp) {
-        this.raise(inc, 'Мониторинг', 'метрики продолжают ухудшаться');
-      }
-      // Тренд медленно меняется.
-      if (rnd() < 0.003) {
-        const next: Trend = rnd() < 0.35 ? 'growing' : rnd() < 0.6 ? 'stable' : 'declining';
-        if (next !== inc.trend) {
-          inc.trend = next;
-          inc.history.push({
-            at: now,
-            kind: 'system',
-            text: next === 'growing' ? 'Мониторинг: метрики ухудшаются' : next === 'declining' ? 'Мониторинг: метрики восстанавливаются' : 'Мониторинг: метрики стабилизировались',
-          });
-          this.touch(inc, now);
-        }
+        this.pushFeed('crew', inc, `${inc.assigneeName ?? 'Специалист'} на месте`);
       }
     }
 
-    // Решённые убираем через несколько минут.
+    for (const w of this.workers) this.workerStep(w, now);
+
+    // Решённые из потока через 30 минут уходят; записи из набора остаются.
     for (const inc of this.incidents.values()) {
-      if (inc.status === 'resolved' && inc.resolvedAt && now - inc.resolvedAt > RESOLVED_TTL_MS) {
+      if (inc.origin === 'stream' && inc.status === 'resolved' && inc.resolvedAt && now - inc.resolvedAt > STREAM_RESOLVED_TTL) {
         this.incidents.delete(inc.id);
         this.hidden.delete(inc.id);
-        this.lastBriefs.delete(inc.id);
         this.emit({ type: 'remove', data: { id: inc.id } });
       }
     }
-
     if (this.ticks % 10 === 0) this.recomputeBriefs(false);
     if (this.ticks % 15 === 0) {
       this.series.push({ at: now, ...this.counts(now) });
       if (this.series.length > 60) this.series.shift();
+      this.emit({ type: 'tick', data: { serverTime: now } });
     }
     if (this.ticks % 5 === 0) this.emit({ type: 'stats', data: this.stats() });
-    if (this.ticks % 15 === 0) this.emit({ type: 'tick', data: { serverTime: now } });
   }
 
-  /** Отправляет выездную бригаду, если у команды есть выезды. Время в пути сжато для демо: 1,5–5 минут. */
-  private dispatchCrew(inc: Incident, at: number, chance: number, silent: boolean) {
-    const team = inc.teamId && CREW_TEAMS[inc.teamId] ? inc.teamId : this.hidden.get(inc.id)?.truthTeam;
-    const label = team ? CREW_TEAMS[team] : undefined;
-    if (!label || inc.crew || rnd() > chance) return;
-    const km = between(3, 9);
-    const angle = rnd() * Math.PI * 2;
-    const from = {
-      lat: inc.geo.lat + (km / 111) * Math.sin(angle),
-      lon: inc.geo.lon + (km / (111 * Math.cos((inc.geo.lat * Math.PI) / 180))) * Math.cos(angle),
+  /** Сотрудник без человека за кабинетом работает сам: берёт задачу по своему порядку, едет, закрывает. */
+  private workerStep(w: Worker, now: number) {
+    if (w.manual && (this.manualUntil.get(w.id) ?? 0) > now) return;
+    if (w.manual) {
+      w.manual = false;
+      this.emit({ type: 'worker', data: w });
+    }
+    if (w.status === 'break') {
+      if (now >= (this.breakUntil.get(w.id) ?? 0)) this.setWorker(w, { status: 'free' });
+      return;
+    }
+    if (w.currentId) {
+      const inc = this.incidents.get(w.currentId);
+      if (!inc || inc.status === 'resolved') {
+        this.setWorker(w, { currentId: null, status: 'free' });
+        return;
+      }
+      const h = this.hidden.get(inc.id);
+      const arrived = inc.mode === 'online' || !inc.crew || inc.crew.arrived;
+      if (arrived && h?.finishAt && now >= h.finishAt) this.finish(inc, w);
+      return;
+    }
+    const mine = this.ordered(w).filter((i) => i.status === 'assigned');
+    if (mine.length && rnd() < 0.08) this.startWork(mine[0], w, now);
+    else if (!mine.length && rnd() < 0.0004) {
+      this.breakUntil.set(w.id, now + between(2, 4) * MIN);
+      this.setWorker(w, { status: 'break' });
+    }
+  }
+
+  /** Задачи сотрудника в его личном порядке (кабинет), остальные — по дедлайну. */
+  ordered(w: Worker): Incident[] {
+    const mine = [...this.incidents.values()].filter((i) => i.assignee === w.id && i.status !== 'resolved');
+    const pos = (id: string) => {
+      const k = w.queue.indexOf(id);
+      return k < 0 ? 1e6 : k;
     };
-    const etaMs = Math.round(between(90, 300) * 1000);
-    inc.crew = { name: `${label} №${int(11, 98)}`, from, dispatchedAt: at, etaMs, arrived: Date.now() >= at + etaMs };
-    inc.history.push({ at, kind: 'team', text: `Выехала ${inc.crew.name}, в пути ≈ ${Math.max(1, Math.round(etaMs / 60_000))} мин` });
-    if (!silent && inc.priority <= 'P2') this.pushFeed('crew', inc, `Выехала ${inc.crew.name}`);
+    return mine.sort((a, b) => pos(a.id) - pos(b.id) || a.slaDeadline - b.slaDeadline);
+  }
+
+  private startWork(inc: Incident, w: Worker, now: number) {
+    inc.status = 'in_progress';
+    inc.stateText = 'Выполняется';
+    inc.startedAt = now;
+    const h = this.hidden.get(inc.id)!;
+    if (inc.mode === 'offline') {
+      const office = officeById(w.office) ?? OFFICES[0];
+      const etaMs = Math.round(between(60, 180) * 1000);
+      inc.crew = { name: w.name, from: { lat: office.lat, lon: office.lon }, dispatchedAt: now, etaMs, arrived: false };
+      h.finishAt = now + etaMs + between(60, 150) * 1000;
+      inc.history.push({ at: now, kind: 'team', text: `${w.name} выехал(а), в пути ≈ ${Math.max(1, Math.round(etaMs / MIN))} мин` });
+      this.setWorker(w, { currentId: inc.id, status: 'enroute' });
+      this.pushFeed('crew', inc, `${w.name} выехал(а)`, w.name);
+    } else {
+      h.finishAt = now + between(90, 300) * 1000;
+      inc.history.push({ at: now, kind: 'team', text: `${w.name} начал(а) работу`, actor: w.name });
+      this.setWorker(w, { currentId: inc.id, status: 'busy' });
+      if (inc.priority <= 'P2') this.pushFeed('in_progress', inc, `${w.name} в работе`, w.name);
+    }
+    this.touch(inc, now);
+  }
+
+  private finish(inc: Incident, w: Worker | undefined, actor?: string) {
+    const now = Date.now();
+    inc.status = 'resolved';
+    inc.stateText = 'Завершен';
+    inc.stateReason = 'Постоянное решение';
+    inc.resolvedAt = now;
+    inc.solution = inc.solution ?? pick(SOLUTION_TEMPLATES).replace(/\{s\}/g, inc.component);
+    inc.history.push({ at: now, kind: 'team', text: `${actor ?? w?.name ?? 'Координатор'}: решено`, actor: actor ?? w?.name });
+    this.resolvedLog.push({ at: now, ttr: now - inc.createdAt });
+    inc.updatedAt = now;
+    this.emit({ type: 'incident', data: inc });
+    this.pushFeed('resolved', inc, `Решено${w ? ` · ${w.name}` : ''}`, actor ?? w?.name);
+    if (w) {
+      w.done++;
+      w.queue = w.queue.filter((x) => x !== inc.id);
+      this.setWorker(w, { currentId: w.currentId === inc.id ? null : w.currentId, status: w.currentId === inc.id ? 'free' : w.status });
+    }
+  }
+
+  private setWorker(w: Worker, patch: Partial<Worker>) {
+    Object.assign(w, patch);
+    this.emit({ type: 'worker', data: w });
   }
 
   private touch(inc: Incident, now = Date.now()) {
     inc.updatedAt = now;
-    inc.ai = briefOf(inc, buildContext(this.incidents, now));
+    inc.ai = briefOf(inc, this.ctx(now));
     this.lastBriefs.set(inc.id, inc.ai);
     this.emit({ type: 'incident', data: inc });
   }
 
   private recomputeBriefs(initial: boolean) {
-    const now = Date.now();
-    const ctx = buildContext(this.incidents, now);
+    const ctx = this.ctx();
     const changed: Record<string, AiBrief> = {};
-    let hits = 0;
-    let total = 0;
     for (const inc of this.incidents.values()) {
       if (inc.status === 'resolved') continue;
       const b = briefOf(inc, ctx);
       const prev = this.lastBriefs.get(inc.id);
       inc.ai = b;
-      if (!prev || Math.abs(prev.risk - b.risk) >= 2 || prev.teamId !== b.teamId || prev.level !== b.level) {
+      if (!prev || Math.abs(prev.risk - b.risk) >= 2 || prev.workerId !== b.workerId || prev.level !== b.level) {
         changed[inc.id] = b;
         this.lastBriefs.set(inc.id, b);
       }
-      total++;
-      if (b.teamId === this.hidden.get(inc.id)?.truthTeam) hits++;
     }
-    this.aiAccuracy = total ? hits / total : null;
     if (!initial && Object.keys(changed).length) this.emit({ type: 'brief', data: changed });
   }
-
-  // ─── Лента ───────────────────────────────────────────────────────────────
 
   private pushFeed(kind: FeedKind, inc: Incident, text: string, actor?: string, at = Date.now(), silent = false) {
     const ev: FeedEvent = { id: `E${this.feedSeq++}`, at, kind, incidentId: inc.id, priority: inc.priority, systemId: inc.systemId, text, actor };
@@ -445,106 +566,73 @@ export class Sim {
     if (!silent) this.emit({ type: 'feed', data: ev });
   }
 
-  // ─── Действия координатора ───────────────────────────────────────────────
+  // ─── действия координатора ───────────────────────────────────────────────
 
-  private assign(inc: Incident, teamId: string, actor: string, byAi: boolean) {
-    const team = teamById(teamId);
-    if (!team) throw new Error('Неизвестная команда');
+  private assign(inc: Incident, workerId: string, actor: string) {
+    const w = this.workers.find((x) => x.id === workerId);
+    if (!w) throw new Error('Нет такого сотрудника');
     const now = Date.now();
-    const wasCoord = inc.status === 'coordinators';
-    if (inc.teamId && inc.teamId !== COORDINATORS_ID && inc.teamId !== teamId) inc.reassignCount++;
-    inc.teamId = teamId;
-    inc.assignee = null;
-    inc.status = team.isCoordinators ? 'coordinators' : 'assigned';
-    inc.acknowledged = true;
-    inc.history.push({
-      at: now,
-      kind: 'coordinator',
-      actor,
-      text: `${actor}: передан команде «${team.short}»${byAi ? ' по рекомендации ИИ' : ''}`,
-    });
-    this.touch(inc, now);
-    this.pushFeed('assigned', inc, `${wasCoord ? 'Назначен' : 'Переназначен'} на «${team.short}»${byAi ? ' · по подсказке ИИ' : ''}`, actor);
-  }
-
-  private resolve(inc: Incident, actor?: string) {
-    const now = Date.now();
-    inc.status = 'resolved';
-    inc.resolvedAt = now;
-    inc.acknowledged = true;
-    inc.history.push({ at: now, kind: actor ? 'team' : 'coordinator', actor, text: `${actor ?? 'Координатор'}: инцидент решён` });
-    this.resolvedLog.push({ at: now, ttr: now - inc.createdAt });
-    inc.updatedAt = now;
-    this.emit({ type: 'incident', data: inc });
-    this.pushFeed('resolved', inc, `Решён${actor ? ` · ${actor}` : ''}`, actor);
-  }
-
-  private raise(inc: Incident, actor: string, why: string) {
-    if (inc.priority === 'P1') return;
-    const now = Date.now();
-    const from = inc.priority;
-    inc.priority = higher(inc.priority);
-    // SLA пересчитывается от момента создания по новому приоритету, но не раньше чем через 15 минут.
-    inc.slaMinutes = PRIORITY_SLA_MIN[inc.priority];
-    inc.slaDeadline = Math.max(inc.createdAt + inc.slaMinutes * 60_000, now + 15 * 60_000);
-    const h = this.hidden.get(inc.id);
-    if (h) {
-      h.warned = inc.slaDeadline - now <= AT_RISK_MIN * 60_000;
-      h.breached = false;
+    const prev = this.workers.find((x) => x.id === inc.assignee);
+    if (prev && prev.id !== w.id) {
+      prev.queue = prev.queue.filter((x) => x !== inc.id);
+      if (prev.currentId === inc.id) prev.currentId = null;
+      this.emit({ type: 'worker', data: prev });
     }
-    inc.acknowledged = false;
-    inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: приоритет ${from} → ${inc.priority} (${why})` });
+    inc.assignee = w.id;
+    inc.assigneeName = w.name;
+    inc.status = 'assigned';
+    inc.stateText = 'Назначен';
+    inc.acknowledged = true;
+    inc.crew = null;
+    if (!inc.teamId || inc.teamId === COORDINATORS_GROUP) {
+      inc.teamId = w.groups[0] ?? inc.teamId;
+      inc.groupName = groupById(inc.teamId)?.name ?? inc.groupName;
+    }
+    if (!w.queue.includes(inc.id)) w.queue.push(inc.id);
+    inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: назначен ${w.name}` });
+    this.emit({ type: 'worker', data: w });
     this.touch(inc, now);
-    this.pushFeed(inc.priority === 'P1' ? 'p1' : 'priority_up', inc, `Приоритет повышен: ${from} → ${inc.priority}`, actor);
+    this.pushFeed('assigned', inc, `Назначен: ${w.name}`, actor);
   }
 
-  act(id: string, type: string, body: { teamId?: string; parentId?: string; actor?: string; byAi?: boolean }) {
+  act(id: string, type: string, body: { workerId?: string; teamId?: string; parentId?: string; actor?: string }) {
     const inc = this.incidents.get(id);
     if (!inc) throw new Error('Инцидент не найден');
     const actor = body.actor || 'Координатор';
     const now = Date.now();
     switch (type) {
+      case 'take':
       case 'ack':
-        if (!inc.acknowledged) {
-          inc.acknowledged = true;
-          inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: взят на контроль` });
-          this.touch(inc, now);
-        }
+        inc.acknowledged = true;
+        inc.takenAt = now;
+        inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: взял(а) на контроль` });
+        this.touch(inc, now);
         break;
-      case 'assign':
-        if (!body.teamId) throw new Error('Не указана команда');
-        this.assign(inc, body.teamId, actor, !!body.byAi);
+      case 'assign': {
+        const workerId = body.workerId ?? inc.ai.workerId;
+        if (!workerId) throw new Error('Не указан сотрудник');
+        this.assign(inc, workerId, actor);
         break;
-      case 'raise':
-        this.raise(inc, actor, 'решение координатора');
+      }
+      case 'resolve':
+        if (inc.status !== 'resolved') this.finish(inc, this.workers.find((w) => w.id === inc.assignee), actor);
         break;
       case 'escalate':
         inc.status = 'escalated';
-        inc.acknowledged = true;
-        inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: эскалирован руководителю смены` });
+        inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: эскалирован` });
         this.touch(inc, now);
-        this.pushFeed('escalated', inc, 'Эскалирован руководителю смены', actor);
-        break;
-      case 'resolve':
-        if (inc.status !== 'resolved') this.resolve(inc, actor);
+        this.pushFeed('escalated', inc, 'Эскалирован', actor);
         break;
       case 'link': {
         const parent = body.parentId ? this.incidents.get(body.parentId) : undefined;
-        if (!parent) throw new Error('Не найден родительский инцидент');
+        if (!parent) throw new Error('Не найден главный инцидент');
         inc.parentId = parent.id;
+        inc.isDouble = true;
         if (!inc.relatedIds.includes(parent.id)) inc.relatedIds.push(parent.id);
         if (!parent.relatedIds.includes(inc.id)) parent.relatedIds.push(inc.id);
-        inc.acknowledged = true;
-        inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: связан с ${parent.id} как дочерний` });
-        parent.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: добавлен дочерний ${inc.id}` });
-        if (parent.teamId && parent.teamId !== COORDINATORS_ID && inc.status === 'coordinators') {
-          inc.teamId = parent.teamId;
-          inc.status = 'assigned';
-          inc.history.push({ at: now, kind: 'system', text: `Передан команде первопричины «${teamById(parent.teamId)!.short}»` });
-        }
         this.touch(parent, now);
         this.touch(inc, now);
-        this.pushFeed('linked', inc, `Связан с ${parent.id} (${systemById(parent.systemId).short})`, actor);
+        this.pushFeed('linked', inc, `Связан с ${parent.id}`, actor);
         break;
       }
       default:
@@ -553,15 +641,81 @@ export class Sim {
     return inc;
   }
 
-  bulkAssign(items: { id: string; teamId: string }[], actor: string) {
+  bulkAssign(items: { id: string; teamId?: string; workerId?: string }[], actor: string) {
     let n = 0;
     for (const it of items) {
       const inc = this.incidents.get(it.id);
-      if (!inc || inc.status === 'resolved') continue;
-      this.assign(inc, it.teamId, actor, true);
+      const workerId = it.workerId ?? inc?.ai.workerId;
+      if (!inc || inc.status === 'resolved' || !workerId) continue;
+      this.assign(inc, workerId, actor);
       n++;
     }
     return n;
+  }
+
+  // ─── кабинет сотрудника ──────────────────────────────────────────────────
+
+  workerAct(workerId: string, body: { action: string; incidentId?: string; status?: string; focus?: string; queue?: string[] }) {
+    const w = this.workers.find((x) => x.id === workerId);
+    if (!w) throw new Error('Нет такого сотрудника');
+    const now = Date.now();
+    // Кабинет открыл человек: автопилот этого сотрудника отключается на 20 минут после последнего действия.
+    this.manualUntil.set(w.id, now + 20 * MIN);
+    w.manual = true;
+    const inc = body.incidentId ? this.incidents.get(body.incidentId) : undefined;
+    switch (body.action) {
+      case 'claim':
+        break;
+      case 'start':
+        if (!inc || inc.assignee !== w.id) throw new Error('Это не ваша задача');
+        if (w.currentId && w.currentId !== inc.id) {
+          const cur = this.incidents.get(w.currentId);
+          if (cur && cur.status === 'in_progress') {
+            cur.status = 'assigned';
+            this.touch(cur, now);
+          }
+        }
+        this.startWork(inc, w, now);
+        break;
+      case 'onsite':
+        if (!inc?.crew) throw new Error('Нет выезда');
+        inc.crew.arrived = true;
+        this.setWorker(w, { status: 'onsite' });
+        this.touch(inc, now);
+        break;
+      case 'done':
+        if (!inc || inc.assignee !== w.id) throw new Error('Это не ваша задача');
+        this.finish(inc, w);
+        break;
+      case 'release':
+        if (!inc || inc.assignee !== w.id) throw new Error('Это не ваша задача');
+        inc.assignee = null;
+        inc.assigneeName = null;
+        inc.status = 'coordinators';
+        inc.crew = null;
+        w.queue = w.queue.filter((x) => x !== inc.id);
+        if (w.currentId === inc.id) w.currentId = null;
+        this.touch(inc, now);
+        this.pushFeed('coordinators', inc, `${w.name} вернул(а) координатору`, w.name);
+        break;
+      case 'status':
+        if (body.status !== 'free' && body.status !== 'break') throw new Error('Статус: free или break');
+        if (body.status === 'break') this.breakUntil.set(w.id, now + 60 * MIN);
+        w.status = body.status === 'break' ? 'break' : w.currentId ? (w.mode === 'offline' ? 'onsite' : 'busy') : 'free';
+        break;
+      case 'focus':
+        w.focus = String(body.focus ?? '').slice(0, 80);
+        break;
+      case 'queue': {
+        const mine = new Set(this.ordered(w).map((i) => i.id));
+        w.queue = (body.queue ?? []).filter((id) => mine.has(id));
+        break;
+      }
+      default:
+        throw new Error(`Неизвестное действие ${body.action}`);
+    }
+    this.emit({ type: 'worker', data: w });
+    return w;
   }
 
   setIntensity(level: Intensity) {
@@ -569,141 +723,31 @@ export class Sim {
     this.emit({ type: 'intensity', data: level });
   }
 
-  // ─── Сценарии для демо ───────────────────────────────────────────────────
+  // ─── сценарии для показа ─────────────────────────────────────────────────
 
   scenario(kind: ScenarioKind) {
     const now = Date.now();
     const at = (sec: number, fn: () => void) => this.scheduled.push({ at: now + sec * 1000, fn });
-    const custom = (t: Partial<Template> & Pick<Template, 'system' | 'team' | 'title' | 'description' | 'signals'>): Template => ({
-      prio: ['P2'],
-      users: [10_000, 100_000],
-      ...t,
-    });
     switch (kind) {
-      case 'billing_outage': {
-        const region = 'Москва';
-        this.spawn({
-          template: custom({
-            system: 'billing', team: 'billing_l2', service: 'Тарификация CDR', host: 'bill-rt-03',
-            title: 'Тарификация остановлена: очередь CDR {k} тыс. и растёт',
-            description: 'Сервис тарификации перестал обрабатывать записи о звонках и трафике после обновления справочника тарифов. Балансы абонентов не обновляются.',
-            signals: ['Лаг консьюмера cdr-rating: 34 мин и растёт', 'Ошибки rating-engine: TariffNotFound ×12 тыс.'],
-          }),
-          priority: 'P1', status: 'coordinators', region, users: 2_400_000, trend: 'growing',
-        });
-        at(7, () => this.spawn({
-          template: custom({
-            system: 'app', team: 'billing_l2', service: 'Главный экран и баланс', host: 'api-balance',
-            title: '«Мой МТС»: у абонентов не обновляется баланс',
-            description: 'Баланс на главном экране не меняется после звонков и пополнений. API приложения отвечает штатно, но данные начислений из биллинга устаревшие.',
-            signals: ['Обращения «неверный баланс» ×6 к норме', 'Возраст данных баланса: 40 мин'],
-          }),
-          priority: 'P2', status: 'coordinators', region, users: 900_000, trend: 'growing',
-        }));
-        at(14, () => this.spawn({
-          template: custom({
-            system: 'lk', team: 'billing_l2', service: 'Детализация', host: 'lk-api',
-            title: 'ЛК: устаревший баланс и пустая детализация',
-            description: 'В личном кабинете не отображаются списания за последний час, детализация пустая. Начисления из биллинга не приходят.',
-            signals: ['Ошибки детализации 38%', 'Таймаут ответа биллинга'],
-          }),
-          priority: 'P2', status: 'coordinators', region, users: 350_000, trend: 'growing',
-        }));
-        at(21, () => this.spawn({
-          template: custom({
-            system: 'payments', team: 'billing_l2', service: 'Эквайринг', host: 'pay-acq-02',
-            title: 'Пополнение баланса задерживается больше чем на 15 минут',
-            description: 'Оплата у абонентов проходит, но баланс пополняется с большой задержкой: биллинг не подтверждает начисление, очередь подтверждений растёт.',
-            signals: ['Ожидают подтверждения: 48 тыс. операций', 'Подтверждение от биллинга p95: 17 мин'],
-          }),
-          priority: 'P2', status: 'coordinators', region, users: 120_000, trend: 'growing',
-        }));
-        at(29, () => this.spawn({
-          template: custom({
-            system: 'crm', team: 'crm_team', service: 'IVR 0890', host: 'ivr-01',
-            title: 'Контакт-центр: всплеск звонков «неверный баланс»',
-            description: 'Очередь на линии выросла в четыре раза, абоненты жалуются на неверный баланс и блокировки. Нужен готовый ответ для операторов.',
-            signals: ['Очередь звонков на линии ×4', 'Среднее ожидание 11 мин'],
-          }),
-          priority: 'P3', status: 'coordinators', region, users: 40_000, trend: 'growing',
-        }));
+      case 'mass_outage': {
+        const p = pick(PRODUCTS);
+        const svc = pick(p.services).name;
+        const master = this.spawn({ product: p, service: svc, priority: 'P2', master: true, mode: 'online' });
+        for (let i = 1; i <= 3; i++) at(i * 4, () => this.spawn({ product: p, service: svc, priority: 'P3', parentId: master.id, mode: 'online' }));
         break;
       }
-      case 'network_cut': {
-        const region = 'Самара';
-        this.spawn({
-          template: custom({
-            system: 'ran', team: 'transport', service: 'Транспорт до БС', host: 'dwdm-sam-02', pathTo: 'Тольятти',
-            title: 'Обрыв магистральной ВОЛС Самара — Тольятти',
-            description: 'Пропал оптический канал на магистрали после земляных работ. Трафик ушёл на резервное кольцо, его ёмкости не хватает.',
-            signals: ['DWDM: LOS на линии Самара–Тольятти', 'Резервный канал загружен на 97%'],
-          }),
-          priority: 'P1', status: 'coordinators', region, users: 1_100_000, trend: 'growing', crew: true,
-        });
-        at(6, () => this.spawn({
-          template: custom({
-            system: 'ran', team: 'ran_ops', service: 'Базовые станции LTE', host: 'enb-sam-cluster',
-            title: 'Авария БС: 38 секторов LTE недоступны (Самара)',
-            description: 'Базовые станции потеряли связь с ядром: транспортный канал до площадок недоступен.',
-            signals: ['eNodeB alarm: S1 link down ×38', 'Падение трафика в кластере на 41%'],
-          }),
-          priority: 'P2', status: 'coordinators', region, users: 260_000, trend: 'growing',
-        }));
-        at(13, () => this.spawn({
-          template: custom({
-            system: 'core', team: 'core_net', service: 'EPC / MME', host: 'mme-sam-01',
-            title: 'MME: всплеск Attach Reject в Самаре',
-            description: 'Абоненты массово переподключаются к сети, ядро не справляется с потоком регистраций.',
-            signals: ['Attach Reject ×84 тыс.', 'Нагрузка MME 93%'],
-          }),
-          priority: 'P2', status: 'coordinators', region, users: 400_000, trend: 'growing',
-        }));
-        at(20, () => this.spawn({
-          template: custom({
-            system: 'home', team: 'fixed_net', service: 'GPON-доступ', host: 'olt-sam-114',
-            title: 'OLT olt-sam-114: 3 тыс. абонентов GPON без связи',
-            description: 'Оптический терминал потерял аплинк, абоненты домашнего интернета в нескольких домах без услуги.',
-            signals: ['OLT uplink down', 'ONT offline ×3 тыс.'],
-          }),
-          priority: 'P3', status: 'coordinators', region, users: 3_000,
-        }));
+      case 'field_wave':
+        for (let i = 0; i < 4; i++) at(i * 2, () => this.spawn({ mode: 'offline', priority: i === 0 ? 'P2' : 'P3' }));
         break;
-      }
-      case 'ddos': {
-        const region = 'Москва';
-        this.spawn({
-          template: custom({
-            system: 'lk', team: 'soc', service: 'Авторизация', host: 'waf-edge',
-            title: 'ЛК и «Мой МТС»: аномальный трафик, признаки DDoS',
-            description: 'Резкий рост запросов к форме входа с десятков тысяч адресов. WAF не успевает фильтровать, легитимные входы отваливаются.',
-            signals: ['RPS на /login ×40 к норме', 'WAF: 2,1 млн блокировок за 10 мин'],
-          }),
-          priority: 'P1', status: 'coordinators', region, users: 1_500_000, trend: 'growing',
-        });
-        at(8, () => this.spawn({
-          template: custom({
-            system: 'lk', team: 'platform_sre', service: 'Авторизация', host: 'lk-auth-pods',
-            title: 'Личный кабинет: ошибки 502 у 30% входов',
-            description: 'Поды авторизации и шлюз API не справляются с потоком запросов, легитимные пользователи получают 502.',
-            signals: ['5xx на /login: 30%', 'Pod restarts: 46 за 10 мин'],
-          }),
-          priority: 'P2', status: 'coordinators', region, users: 800_000, trend: 'growing',
-        }));
+      case 'coord_flood':
+        for (let i = 0; i < 6; i++) at(i * 0.7, () => this.spawn({ mode: 'online' }));
         break;
-      }
-      case 'coord_flood': {
-        const pool = TEMPLATES.filter((t) => t.prio[0] !== 'P1');
-        for (let i = 0; i < 6; i++) {
-          at(i * 0.7, () => this.spawn({ template: pick(pool), status: 'coordinators', priority: pick(['P2', 'P3', 'P3', 'P4'] as Priority[]) }));
-        }
-        break;
-      }
     }
   }
 
-  // ─── Сводка ──────────────────────────────────────────────────────────────
+  // ─── сводка ──────────────────────────────────────────────────────────────
 
-  private counts(now: number, synthetic = false) {
+  private counts(now: number) {
     let open = 0;
     let critical = 0;
     let atRisk = 0;
@@ -712,11 +756,7 @@ export class Sim {
       open++;
       if (i.priority <= 'P2') critical++;
       const r = i.slaDeadline - now;
-      if (r > 0 && r <= AT_RISK_MIN * 60_000) atRisk++;
-    }
-    if (synthetic) {
-      const wobble = () => 0.92 + rnd() * 0.12;
-      return { open: Math.round(open * wobble()), critical: Math.round(critical * wobble()), atRisk: Math.max(0, Math.round(atRisk * wobble())) };
+      if (r > 0 && r <= AT_RISK_MIN * MIN) atRisk++;
     }
     return { open, critical, atRisk };
   }
@@ -727,115 +767,15 @@ export class Sim {
     this.createdLog = this.createdLog.filter((t) => t > hour);
     this.resolvedLog = this.resolvedLog.filter((r) => r.at > hour);
     this.breachedLog = this.breachedLog.filter((t) => t > hour);
-    const mttr = this.resolvedLog.length ? this.resolvedLog.reduce((a, r) => a + r.ttr, 0) / this.resolvedLog.length / 60_000 : null;
-    const lastMin = this.createdLog.filter((t) => t > now - 5 * 60_000).length / 5;
+    const mttr = this.resolvedLog.length ? this.resolvedLog.reduce((a, r) => a + r.ttr, 0) / this.resolvedLog.length / MIN : null;
     return {
       resolvedLastHour: this.resolvedLog.length,
       createdLastHour: this.createdLog.length,
       breachedLastHour: this.breachedLog.length,
       mttrMinutes: mttr === null ? null : Math.round(mttr),
-      flowPerMin: Math.round(lastMin) || Math.round(INTENSITY[this.intensity].spawnPerSec * 60),
-      aiAccuracy: this.aiAccuracy,
+      flowPerMin: Math.round(INTENSITY[this.intensity] * 60 * 10) / 10,
+      aiAccuracy: null,
       series: this.series,
     };
   }
-
-  truthOf(id: string): string | undefined {
-    return this.hidden.get(id)?.truthTeam;
-  }
 }
-
-// ─── Вспомогательное ───────────────────────────────────────────────────────
-
-function feedKindForNew(inc: Incident): FeedKind {
-  if (inc.priority === 'P1') return 'p1';
-  if (inc.status === 'coordinators') return 'coordinators';
-  return 'created';
-}
-
-function newIncidentText(inc: Incident): string {
-  if (inc.status === 'coordinators') return 'Автомаршрутизация не уверена — решение за координатором';
-  return `Автомаршрутизация → «${teamById(inc.teamId)?.short ?? '—'}»`;
-}
-
-function makeVars(region: string) {
-  const memo = new Map<string, string>();
-  const region2 = nearestCities(region)[int(0, 2)] ?? pick(REGIONS.filter((r) => r !== region));
-  const gen: Record<string, () => string> = {
-    region: () => region,
-    region2: () => region2,
-    reg: () => REG_CODES[region] ?? 'msk',
-    n: () => String(int(3, 40)),
-    n2: () => pad(int(1, 24), 2),
-    n3: () => pad(int(1, 480), 3),
-    pct: () => String(int(8, 45)),
-    pct2: () => String(int(50, 80)),
-    ms: () => String(int(9, 45) * 100),
-    k: () => String(int(3, 250)),
-    x: () => String(int(3, 12)),
-    s: () => String(int(4, 15)),
-    t: () => String(int(29, 36)),
-    ver: () => `8.${int(2, 9)}.${int(0, 4)}`,
-    cf: () => String(int(91, 97)),
-    hash: () => Math.floor(rnd() * 0xffffff).toString(16).padStart(6, '0'),
-    partner: () => pick(PARTNERS),
-    channel: () => pick(CHANNELS),
-  };
-  const fn = (k: string) => {
-    if (!memo.has(k)) memo.set(k, gen[k] ? gen[k]() : `{${k}}`);
-    return memo.get(k)!;
-  };
-  fn.set = (k: string, v: string) => memo.set(k, v);
-  return fn;
-}
-
-function logUniform(a: number, b: number): number {
-  if (a <= 0 && b <= 0) return 0;
-  const lo = Math.max(1, a);
-  return Math.exp(between(Math.log(lo), Math.log(Math.max(lo + 1, b))));
-}
-
-function roundUsers(n: number): number {
-  if (n <= 0) return 0;
-  if (n < 1000) return Math.round(n / 10) * 10;
-  if (n < 100_000) return Math.round(n / 100) * 100;
-  return Math.round(n / 1000) * 1000;
-}
-
-function pickRegion(): string {
-  const entries = REGIONS.map((r) => [r, CITY[r]?.weight ?? 1] as const);
-  const total = entries.reduce((a, [, w]) => a + w, 0);
-  let x = rnd() * total;
-  for (const [r, w] of entries) {
-    x -= w;
-    if (x <= 0) return r;
-  }
-  return REGIONS[0];
-}
-
-function nearestCities(region: string): string[] {
-  const c = CITY[region];
-  if (!c) return [];
-  return REGIONS.filter((r) => r !== region && CITY[r])
-    .map((r) => [r, Math.hypot(CITY[r].lat - c.lat, (CITY[r].lon - c.lon) * Math.cos((c.lat * Math.PI) / 180))] as const)
-    .sort((a, b) => a[1] - b[1])
-    .map(([r]) => r);
-}
-
-/** Нормальное распределение (Бокс — Мюллер), чтобы точки гуще к центру города. */
-function gauss(): number {
-  const u = Math.max(1e-9, rnd());
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd());
-}
-
-function placeIncident(t: Template, region: string): { lat: number; lon: number } {
-  const c = CITY[region] ?? CITY['Москва'];
-  const site = t.system === 'dc' ? DC_SITES[region] : undefined;
-  if (site) return { lat: site.lat + gauss() * 0.002, lon: site.lon + gauss() * 0.003 };
-  const k = 1 / Math.cos((c.lat * Math.PI) / 180);
-  const s = c.spread * 0.55;
-  const clamp = (x: number) => Math.max(-2.2, Math.min(2.2, x));
-  return { lat: c.lat + clamp(gauss()) * s, lon: c.lon + clamp(gauss()) * s * k };
-}
-
-export { SYSTEMS, TEAMS };

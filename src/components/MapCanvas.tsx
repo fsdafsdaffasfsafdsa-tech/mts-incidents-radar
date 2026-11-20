@@ -3,9 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl, { type GeoJSONSource, type Map as MlMap, type StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Incident } from '../../shared/types';
+import type { Incident, Office } from '../../shared/types';
 import { getState, select, setState, useStore } from '../store';
-import { matches } from '../lib/queue';
 import { fmtSla } from '../lib/format';
 
 const STYLE_URL = {
@@ -25,10 +24,15 @@ const PALETTE = {
   light: { P1: '#e3142d', P2: '#e06a00', P3: '#c79600', P4: '#2f6bed', ok: '#0f9d57', stroke: '#ffffff', crew: '#121722', route: '#6b4cf0', text: '#ffffff', ai: '#6b4cf0' },
 };
 
+// Вся страна: от Калининграда до Владивостока.
 const RUSSIA: [[number, number], [number, number]] = [
-  [28, 43.5],
-  [95, 61.5],
+  [27, 41.5],
+  [134, 63],
 ];
+
+// Что показывает карта: задаёт компонент через пропсы.
+let scopeFilter: (i: Incident) => boolean = () => true;
+let scopeOffices = false;
 
 export const SHEET_W = 460;
 export const PANEL_W = 380;
@@ -51,6 +55,29 @@ function bearing(a: { lat: number; lon: number }, b: { lat: number; lon: number 
     Math.cos((a.lat * Math.PI) / 180) * Math.sin((b.lat * Math.PI) / 180) -
     Math.sin((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.cos(((b.lon - a.lon) * Math.PI) / 180);
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+/** Значок офиса МТС: красный квадрат со скруглением и надписью. */
+function officeIcon(): ImageData {
+  const w = 76;
+  const h = 40;
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = '#e30611';
+  g.beginPath();
+  g.roundRect(2, 2, w - 4, h - 4, 10);
+  g.fill();
+  g.strokeStyle = 'rgba(255,255,255,0.9)';
+  g.lineWidth = 2;
+  g.stroke();
+  g.fillStyle = '#fff';
+  g.font = 'bold 20px Onest Variable, Arial, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('МТС', w / 2, h / 2 + 1);
+  return g.getImageData(0, 0, w, h);
 }
 
 /** Значок бригады — стрелка-навигатор, как машина в такси-приложении. */
@@ -78,13 +105,16 @@ function crewIcon(fill: string, accent: string): ImageData {
   return g.getImageData(0, 0, size, size);
 }
 
-export function MapCanvas() {
+export function MapCanvas({ filter, showOffices = false }: { filter?: (i: Incident) => boolean; showOffices?: boolean } = {}) {
+  scopeFilter = filter ?? (() => true);
+  scopeOffices = showOffices;
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const readyRef = useRef(false);
   const theme = useStore((s) => s.theme);
   const incidents = useStore((s) => s.incidents);
-  const filter = useStore((s) => s.filter);
+  const offices = useStore((s) => s.offices);
+  const workers = useStore((s) => s.workers);
   const attention = useStore((s) => s.attention);
   const selectedId = useStore((s) => s.selectedId);
   const hoverId = useStore((s) => s.hoverId);
@@ -226,7 +256,7 @@ export function MapCanvas() {
     const wait = 1000 - (Date.now() - lastPush.current);
     if (wait <= 0) run();
     else if (pending.current === null) pending.current = window.setTimeout(run, wait);
-  }, [incidents, filter, attention]);
+  }, [incidents, attention, offices, workers]);
   useEffect(() => {
     const map = mapRef.current;
     if (map && readyRef.current) pushFocus(map);
@@ -242,8 +272,8 @@ export function MapCanvas() {
     const wide = map.getContainer().clientWidth > 1000;
     map.easeTo({
       center: [inc.geo.lon, inc.geo.lat],
-      zoom: Math.max(map.getZoom(), inc.region === 'Москва' ? 10.2 : 10.8),
-      padding: wide ? { left: PANEL_W + 30, right: SHEET_W + 30, top: 90, bottom: 30 } : { left: 0, right: 0, top: 0, bottom: 0 },
+      zoom: inc.mode === 'offline' ? Math.max(Math.min(map.getZoom(), 9), 7) : Math.max(map.getZoom(), inc.region === 'Москва' ? 10.2 : 10.8),
+      padding: wide ? { left: 40, right: 40, top: 40, bottom: 40 } : { left: 0, right: 0, top: 0, bottom: 0 },
       duration: 900,
     });
   }, [selectedId]);
@@ -262,7 +292,7 @@ export function fitRussia(map: MlMap, duration = 0) {
   const h = map.getContainer().clientHeight;
   const wide = w > 1000;
   const padding = {
-    left: wide ? PANEL_W + 40 : 16,
+    left: wide ? 40 : 16,
     right: wide ? 40 : 16,
     top: Math.min(100, h * 0.15),
     bottom: Math.min(60, h * 0.1),
@@ -319,6 +349,8 @@ function installLayers(map: MlMap, theme: 'dark' | 'light') {
   map.addSource('routes', { type: 'geojson', data: empty });
   map.addSource('focus', { type: 'geojson', data: empty });
   map.addSource('recent', { type: 'geojson', data: empty });
+  map.addSource('offices', { type: 'geojson', data: empty });
+  if (!map.hasImage('office')) map.addImage('office', officeIcon(), { pixelRatio: 2 });
   if (!map.hasImage('crew')) map.addImage('crew', crewIcon(P.crew, P.ai), { pixelRatio: 2 });
 
   const worst = ['case', ['>', ['get', 'p1'], 0], P.P1, ['>', ['get', 'p2'], 0], P.P2, ['>', ['get', 'p3'], 0], P.P3, P.P4] as any;
@@ -339,6 +371,23 @@ function installLayers(map: MlMap, theme: 'dark' | 'light') {
     paint: { 'line-color': P.route, 'line-width': 3, 'line-opacity': 0.85, 'line-dasharray': [0.1, 2] },
   });
 
+  map.addLayer({
+    id: 'offices',
+    type: 'symbol',
+    source: 'offices',
+    layout: {
+      'icon-image': 'office',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'text-field': ['get', 'label'],
+      'text-font': font,
+      'text-size': 12,
+      'text-offset': [0, 1.6],
+      'text-anchor': 'top',
+      'text-allow-overlap': true,
+    },
+    paint: { 'text-color': P.text, 'text-halo-color': P.stroke, 'text-halo-width': 1.5 },
+  });
   map.addLayer({
     id: 'cluster-halo',
     type: 'circle',
@@ -442,13 +491,11 @@ const lastSig = new WeakMap<MlMap, { pts: string; paths: string }>();
 
 function pushData(map: MlMap) {
   const s = getState();
-  const now = Date.now() + s.offset;
-  const att = new Set(s.attention);
   const features: GeoJSON.Feature[] = [];
   const paths: GeoJSON.Feature[] = [];
   for (const inc of s.incidents.values()) {
     if (inc.status === 'resolved') continue;
-    if (!matches(inc, s.filter, att, now) && inc.id !== s.selectedId) continue;
+    if (!scopeFilter(inc) && inc.id !== s.selectedId) continue;
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [inc.geo.lon, inc.geo.lat] },
@@ -466,6 +513,22 @@ function pushData(map: MlMap) {
   if (!prev || prev.paths !== sig.paths) (map.getSource('paths') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: paths });
   lastSig.set(map, sig);
   pushFocus(map);
+  pushOffices(map, s.offices, s.workers);
+}
+
+function pushOffices(map: MlMap, offices: Office[], workers: { office: string | null; status: string; mode: string }[]) {
+  const features: GeoJSON.Feature[] = scopeOffices
+    ? offices.map((o) => {
+        const here = workers.filter((w) => w.mode === 'offline' && w.office === o.id);
+        const free = here.filter((w) => w.status === 'free').length;
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [o.lon, o.lat] },
+          properties: { label: `${o.city} · свободно ${free} из ${here.length}` },
+        };
+      })
+    : [];
+  (map.getSource('offices') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
 }
 
 function pushFocus(map: MlMap) {

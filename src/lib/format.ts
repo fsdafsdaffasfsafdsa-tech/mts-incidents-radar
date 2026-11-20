@@ -31,6 +31,15 @@ export function fmtSla(ms: number): string {
   return neg ? `−${out}` : out;
 }
 
+/** Длительность коротко: «45 мин», «2 ч 10 м», «3 дн». */
+export function fmtDur(ms: number): string {
+  const m = Math.max(0, Math.round(Math.abs(ms) / 60_000));
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? `${h} ч ${m % 60} м` : `${h} ч`;
+  return `${Math.round(h / 24)} дн`;
+}
+
 export function fmtAgo(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 10) return 'только что';

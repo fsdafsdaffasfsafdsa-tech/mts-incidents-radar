@@ -3,11 +3,11 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import * as z from 'zod/v4';
 import type { AiStatus, Incident, Insight } from '../shared/types.ts';
-import { COORDINATORS_ID, TEAMS, systemById, teamById } from './catalog.ts';
+import { COORDINATORS_GROUP, GROUPS, groupById } from './catalog.ts';
 import { riskLevel } from './ai-heuristic.ts';
 
 const MODEL = process.env.AI_MODEL || 'claude-opus-5-5';
-const TEAM_IDS = TEAMS.filter((t) => t.id !== COORDINATORS_ID).map((t) => t.id) as [string, ...string[]];
+const TEAM_IDS = GROUPS.filter((t) => t.id !== COORDINATORS_GROUP).map((t) => t.id) as [string, ...string[]];
 
 const OutputSchema = z.object({
   summary: z.string().describe('2–3 предложения: что случилось, где, кого затронуло, что сейчас происходит'),
@@ -48,39 +48,37 @@ function getClient(): Anthropic {
 }
 
 function describe(inc: Incident, related: Incident[], now: number) {
-  const sys = systemById(inc.systemId);
   const brief = (i: Incident) => ({
     id: i.id,
-    priority: i.priority,
-    system: systemById(i.systemId).name,
+    priority: i.priorityText,
+    product: i.productName,
+    service: i.service,
     title: i.title,
-    team: teamById(i.teamId)?.name ?? null,
+    group: groupById(i.teamId)?.name ?? null,
     created_minutes_ago: Math.round((now - i.createdAt) / 60_000),
   });
   return {
     incident: {
       id: inc.id,
-      priority: inc.priority,
-      status: inc.status,
-      system: sys.name,
-      system_depends_on: sys.dependsOn.map((d) => systemById(d).name),
+      priority: inc.priorityText,
+      impact: inc.impact,
+      urgency: inc.urgency,
+      status: inc.stateText,
+      work_mode: inc.mode === 'offline' ? 'нужен выезд' : 'удалённо',
+      product: inc.productName,
       service: inc.service,
       component: inc.component,
-      region: inc.region,
+      service_type: inc.serviceType,
+      channel: inc.channel,
       title: inc.title,
       description: inc.description,
-      monitoring_signals: inc.signals,
-      affected_subscribers: inc.affectedUsers,
-      trend: inc.trend,
-      current_team: teamById(inc.teamId)?.name ?? null,
-      assignee: inc.assignee,
-      reassign_count: inc.reassignCount,
+      current_group: groupById(inc.teamId)?.name ?? null,
+      assignee: inc.assigneeName,
       minutes_since_created: Math.round((now - inc.createdAt) / 60_000),
-      minutes_to_sla_breach: Math.round((inc.slaDeadline - now) / 60_000),
-      sla_total_minutes: inc.slaMinutes,
+      minutes_to_deadline: Math.round((inc.slaDeadline - now) / 60_000),
     },
     related_incidents: related.map(brief),
-    teams: TEAMS.filter((t) => t.id !== COORDINATORS_ID).map((t) => ({ id: t.id, name: t.name, profile: t.keywords.slice(0, 8).join(', ') })),
+    teams: GROUPS.filter((t) => t.id !== COORDINATORS_GROUP).map((t) => ({ id: t.id, name: t.name })),
   };
 }
 

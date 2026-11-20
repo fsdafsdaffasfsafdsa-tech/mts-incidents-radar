@@ -12,6 +12,8 @@ export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
 export type Status = 'coordinators' | 'assigned' | 'in_progress' | 'escalated' | 'resolved';
 
 export type Trend = 'growing' | 'stable' | 'declining';
+/** online — решается удалённо, offline — нужен выезд специалиста. */
+export type WorkMode = 'online' | 'offline';
 export type Source = 'monitoring' | 'support' | 'partner' | 'user';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
@@ -42,8 +44,10 @@ export interface HistoryItem {
 export interface AiBrief {
   risk: number; // 0–100
   level: RiskLevel;
-  teamId: string | null; // рекомендованная команда
+  teamId: string | null; // рекомендованная группа
   confidence: number; // 0–1
+  workerId: string | null; // рекомендованный сотрудник
+  workerConfidence: number;
 }
 
 export interface GeoPoint {
@@ -64,6 +68,26 @@ export interface Incident {
   id: string;
   title: string;
   description: string;
+  shortDescription: string;
+  solution: string | null;
+  mode: WorkMode;
+  priorityText: string; // как в данных: Наивысший, Высокий, Средний, Низкий
+  impact: string;
+  urgency: string;
+  stateText: string; // статус как в данных
+  stateReason: string | null;
+  productName: string;
+  serviceType: string; // Клиентский, Пользовательский, Технологический
+  channel: string; // канал регистрации
+  groupName: string;
+  assigneeName: string | null;
+  isMaster: boolean;
+  isDouble: boolean;
+  isEffect: boolean; // причина дочерних
+  isReason: boolean; // дочерний
+  origin: 'dataset' | 'stream';
+  takenAt: number | null; // координатор взял на контроль
+  startedAt: number | null;
   priority: Priority;
   status: Status;
   systemId: string;
@@ -125,6 +149,36 @@ export interface TeamScore {
   reasons: string[];
 }
 
+export interface WorkerScore {
+  workerId: string;
+  confidence: number;
+  reasons: string[];
+}
+
+export type WorkerStatus = 'free' | 'busy' | 'break' | 'enroute' | 'onsite';
+
+/** Сотрудник: онлайн (решает удалённо) или офлайн (выезжает). */
+export interface Worker {
+  id: string; // логин
+  name: string;
+  mode: WorkMode;
+  groups: string[];
+  office: string | null; // для выездных — офис МТС
+  status: WorkerStatus;
+  currentId: string | null;
+  queue: string[]; // личный порядок задач, который сотрудник ставит сам
+  focus: string; // «чем занимаюсь» коротко
+  done: number; // сделано за смену
+  manual: boolean; // кабинетом управляет человек
+}
+
+export interface Office {
+  id: string;
+  city: string;
+  lat: number;
+  lon: number;
+}
+
 export interface RiskFactor {
   label: string;
   weight: number; // вклад в логит, знак = направление
@@ -138,6 +192,7 @@ export interface Insight {
   cause: string | null;
   nextSteps: string[];
   teams: TeamScore[];
+  workers: WorkerScore[];
   risk: {
     score: number;
     level: RiskLevel;
@@ -182,6 +237,8 @@ export interface Snapshot {
   stats: Stats;
   intensity: Intensity;
   ai: AiStatus;
+  workers: Worker[];
+  offices: Office[];
 }
 
 export type ServerMessage =
@@ -193,9 +250,12 @@ export type ServerMessage =
   | { type: 'insight'; data: Insight }
   | { type: 'stats'; data: Stats }
   | { type: 'intensity'; data: Intensity }
-  | { type: 'tick'; data: { serverTime: number } };
+  | { type: 'tick'; data: { serverTime: number } }
+  | { type: 'worker'; data: Worker };
 
-export type ScenarioKind = 'billing_outage' | 'network_cut' | 'coord_flood' | 'ddos';
+export type ScenarioKind = 'mass_outage' | 'field_wave' | 'coord_flood';
 
-export const PRIORITY_SLA_MIN: Record<Priority, number> = { P1: 60, P2: 240, P3: 480, P4: 1440 };
+/** Срок решения по приоритету, как в наборе данных: Высокий 6 ч, Средний 12 ч, Низкий 32 ч. */
+export const PRIORITY_SLA_MIN: Record<Priority, number> = { P1: 120, P2: 360, P3: 720, P4: 1920 };
+export const PRIORITY_TEXT: Record<Priority, string> = { P1: 'Наивысший', P2: 'Высокий', P3: 'Средний', P4: 'Низкий' };
 export const AT_RISK_MIN = 30;

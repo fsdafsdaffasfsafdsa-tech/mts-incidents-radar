@@ -11,6 +11,9 @@ import type {
   Stats,
   SystemInfo,
   TeamInfo,
+  Office,
+  Worker,
+  WorkMode,
 } from '../shared/types';
 import { play, unlockAudio, type Cue } from './lib/sound';
 
@@ -30,6 +33,28 @@ export interface Toast {
 
 export type QueueFilter = 'open' | 'attention' | 'coordinators' | 'critical' | 'risk' | 'breach' | 'resolved';
 export type View = 'map' | 'queue' | 'systems' | 'feed';
+export type Screen = 'online' | 'offline' | 'cabinet';
+/** Папка слева: смена (urgent, coordinators…), система `sys:<id>`, команда `team:<id>` или лента `feed`. */
+export type FolderId = string;
+export type MetricPlacement = 'top' | 'side';
+export interface MetricSlot {
+  id: string;
+  size: 's' | 'l';
+}
+export interface MetricsCfg {
+  placement: MetricPlacement;
+  slots: MetricSlot[];
+}
+export const DEFAULT_METRICS: MetricsCfg = {
+  placement: 'top',
+  slots: [
+    { id: 'open', size: 's' },
+    { id: 'critical', size: 's' },
+    { id: 'risk', size: 's' },
+    { id: 'coord', size: 's' },
+    { id: 'resolvedHour', size: 's' },
+  ],
+};
 
 export interface State {
   connected: boolean;
@@ -49,6 +74,14 @@ export interface State {
   selectedId: string | null;
   hoverId: string | null;
   view: View;
+  screen: Screen;
+  workers: Worker[];
+  offices: Office[];
+  cabinet: { mode: WorkMode; workerId: string | null };
+  folder: FolderId;
+  mode: 'map' | 'list';
+  metrics: MetricsCfg;
+  collapsed: string[];
   filter: QueueFilter;
   systemFilter: string | null;
   search: string;
@@ -91,6 +124,14 @@ let state: State = {
   selectedId: null,
   hoverId: null,
   view: 'map',
+  screen: readPref<Screen>('radar.screen', 'online'),
+  workers: [],
+  offices: [],
+  cabinet: readPref('radar.cabinet', { mode: 'online' as WorkMode, workerId: null as string | null }),
+  folder: 'urgent',
+  mode: readPref<'map' | 'list'>('radar.mode', 'map'),
+  metrics: readPref<MetricsCfg>('radar.metrics', DEFAULT_METRICS),
+  collapsed: readPref<string[]>('radar.collapsed', ['teams']),
   filter: 'open',
   systemFilter: null,
   search: '',
@@ -164,6 +205,8 @@ function handle(msg: ServerMessage) {
         intensity: d.intensity,
         ai: d.ai,
         attention,
+        workers: d.workers ?? [],
+        offices: d.offices ?? [],
       });
       break;
     }
@@ -218,6 +261,12 @@ function handle(msg: ServerMessage) {
     case 'tick':
       setState({ offset: msg.data.serverTime - Date.now() });
       break;
+    case 'worker': {
+      const w = msg.data;
+      const workers = state.workers.some((x) => x.id === w.id) ? state.workers.map((x) => (x.id === w.id ? w : x)) : [...state.workers, w];
+      setState({ workers });
+      break;
+    }
   }
 }
 
@@ -272,7 +321,7 @@ function onFeed(ev: FeedEvent) {
       break;
     case 'coordinators':
       addAttention(ev.incidentId);
-      if (ev.priority <= 'P3') {
+      if (ev.priority <= 'P2') {
         toast({ kind: 'coord', title: `На координаторов · ${ev.priority} · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 8_000 });
         cue('coord');
         notifyBrowser(`Назначен на координаторов · ${sys}`, title);
@@ -341,7 +390,7 @@ async function post(url: string, body: unknown) {
   return data;
 }
 
-export async function act(id: string, type: 'ack' | 'assign' | 'raise' | 'escalate' | 'resolve' | 'link', extra: Record<string, unknown> = {}) {
+export async function act(id: string, type: 'ack' | 'take' | 'assign' | 'raise' | 'escalate' | 'resolve' | 'link', extra: Record<string, unknown> = {}) {
   setState({ attention: state.attention.filter((x) => x !== id) });
   await post(`/api/incidents/${id}/action`, { type, actor: ME, ...extra });
   void loadInsight(id);
@@ -386,8 +435,55 @@ export function toggleTheme() {
   setState({ theme });
 }
 
+export function setScreen(screen: Screen) {
+  writePref('radar.screen', screen);
+  setState({ screen, selectedId: null });
+}
+
+export function setCabinet(cabinet: { mode: WorkMode; workerId: string | null }) {
+  writePref('radar.cabinet', cabinet);
+  setState({ cabinet, selectedId: null });
+  if (cabinet.workerId) void workerAct(cabinet.workerId, { action: 'claim' });
+}
+
+export async function workerAct(workerId: string, body: { action: string; incidentId?: string; status?: string; focus?: string; queue?: string[] }) {
+  return post(`/api/workers/${encodeURIComponent(workerId)}`, body);
+}
+
+export function workerName(id: string | null | undefined) {
+  return state.workers.find((w) => w.id === id)?.name ?? '—';
+}
+
+export function readLocal<T>(key: string, fallback: T): T {
+  return readPref(key, fallback);
+}
+
+export function writeLocal(key: string, v: unknown) {
+  writePref(key, v);
+}
+
 export function setView(view: View) {
   setState({ view });
+}
+
+export function setFolder(folder: FolderId) {
+  setState({ folder, search: '' });
+}
+
+export function setMode(mode: 'map' | 'list') {
+  writePref('radar.mode', mode);
+  setState({ mode });
+}
+
+export function setMetrics(metrics: MetricsCfg) {
+  writePref('radar.metrics', metrics);
+  setState({ metrics });
+}
+
+export function toggleGroup(group: string) {
+  const collapsed = state.collapsed.includes(group) ? state.collapsed.filter((g) => g !== group) : [...state.collapsed, group];
+  writePref('radar.collapsed', collapsed);
+  setState({ collapsed });
 }
 
 export function teamName(id: string | null | undefined, short = true) {

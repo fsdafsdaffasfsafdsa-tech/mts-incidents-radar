@@ -1,17 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Activity, Bell, BellOff, FlaskConical, Keyboard, LayoutGrid, ListOrdered, Map as MapIcon, Moon, Sparkles, Sun, Volume2, VolumeX } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FlaskConical, Monitor, Moon, Sun, Truck, UserRound, Volume2, VolumeX } from 'lucide-react';
 import type { Intensity, ScenarioKind } from '../../shared/types';
-import { ME, runScenario, setIntensity, setView, toggleNotify, toggleSound, toggleTheme, useStore, type View } from '../store';
-
-const NAV: { id: View; label: string; icon: typeof MapIcon }[] = [
-  { id: 'map', label: 'Карта', icon: MapIcon },
-  { id: 'queue', label: 'Очередь', icon: ListOrdered },
-  { id: 'systems', label: 'Системы', icon: LayoutGrid },
-  { id: 'feed', label: 'Лента', icon: Activity },
-];
+import { runScenario, setIntensity, setScreen, toggleSound, toggleTheme, useStore, type Screen } from '../store';
 import { fmtClockSec } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { Avatar } from './bits';
 
 const INTENSITY: { id: Intensity; label: string }[] = [
   { id: 'calm', label: 'Спокойно' },
@@ -19,45 +11,46 @@ const INTENSITY: { id: Intensity; label: string }[] = [
   { id: 'storm', label: 'Шторм' },
 ];
 
-const SCENARIOS: { id: ScenarioKind; title: string; text: string }[] = [
-  { id: 'billing_outage', title: 'Сбой биллинга', text: 'P1 в биллинге и каскад: «Мой МТС», ЛК, платежи, контакт-центр' },
-  { id: 'network_cut', title: 'Обрыв магистрали', text: 'P1 на транспорте в Самаре, следом БС, ядро и ШПД' },
-  { id: 'ddos', title: 'DDoS на личный кабинет', text: 'Система — ЛК, а решать должен SOC: проверка подсказки ИИ' },
-  { id: 'coord_flood', title: 'Наплыв на координаторов', text: '6 новых инцидентов без команды — разбор очереди с ИИ' },
+const SCENARIOS: { id: ScenarioKind; title: string }[] = [
+  { id: 'mass_outage', title: 'Массовый сбой: главный + 3 дубля' },
+  { id: 'field_wave', title: 'Волна выездов в 4 городах' },
+  { id: 'coord_flood', title: '6 новых проблем без сотрудника' },
 ];
 
-export function TopBar({ onHelp }: { onHelp: () => void }) {
+export function TopBar() {
   const connected = useStore((s) => s.connected);
-  const stats = useStore((s) => s.stats);
-  const ai = useStore((s) => s.ai);
   const sound = useStore((s) => s.sound);
-  const notify = useStore((s) => s.notify);
   const theme = useStore((s) => s.theme);
   const intensity = useStore((s) => s.intensity);
-  const view = useStore((s) => s.view);
-  const attentionCount = useStore((s) => s.attention.length);
+  const screen = useStore((s) => s.screen);
+  const incidents = useStore((s) => s.incidents);
   const now = useNow(1000);
   const [demo, setDemo] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
+  const waiting = useMemo(() => {
+    let online = 0;
+    let offline = 0;
+    for (const i of incidents.values()) {
+      if (i.status !== 'coordinators') continue;
+      if (i.mode === 'online') online++;
+      else offline++;
+    }
+    return { online, offline };
+  }, [incidents]);
+
   useEffect(() => {
     if (!demo) return;
-    const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setDemo(false);
-    };
+    const close = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setDemo(false);
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [demo]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest('input, textarea, select')) return;
-      if (e.key === 'd' || e.key === 'в') setDemo((v) => !v);
-      if (e.key === 'Escape') setDemo(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  const tabs: { id: Screen; label: string; icon: typeof Monitor; badge?: number }[] = [
+    { id: 'online', label: 'Онлайн-центр', icon: Monitor, badge: waiting.online },
+    { id: 'offline', label: 'Офлайн-центр', icon: Truck, badge: waiting.offline },
+    { id: 'cabinet', label: 'Кабинет', icon: UserRound },
+  ];
 
   return (
     <header className="topbar">
@@ -70,47 +63,33 @@ export function TopBar({ onHelp }: { onHelp: () => void }) {
           </g>
           <circle cx="16" cy="16" r="2.4" className="core" />
         </svg>
-        <div>
-          <div className="brand-name">Радар</div>
-          <div className="brand-sub">координация IT-инцидентов</div>
-        </div>
+        <div className="brand-name">Радар</div>
       </div>
 
       <nav className="nav" aria-label="Экраны">
-        {NAV.map((n) => (
-          <button key={n.id} className={view === n.id ? 'on' : ''} onClick={() => setView(n.id)} aria-current={view === n.id ? 'page' : undefined}>
-            <n.icon size={16} />
-            <span>{n.label}</span>
-            {n.id === 'queue' && attentionCount > 0 && <span className="nav-badge num">{attentionCount}</span>}
+        {tabs.map((t) => (
+          <button key={t.id} className={screen === t.id ? 'on' : ''} onClick={() => setScreen(t.id)} aria-current={screen === t.id ? 'page' : undefined}>
+            <t.icon size={16} />
+            <span>{t.label}</span>
+            {!!t.badge && <span className="nav-badge num">{t.badge}</span>}
           </button>
         ))}
       </nav>
 
-      <div className={`live ${connected ? 'on' : 'off'}`} title={connected ? 'Поток подключён' : 'Нет связи с сервером, переподключаемся'}>
-        <span className="live-dot" />
-        <span className="live-text">{connected ? 'LIVE' : 'нет связи'}</span>
-        {stats && connected && <span className="live-flow num">{stats.flowPerMin}/мин</span>}
-      </div>
-
-      {ai && (
-        <div className={`ai-badge ai-${ai.mode}`} title={ai.reason}>
-          <Sparkles size={14} />
-          <span>{ai.mode === 'claude' ? `ИИ: Claude` : 'ИИ: эвристика'}</span>
-          {stats?.aiAccuracy != null && <span className="ai-acc num">· точность {Math.round(stats.aiAccuracy * 100)}%</span>}
-        </div>
-      )}
-
       <div className="topbar-spacer" />
 
+      <div className={`live ${connected ? 'on' : 'off'}`} title={connected ? 'Поток подключён' : 'Нет связи'}>
+        <span className="live-dot" />
+        <span className="live-text">{connected ? 'LIVE' : 'нет связи'}</span>
+      </div>
+
       <div className="demo-wrap" ref={ref}>
-        <button className={`tb-btn demo-btn ${demo ? 'active' : ''}`} onClick={() => setDemo((v) => !v)} title="Демо-управление потоком (D)">
+        <button className={`tb-btn ${demo ? 'active' : ''}`} onClick={() => setDemo((v) => !v)} title="Демо">
           <FlaskConical size={16} />
           <span>Демо</span>
-          <span className={`intensity-dot i-${intensity}`} />
         </button>
         {demo && (
-          <div className="popover demo-pop" role="dialog" aria-label="Демо-управление">
-            <div className="pop-label">Интенсивность потока</div>
+          <div className="popover demo-pop">
             <div className="seg">
               {INTENSITY.map((i) => (
                 <button key={i.id} className={intensity === i.id ? 'on' : ''} onClick={() => void setIntensity(i.id)}>
@@ -118,7 +97,6 @@ export function TopBar({ onHelp }: { onHelp: () => void }) {
                 </button>
               ))}
             </div>
-            <div className="pop-label">Сценарии</div>
             {SCENARIOS.map((s) => (
               <button
                 key={s.id}
@@ -129,34 +107,18 @@ export function TopBar({ onHelp }: { onHelp: () => void }) {
                 }}
               >
                 <b>{s.title}</b>
-                <span>{s.text}</span>
               </button>
             ))}
           </div>
         )}
       </div>
-
-      <button className={`tb-icon ${sound ? '' : 'muted'}`} onClick={toggleSound} title={sound ? 'Звук включён (M)' : 'Звук выключен (M)'} aria-label="Звук">
+      <button className={`tb-icon ${sound ? '' : 'muted'}`} onClick={toggleSound} aria-label="Звук">
         {sound ? <Volume2 size={17} /> : <VolumeX size={17} />}
       </button>
-      <button className={`tb-icon ${notify ? '' : 'muted'}`} onClick={() => void toggleNotify()} title="Уведомления браузера, когда вкладка свёрнута" aria-label="Уведомления">
-        {notify ? <Bell size={17} /> : <BellOff size={17} />}
-      </button>
-      <button className="tb-icon" onClick={toggleTheme} title="Светлая / тёмная тема" aria-label="Тема">
+      <button className="tb-icon" onClick={toggleTheme} aria-label="Тема">
         {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
       </button>
-      <button className="tb-icon" onClick={onHelp} title="Горячие клавиши (?)" aria-label="Горячие клавиши">
-        <Keyboard size={17} />
-      </button>
-
       <div className="clock num">{fmtClockSec(now)}</div>
-      <div className="me">
-        <Avatar name={ME} />
-        <div>
-          <div className="me-name">{ME}</div>
-          <div className="me-role">координатор смены</div>
-        </div>
-      </div>
     </header>
   );
 }
