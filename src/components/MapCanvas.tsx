@@ -3,13 +3,14 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl, { type GeoJSONSource, type Map as MlMap, type StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Incident, Office } from '../../shared/types';
+import type { Incident, Office, Worker } from '../../shared/types';
 import { getState, select, setState, useStore } from '../store';
 import { fmtSla } from '../lib/format';
 
 const STYLE_URL = {
   dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-  light: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  // Voyager подробнее Positron: улицы, номера домов и названия посёлков на крупном масштабе.
+  light: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
 };
 
 // Запасной стиль без интернета: точки остаются, пропадает только подложка.
@@ -20,15 +21,16 @@ const offlineStyle = (theme: 'dark' | 'light'): StyleSpecification => ({
 });
 
 const PALETTE = {
-  dark: { P1: '#ff3150', P2: '#ff8a2b', P3: '#e6c247', P4: '#5b8cff', ok: '#2fd27f', stroke: '#0b0f16', crew: '#ffffff', route: '#a78bff', text: '#ffffff', ai: '#a78bff' },
-  light: { P1: '#e3142d', P2: '#e06a00', P3: '#c79600', P4: '#2f6bed', ok: '#0f9d57', stroke: '#ffffff', crew: '#121722', route: '#6b4cf0', text: '#ffffff', ai: '#6b4cf0' },
+  dark: { P1: '#ff3150', P2: '#ff8a2b', P3: '#e6c247', P4: '#5b8cff', ok: '#2fd27f', stroke: '#0b0f16', crew: '#ffffff', route: '#a78bff', text: '#ffffff', ai: '#a78bff', label: '#e8ecf3', idle: '#8a93a6' },
+  light: { P1: '#e3142d', P2: '#e06a00', P3: '#c79600', P4: '#2f6bed', ok: '#0f9d57', stroke: '#ffffff', crew: '#121722', route: '#6b4cf0', text: '#ffffff', ai: '#6b4cf0', label: '#1d2433', idle: '#7a8396' },
 };
 
-// Вся страна: от Калининграда до Владивостока.
-const RUSSIA: [[number, number], [number, number]] = [
-  [27, 41.5],
-  [134, 63],
+// Южный федеральный округ: Ростовская, Волгоградская, Астраханская области, Краснодарский край, Адыгея, Калмыкия.
+const REGION_DEFAULT: [[number, number], [number, number]] = [
+  [36.2, 42.9],
+  [49.6, 51.4],
 ];
+const region = () => getState().config?.bounds ?? REGION_DEFAULT;
 
 // Что показывает карта: задаёт компонент через пропсы.
 let scopeFilter: (i: Incident) => boolean = () => true;
@@ -126,13 +128,18 @@ export function MapCanvas({ filter, showOffices = false }: { filter?: (i: Incide
     const map = new maplibregl.Map({
       container: el.current,
       style: STYLE_URL[getState().theme],
-      center: [56, 56],
-      zoom: 3.4,
+      center: [42.6, 47.1],
+      zoom: 5.6,
       attributionControl: { compact: true },
       dragRotate: false,
       pitchWithRotate: false,
-      maxZoom: 15,
-      minZoom: 2.5,
+      maxZoom: 17,
+      minZoom: 4.6,
+      // Дальше ЮФО не уводим: запас в пару градусов, чтобы край не прилипал к рамке.
+      maxBounds: [
+        [region()[0][0] - 4, region()[0][1] - 2.5],
+        [region()[1][0] + 4, region()[1][1] + 2.5],
+      ],
     });
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
@@ -270,9 +277,35 @@ export function MapCanvas({ filter, showOffices = false }: { filter?: (i: Incide
     const inc = getState().incidents.get(selectedId);
     if (!inc) return;
     const wide = map.getContainer().clientWidth > 1000;
+    // Выезд: как в такси — в кадре точка и ближайшие выездные, чтобы сразу видеть, кто рядом.
+    if (inc.mode === 'offline' && inc.status !== 'resolved') {
+      const R = 6371;
+      const rad = (d: number) => (d * Math.PI) / 180;
+      const dist = (a: { lat: number; lon: number }) =>
+        2 * R * Math.asin(Math.sqrt(Math.sin(rad(a.lat - inc.geo.lat) / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(inc.geo.lat)) * Math.sin(rad(a.lon - inc.geo.lon) / 2) ** 2));
+      const near = getState()
+        .workers.filter((w) => w.mode === 'offline' && w.status !== 'break' && w.lat !== null && w.lon !== null)
+        .map((w) => ({ lat: w.lat!, lon: w.lon!, d: dist({ lat: w.lat!, lon: w.lon! }) }))
+        .filter((p) => p.d < 250)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 2);
+      if (near.length) {
+        const lons = [inc.geo.lon, ...near.map((p) => p.lon)];
+        const lats = [inc.geo.lat, ...near.map((p) => p.lat)];
+        map.fitBounds(
+          [
+            [Math.min(...lons), Math.min(...lats)],
+            [Math.max(...lons), Math.max(...lats)],
+          ],
+          { padding: 70, maxZoom: 13, duration: 900 },
+        );
+        return;
+      }
+    }
     map.easeTo({
       center: [inc.geo.lon, inc.geo.lat],
-      zoom: inc.mode === 'offline' ? Math.max(Math.min(map.getZoom(), 9), 7) : Math.max(map.getZoom(), inc.region === 'Москва' ? 10.2 : 10.8),
+      // Ближе к площадке: видно улицы вокруг точки.
+      zoom: Math.min(13.5, Math.max(map.getZoom(), 11.5)),
       padding: wide ? { left: 40, right: 40, top: 40, bottom: 40 } : { left: 0, right: 0, top: 0, bottom: 0 },
       duration: 900,
     });
@@ -286,7 +319,7 @@ export function MapCanvas({ filter, showOffices = false }: { filter?: (i: Incide
   );
 }
 
-/** Вся страна в кадре; слева место под панель «Требуют решения», если экран широкий. */
+/** Весь ЮФО в кадре. */
 export function fitRussia(map: MlMap, duration = 0) {
   const w = map.getContainer().clientWidth;
   const h = map.getContainer().clientHeight;
@@ -298,7 +331,7 @@ export function fitRussia(map: MlMap, duration = 0) {
     bottom: Math.min(60, h * 0.1),
   };
   if (w - padding.left - padding.right < 200 || h - padding.top - padding.bottom < 150) return;
-  map.fitBounds(RUSSIA, { padding, duration });
+  map.fitBounds(region(), { padding, duration });
 }
 
 // ─── слои ──────────────────────────────────────────────────────────────────
@@ -350,6 +383,7 @@ function installLayers(map: MlMap, theme: 'dark' | 'light') {
   map.addSource('focus', { type: 'geojson', data: empty });
   map.addSource('recent', { type: 'geojson', data: empty });
   map.addSource('offices', { type: 'geojson', data: empty });
+  map.addSource('staff', { type: 'geojson', data: empty });
   if (!map.hasImage('office')) map.addImage('office', officeIcon(), { pixelRatio: 2 });
   if (!map.hasImage('crew')) map.addImage('crew', crewIcon(P.crew, P.ai), { pixelRatio: 2 });
 
@@ -386,7 +420,34 @@ function installLayers(map: MlMap, theme: 'dark' | 'light') {
       'text-anchor': 'top',
       'text-allow-overlap': true,
     },
-    paint: { 'text-color': P.text, 'text-halo-color': P.stroke, 'text-halo-width': 1.5 },
+    paint: { 'text-color': P.label, 'text-halo-color': P.stroke, 'text-halo-width': 1.5 },
+  });
+  // Выездные сотрудники там, где они сейчас (в пути — отдельной иконкой с маршрутом).
+  map.addLayer({
+    id: 'staff',
+    type: 'circle',
+    source: 'staff',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 5, 10, 8],
+      'circle-color': ['match', ['get', 'status'], 'free', P.ok, 'onsite', P.ai, P.idle],
+      'circle-stroke-color': P.stroke,
+      'circle-stroke-width': 2,
+    },
+  });
+  map.addLayer({
+    id: 'staff-label',
+    type: 'symbol',
+    source: 'staff',
+    minzoom: 6.5,
+    layout: {
+      'text-field': ['get', 'name'],
+      'text-font': font,
+      'text-size': 11,
+      'text-offset': [0, 1.1],
+      'text-anchor': 'top',
+      'text-optional': true,
+    },
+    paint: { 'text-color': P.label, 'text-halo-color': P.stroke, 'text-halo-width': 1.6 },
   });
   map.addLayer({
     id: 'cluster-halo',
@@ -516,7 +577,17 @@ function pushData(map: MlMap) {
   pushOffices(map, s.offices, s.workers);
 }
 
-function pushOffices(map: MlMap, offices: Office[], workers: { office: string | null; status: string; mode: string }[]) {
+function pushOffices(map: MlMap, offices: Office[], workers: Worker[]) {
+  const staff: GeoJSON.Feature[] = scopeOffices
+    ? workers
+        .filter((w) => w.mode === 'offline' && w.status !== 'enroute' && w.lat !== null && w.lon !== null)
+        .map((w) => ({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [w.lon!, w.lat!] },
+          properties: { id: w.id, status: w.status, name: w.name.split(' ')[0] },
+        }))
+    : [];
+  (map.getSource('staff') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: staff });
   const features: GeoJSON.Feature[] = scopeOffices
     ? offices.map((o) => {
         const here = workers.filter((w) => w.mode === 'offline' && w.office === o.id);

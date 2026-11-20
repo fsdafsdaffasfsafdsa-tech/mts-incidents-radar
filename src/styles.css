@@ -4091,3 +4091,870 @@ kbd {
     display: none;
   }
 }
+
+/* ═══ Вход, роли, ИИ-подбор, ЮФО ══════════════════════════════════════════ */
+
+.boot.full {
+  position: fixed;
+  inset: 0;
+}
+
+/* ── вход ── */
+.login {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+}
+.login-card {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.login-brand .brand-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--p1, #ff3150);
+  color: #fff;
+}
+.login-brand div {
+  display: grid;
+  line-height: 1.2;
+}
+.login-brand b {
+  font-size: 18px;
+}
+.login-brand .muted {
+  font-size: 12.5px;
+}
+.role-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.role-tile {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.role-tile b {
+  color: var(--text);
+  font-size: 13.5px;
+}
+.role-tile span {
+  font-size: 11.5px;
+}
+.role-tile.on {
+  border-color: var(--ai);
+  background: color-mix(in srgb, var(--ai) 12%, var(--panel-2));
+  color: var(--ai);
+}
+.login-search {
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+.who-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+.who-list.short {
+  max-height: none;
+}
+.who-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.who-item > span {
+  display: grid;
+  line-height: 1.2;
+  min-width: 0;
+}
+.who-item b {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.who-item .muted {
+  font-size: 11px;
+}
+.who-item.on {
+  border-color: var(--ai);
+  background: color-mix(in srgb, var(--ai) 10%, var(--panel-2));
+}
+.login-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.login-field input {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+.login-field input:focus,
+.login-search:focus {
+  outline: none;
+  border-color: var(--ai);
+}
+.login-error {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--p1, #ff3150) 14%, transparent);
+  color: var(--p1, #ff3150);
+  font-size: 13px;
+}
+.login-go {
+  height: 46px;
+  justify-content: center;
+  font-size: 15px;
+}
+
+/* ── шапка: роль, источник, пользователь ── */
+.nav-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.src-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.src-chip.bad {
+  border-color: var(--p1, #ff3150);
+  color: var(--p1, #ff3150);
+}
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  margin-left: 4px;
+  border-left: 1px solid var(--line);
+}
+.user-name {
+  max-width: 160px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── список: вкладки, группы ТЗ ── */
+.pl-head .btn-ai {
+  margin-left: auto;
+}
+.pl-tabs {
+  margin: 0 12px 8px;
+  display: flex;
+}
+.pl-tabs button {
+  flex: 1;
+}
+.tz-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.tz-chip {
+  --tone: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tz-chip .num {
+  color: var(--tone);
+}
+.tz-crit {
+  --tone: var(--p1, #ff3150);
+}
+.tz-coord {
+  --tone: var(--coord);
+}
+.tz-high {
+  --tone: var(--p2, #ff8a2b);
+}
+.tz-research {
+  --tone: var(--ai);
+}
+.tz-chip.on {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  color: var(--text);
+}
+.tz-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.pr-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ai) 16%, transparent);
+  color: var(--ai);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.pr-tag.ok {
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+.pr-wait {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px dashed var(--coord);
+  color: var(--coord);
+}
+.pd-sp {
+  flex: 1;
+}
+.pd-short {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* ── ИИ-подбор: рейтинг сотрудников ── */
+.right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+.rp-tabs {
+  display: flex;
+  margin: 0;
+}
+.rp-tabs button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.rp-tabs button:disabled {
+  opacity: 0.45;
+}
+.rp-for {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rp-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-note {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.rk {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.rk.best {
+  border-color: color-mix(in srgb, var(--ai) 60%, var(--line));
+  background: color-mix(in srgb, var(--ai) 8%, var(--panel-2));
+}
+.rk.mine {
+  border-color: color-mix(in srgb, var(--ok) 60%, var(--line));
+}
+.rk.blocked {
+  opacity: 0.55;
+}
+.rk-main {
+  display: grid;
+  grid-template-columns: 18px 30px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.rk-n {
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: center;
+}
+.rk-who {
+  display: grid;
+  line-height: 1.25;
+  min-width: 0;
+}
+.rk-who b {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rk-why {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.rk-score {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+.rk-score .num {
+  font-size: 16px;
+  font-weight: 700;
+}
+.rk.best .rk-score .num {
+  color: var(--ai);
+}
+.rk-bar {
+  width: 60px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+.rk-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--ai);
+}
+.rk-act {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 10px 8px;
+}
+.rk-eta {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.rk-mine {
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 700;
+}
+.rk-parts {
+  display: grid;
+  gap: 4px;
+  padding: 2px 12px 10px 46px;
+}
+.rp {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.rp .num {
+  text-align: right;
+}
+.rp-bar {
+  height: 5px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+.rp-bar i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}
+.rp-bar i.neg {
+  background: var(--p1, #ff3150);
+}
+
+/* ── офлайн: три колонки ── */
+.c-offline {
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(320px, 380px);
+}
+.staff .pl-head .muted {
+  margin-left: auto;
+  font-size: 12px;
+}
+.staff .pl-rows {
+  padding: 8px;
+}
+.st-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.st-row:hover {
+  background: var(--panel-2);
+}
+.st-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.st-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.st-name b {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st-place {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.st-task {
+  color: var(--text-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st-side {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-size: 11px;
+}
+.st-q {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--coord) 16%, transparent);
+  color: var(--coord);
+  font-weight: 700;
+}
+.st-row.ws-break {
+  opacity: 0.6;
+}
+.dispatch .pl-head {
+  gap: 8px;
+}
+.dispatch .ai-ico {
+  color: var(--ai);
+  margin-left: auto;
+}
+.dp-for {
+  display: grid;
+  gap: 2px;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.dp-for b {
+  font-size: 14px;
+}
+.dp-for .muted {
+  font-size: 12px;
+}
+.prow-exp .pe-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pe-close {
+  margin-left: auto;
+}
+.pe-city {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+.pe-desc {
+  margin: 6px 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.pe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ── распределение пачкой ── */
+.modal.plan {
+  width: min(680px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  max-height: 85vh;
+}
+.modal.plan > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ai);
+}
+.modal.plan h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+.modal.plan > header .icon-btn {
+  margin-left: auto;
+}
+.plan-sub {
+  margin: 0;
+  font-size: 12.5px;
+}
+.plan-rows {
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+}
+.plan-row {
+  display: grid;
+  grid-template-columns: 18px 12px minmax(0, 1fr) 16px minmax(0, 200px);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.plan-row.off {
+  opacity: 0.45;
+}
+.plan-inc,
+.plan-w > span {
+  display: grid;
+  line-height: 1.25;
+  min-width: 0;
+}
+.plan-inc b,
+.plan-w b {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-inc .muted,
+.plan-w .muted {
+  font-size: 11.5px;
+}
+.plan-w {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.plan-arrow {
+  color: var(--ai);
+  font-weight: 700;
+}
+.modal.plan footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── кабинет ── */
+.cabinet .mebar {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.cabinet .me-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cabinet .me-id .muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.cab-tabs {
+  display: flex;
+  margin: 12px 12px 8px;
+}
+.cab-tabs button {
+  flex: 1;
+}
+.link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--ai);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.task-where {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+.task-where > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.task-where b {
+  font-size: 15px;
+}
+.task-where .muted {
+  font-size: 12.5px;
+}
+.task-desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+.task-actions .btn {
+  min-height: 42px;
+  padding: 0 18px;
+  font-size: 14px;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+
+@media (max-width: 1360px) {
+  .c-offline {
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(300px, 340px);
+  }
+  /* ИИ-подбор справа нужен и на ноутбуке: сужаем колонки, но не прячем. */
+  .c-online {
+    grid-template-columns: minmax(270px, 310px) minmax(0, 1fr) minmax(280px, 320px);
+  }
+  .c-online .cmetrics.right {
+    display: flex;
+  }
+}
+@media (max-width: 1100px) {
+  .c-offline {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+  }
+  .c-offline .staff {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-height: 40vh;
+  }
+}
+
+/* ── телефон: кабинет выездного и вход ── */
+@media (max-width: 860px) {
+  .role-tiles {
+    grid-template-columns: 1fr;
+  }
+  .role-tile {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    column-gap: 10px;
+  }
+  .role-tile svg {
+    grid-row: span 2;
+  }
+  .who-list {
+    grid-template-columns: 1fr;
+  }
+  .user-name,
+  .src-chip span,
+  .nav-me span {
+    display: none;
+  }
+  .c-offline .staff,
+  .c-online .right {
+    display: flex;
+    max-height: none;
+  }
+  .cab-grid {
+    display: flex;
+    flex-direction: column;
+  }
+  .cab-grid .task {
+    order: -1;
+    padding-bottom: 88px;
+  }
+  .cabinet .task-actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    margin: 0;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.18);
+  }
+  .cabinet .task-actions .btn {
+    flex: 1;
+    min-height: 50px;
+    justify-content: center;
+    font-size: 15px;
+  }
+  .cabinet .task-actions .btn-ghost {
+    flex: 0 0 auto;
+  }
+  .focus-in {
+    font-size: 16px;
+  }
+  .plan-row {
+    grid-template-columns: 18px 12px minmax(0, 1fr);
+  }
+  .plan-arrow {
+    display: none;
+  }
+  .plan-w {
+    grid-column: 3;
+  }
+}
+.rk-far {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-2);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rk-far:hover {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+@media (max-width: 860px) {
+  .cabinet .tiles3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .cabinet .tile {
+    padding: 10px;
+  }
+  .cabinet .tile .t-val {
+    font-size: 17px;
+  }
+  .cabinet .tile .t-lbl {
+    font-size: 10px;
+  }
+}
+.st-name .wstat,
+.rk-who .wstat {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}

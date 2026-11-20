@@ -1,0 +1,5 @@
+# База и рабочая копия выгрузки создаются при запуске
+data/radar.db
+data/radar.db-*
+data/incidents.json
+dist/

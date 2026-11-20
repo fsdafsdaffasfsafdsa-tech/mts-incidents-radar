@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FlaskConical, Monitor, Moon, Sun, Truck, UserRound, Volume2, VolumeX } from 'lucide-react';
+import { FileJson, FlaskConical, LogOut, Monitor, Moon, Sun, Truck, Volume2, VolumeX } from 'lucide-react';
 import type { Intensity, ScenarioKind } from '../../shared/types';
-import { runScenario, setIntensity, setScreen, toggleSound, toggleTheme, useStore, type Screen } from '../store';
+import { doLogout, runScenario, setIntensity, setScreen, toggleSound, toggleTheme, useStore, type Screen } from '../store';
+import { Initials } from './ui';
 import { fmtClockSec } from '../lib/format';
 import { useNow } from '../lib/hooks';
 
@@ -24,7 +25,10 @@ export function TopBar() {
   const intensity = useStore((s) => s.intensity);
   const screen = useStore((s) => s.screen);
   const incidents = useStore((s) => s.incidents);
+  const me = useStore((s) => s.me);
+  const source = useStore((s) => s.config?.source ?? '');
   const now = useNow(1000);
+  const coord = me?.role === 'coordinator';
   const [demo, setDemo] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -49,7 +53,6 @@ export function TopBar() {
   const tabs: { id: Screen; label: string; icon: typeof Monitor; badge?: number }[] = [
     { id: 'online', label: 'Онлайн-центр', icon: Monitor, badge: waiting.online },
     { id: 'offline', label: 'Офлайн-центр', icon: Truck, badge: waiting.offline },
-    { id: 'cabinet', label: 'Кабинет', icon: UserRound },
   ];
 
   return (
@@ -67,7 +70,13 @@ export function TopBar() {
       </div>
 
       <nav className="nav" aria-label="Экраны">
-        {tabs.map((t) => (
+        {!coord && (
+          <span className="nav-me">
+            {me?.role === 'offline' ? <Truck size={16} /> : <Monitor size={16} />}
+            <span>{me?.role === 'offline' ? 'Выездной сотрудник' : 'Онлайн-сотрудник'}</span>
+          </span>
+        )}
+        {coord && tabs.map((t) => (
           <button key={t.id} className={screen === t.id ? 'on' : ''} onClick={() => setScreen(t.id)} aria-current={screen === t.id ? 'page' : undefined}>
             <t.icon size={16} />
             <span>{t.label}</span>
@@ -78,12 +87,18 @@ export function TopBar() {
 
       <div className="topbar-spacer" />
 
+      {coord && (
+        <span className={`src-chip ${source.startsWith('ошибка') ? 'bad' : ''}`} title={`Выгрузка ITSM: ${source}. Правка файла сразу видна на экране.`}>
+          <FileJson size={14} />
+          <span>{source.startsWith('ошибка') ? 'ошибка выгрузки' : 'ITSM'}</span>
+        </span>
+      )}
       <div className={`live ${connected ? 'on' : 'off'}`} title={connected ? 'Поток подключён' : 'Нет связи'}>
         <span className="live-dot" />
         <span className="live-text">{connected ? 'LIVE' : 'нет связи'}</span>
       </div>
 
-      <div className="demo-wrap" ref={ref}>
+      {coord && <div className="demo-wrap" ref={ref}>
         <button className={`tb-btn ${demo ? 'active' : ''}`} onClick={() => setDemo((v) => !v)} title="Демо">
           <FlaskConical size={16} />
           <span>Демо</span>
@@ -111,7 +126,7 @@ export function TopBar() {
             ))}
           </div>
         )}
-      </div>
+      </div>}
       <button className={`tb-icon ${sound ? '' : 'muted'}`} onClick={toggleSound} aria-label="Звук">
         {sound ? <Volume2 size={17} /> : <VolumeX size={17} />}
       </button>
@@ -119,6 +134,15 @@ export function TopBar() {
         {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
       </button>
       <div className="clock num">{fmtClockSec(now)}</div>
+      {me && (
+        <div className="user-chip" title={`${me.name} · ${me.login}`}>
+          <Initials name={me.name} />
+          <span className="user-name">{me.name}</span>
+          <button className="tb-icon" onClick={() => void doLogout()} aria-label="Выйти" title="Выйти">
+            <LogOut size={16} />
+          </button>
+        </div>
+      )}
     </header>
   );
 }

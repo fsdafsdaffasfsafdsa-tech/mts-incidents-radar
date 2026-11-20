@@ -1,6 +1,6 @@
 // Эвристический ИИ на наборе данных: кому назначить, риск, связанные инциденты, короткое резюме.
 // Работает всегда, без ключей и сети.
-import type { AiBrief, Incident, Insight, Priority, RiskFactor, RiskLevel, TeamScore, Worker, WorkerScore } from '../shared/types.ts';
+import type { AiBrief, Incident, Insight, PlanItem, Priority, RiskFactor, RiskLevel, TeamScore, Worker, WorkerScore } from '../shared/types.ts';
 import { distanceKm, experience, groupById, groupForService, officeById } from './catalog.ts';
 
 export interface AiContext {
@@ -22,52 +22,188 @@ const PRIO_RANK: Record<Priority, number> = { P1: 1, P2: 2, P3: 3, P4: 4 };
 const MIN = 60_000;
 
 // ─── кому назначить ────────────────────────────────────────────────────────
+// Три слоя, как в docs/models-proposal.md: жёсткие фильтры → прозрачный скоринг → распределение пачкой.
 
-export function recommendWorkers(inc: Incident, ctx: AiContext): WorkerScore[] {
-  const pool = ctx.workers.filter((w) => w.mode === inc.mode && w.status !== 'break');
+const ROAD = 1.3; // извилистость дорог относительно прямой
+const SPEED_KMH = 55; // средняя скорость выездной бригады по ЮФО
+const SHIFT_LIMIT_H = 11.5; // после этого на новый выезд не ставим
+
+export function workerPos(w: Worker, ctx: AiContext): { lat: number; lon: number } | null {
+  const cur = w.currentId ? ctx.incidents.get(w.currentId) : undefined;
+  if (cur?.crew && !cur.crew.arrived) {
+    const k = Math.min(1, Math.max(0, (ctx.now - cur.crew.dispatchedAt) / cur.crew.etaMs));
+    return { lat: cur.crew.from.lat + (cur.geo.lat - cur.crew.from.lat) * k, lon: cur.crew.from.lon + (cur.geo.lon - cur.crew.from.lon) * k };
+  }
+  if (w.lat !== null && w.lon !== null) return { lat: w.lat, lon: w.lon };
+  const office = officeById(w.office);
+  return office ? { lat: office.lat, lon: office.lon } : null;
+}
+
+export const etaMinutes = (km: number) => Math.round(((km * ROAD) / SPEED_KMH) * 60);
+
+/** Похожие задачи: из выгрузки и решённые за смену. */
+function similarDone(w: Worker, inc: Incident, ctx: AiContext) {
+  const exp = experience(w.id, inc.productName, inc.service);
+  let live = 0;
+  for (const o of ctx.incidents.values()) if (o.assignee === w.id && o.status === 'resolved' && o.service === inc.service && o.origin === 'stream') live++;
+  return { service: exp.sameService + live, product: exp.sameProduct };
+}
+
+export function rankWorkers(inc: Incident, ctx: AiContext, limit = 6): WorkerScore[] {
+  const pool = ctx.workers.filter((w) => w.mode === inc.mode);
   if (!pool.length) return [];
+  // Координаторы — диспетчерская группа, а не навык: её не засчитываем.
+  const g0 = groupForService(inc.productName, inc.service);
+  const group = g0 && !/координатор/i.test(groupById(g0)?.name ?? '') ? g0 : null;
   const scored = pool.map((w) => {
-    let s = 0;
+    const parts: { label: string; points: number }[] = [];
     const reasons: string[] = [];
-    const exp = experience(w.id, inc.productName, inc.service);
-    if (exp.sameService) {
-      s += 1.4 * Math.min(3, exp.sameService);
-      reasons.push(`решал «${inc.service}»: ${exp.sameService}`);
-    } else if (exp.sameProduct) {
-      s += 0.6 * Math.min(3, exp.sameProduct);
-      reasons.push(`знает продукт: ${exp.sameProduct}`);
-    }
-    const g = groupForService(inc.productName, inc.service);
-    if (g && w.groups.includes(g)) {
-      s += 0.8;
-      reasons.push(`группа ${groupById(g)?.short ?? ''}`);
-    }
-    const active = ctx.load.get(w.id) ?? 0;
-    if (active === 0 && w.status === 'free') {
-      s += 0.8;
+    const add = (label: string, points: number) => parts.push({ label, points: Math.round(points) });
+    const hours = Math.max(0, (ctx.now - w.shiftStart) / 3_600_000);
+    let blocked: string | null = null;
+    if (w.status === 'break') blocked = 'на перерыве';
+    else if (hours >= SHIFT_LIMIT_H) blocked = 'смена кончается';
+
+    // Опыт со сглаживанием: 1 из 1 не обгоняет того, кто закрыл 9 похожих.
+    const sim = similarDone(w, inc, ctx);
+    const expW = inc.mode === 'offline' ? 25 : 40;
+    const xp = sim.service + 0.35 * sim.product;
+    add('Опыт', (expW * xp) / (xp + 2));
+    if (sim.service) reasons.push(`${sim.service} похожих закрыл`);
+    else if (sim.product) reasons.push('знает продукт');
+
+    // Навык: группа, которая решает этот сервис.
+    const skillW = inc.mode === 'offline' ? 15 : 20;
+    if (group && w.groups.includes(group)) {
+      add('Навык', skillW);
+      reasons.push('профильная группа');
+    } else add('Навык', 0);
+
+    // Занятость.
+    const active = (ctx.load.get(w.id) ?? 0) - (inc.assignee === w.id ? 1 : 0);
+    const loadW = inc.mode === 'offline' ? 20 : 30;
+    if (active <= 0 && (w.status === 'free' || inc.assignee === w.id)) {
+      add('Занятость', loadW);
       reasons.push('свободен');
     } else {
-      s -= 0.7 * active;
-      reasons.push(`в работе: ${active}`);
+      add('Занятость', Math.max(-10, loadW * 0.75 - 7 * active));
+      reasons.push(active > 0 ? `задач: ${active}` : 'занят');
     }
+
+    // Дорога (выезд): время в пути от того места, где сотрудник сейчас.
+    let km: number | null = null;
+    let etaMin: number | null = null;
     if (inc.mode === 'offline') {
-      const office = officeById(w.office);
-      if (office) {
-        const km = Math.round(distanceKm(office, inc.geo));
-        s -= Math.min(3, km / 250);
-        reasons.push(`до места ${km} км`);
+      const pos = workerPos(w, ctx);
+      if (pos) {
+        km = Math.round(distanceKm(pos, inc.geo));
+        etaMin = etaMinutes(km);
+        // Дальше двух часов — штраф растёт: на выезд не отправляем через полрегиона, если есть кто-то рядом.
+        add('Дорога', 40 * (1 - Math.min(etaMin, 240) / 240) - Math.max(0, etaMin - 120) / 12);
+        reasons.unshift(etaMin < 60 ? `${etaMin} мин езды` : `${Math.floor(etaMin / 60)} ч ${etaMin % 60} мин езды`);
       }
     }
-    return { workerId: w.id, s, reasons };
+
+    // Усталость: после 6 часов смены балл снижается.
+    const tired = Math.max(0, hours - 6) * 3 + (inc.mode === 'offline' ? Math.max(0, w.trips - 3) * 2 : 0);
+    add('Усталость', -tired);
+    reasons.push(`${Math.floor(hours)} ч на смене`);
+
+    const score = Math.max(0, Math.min(100, parts.reduce((a, p) => a + p.points, 0)));
+    return { workerId: w.id, score: Math.round(score), parts, reasons: reasons.slice(0, 4), km, etaMin, blocked };
   });
-  const T = 0.8;
-  const max = Math.max(...scored.map((x) => x.s));
-  const exps = scored.map((x) => Math.exp((x.s - max) / T));
-  const sum = exps.reduce((a, b) => a + b, 0);
+  const ok = scored.filter((x) => !x.blocked);
+  const max = Math.max(0, ...ok.map((x) => x.score));
+  const exps = new Map(ok.map((x) => [x.workerId, Math.exp((x.score - max) / 10)]));
+  const sum = [...exps.values()].reduce((a, b) => a + b, 0) || 1;
   return scored
-    .map((x, i) => ({ workerId: x.workerId, confidence: exps[i] / sum, reasons: x.reasons }))
-    .sort((a, b) => b.confidence - a.confidence)
+    .map((x) => ({ ...x, confidence: x.blocked ? 0 : (exps.get(x.workerId) ?? 0) / sum }))
+    .sort((a, b) => Number(!!a.blocked) - Number(!!b.blocked) || b.score - a.score)
+    .slice(0, limit);
+}
+
+/** Лучшие допущенные кандидаты (для автоназначения и подсказки в строке). */
+export function recommendWorkers(inc: Incident, ctx: AiContext): WorkerScore[] {
+  return rankWorkers(inc, ctx, 99)
+    .filter((x) => !x.blocked)
     .slice(0, 3);
+}
+
+/**
+ * Распределение пачкой: каждому сотруднику — не больше одной новой задачи, сумма баллов максимальна.
+ * Венгерский алгоритм на матрице «инцидент × сотрудник».
+ */
+export function planBatch(incs: Incident[], ctx: AiContext): PlanItem[] {
+  const PRIO = { P1: 0, P2: 1, P3: 2, P4: 3 } as const;
+  const todo = [...incs].sort((a, b) => PRIO[a.priority] - PRIO[b.priority] || a.slaDeadline - b.slaDeadline);
+  if (!todo.length) return [];
+  const mode = todo[0].mode;
+  const people = ctx.workers.filter((w) => w.mode === mode);
+  const rows = todo.slice(0, people.length);
+  if (!rows.length) return [];
+  const scores = rows.map((inc) => {
+    const r = new Map(rankWorkers(inc, ctx, 99).map((x) => [x.workerId, x]));
+    return people.map((w) => r.get(w.id));
+  });
+  const BIG = 1e6;
+  const cost = scores.map((row) => row.map((x) => (!x || x.blocked ? BIG : 100 - x.score)));
+  const match = hungarian(cost);
+  const out: PlanItem[] = [];
+  match.forEach((j, i) => {
+    const x = j >= 0 ? scores[i][j] : undefined;
+    if (x && !x.blocked) out.push({ incidentId: rows[i].id, workerId: people[j].id, score: x.score, etaMin: x.etaMin });
+  });
+  return out;
+}
+
+/** Венгерский алгоритм (строк ≤ столбцов): для каждой строки — столбец, минимизирующий общую стоимость. */
+export function hungarian(a: number[][]): number[] {
+  const n = a.length;
+  const m = a[0]?.length ?? 0;
+  if (!n || !m || n > m) return a.map(() => -1);
+  const u = new Array<number>(n + 1).fill(0);
+  const v = new Array<number>(m + 1).fill(0);
+  const p = new Array<number>(m + 1).fill(0);
+  const way = new Array<number>(m + 1).fill(0);
+  for (let i = 1; i <= n; i++) {
+    p[0] = i;
+    let j0 = 0;
+    const minv = new Array<number>(m + 1).fill(Infinity);
+    const used = new Array<boolean>(m + 1).fill(false);
+    do {
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = Infinity;
+      let j1 = 0;
+      for (let j = 1; j <= m; j++) {
+        if (used[j]) continue;
+        const cur = a[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) {
+          minv[j] = cur;
+          way[j] = j0;
+        }
+        if (minv[j] < delta) {
+          delta = minv[j];
+          j1 = j;
+        }
+      }
+      for (let j = 0; j <= m; j++) {
+        if (used[j]) {
+          u[p[j]] += delta;
+          v[j] -= delta;
+        } else minv[j] -= delta;
+      }
+      j0 = j1;
+    } while (p[j0] !== 0);
+    do {
+      const j1 = way[j0];
+      p[j0] = p[j1];
+      j0 = j1;
+    } while (j0);
+  }
+  const res = new Array<number>(n).fill(-1);
+  for (let j = 1; j <= m; j++) if (p[j]) res[p[j] - 1] = j - 1;
+  return res;
 }
 
 export function recommendGroup(inc: Incident): TeamScore[] {
@@ -147,10 +283,10 @@ export function findCorrelation(inc: Incident, ctx: AiContext): Insight['correla
 // ─── резюме ────────────────────────────────────────────────────────────────
 
 export function heuristicInsight(inc: Incident, ctx: AiContext, started = Date.now()): Insight {
-  const workers = recommendWorkers(inc, ctx);
+  const workers = rankWorkers(inc, ctx, 8);
   const risk = assessRisk(inc, ctx);
   const corr = findCorrelation(inc, ctx);
-  const top = ctx.workers.find((w) => w.id === workers[0]?.workerId);
+  const top = ctx.workers.find((w) => w.id === workers.find((x) => !x.blocked)?.workerId);
   const summary = `${inc.shortDescription} ${inc.productName} › ${inc.service}.`;
   const steps: string[] = [];
   if (!inc.assignee && top) steps.push(`Назначить: ${top.name}`);

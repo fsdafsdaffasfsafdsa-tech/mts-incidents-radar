@@ -113,13 +113,69 @@ export function isOfflineRecord(r: Pick<RawIncident, 'description' | 'assignedGr
 // ─── офисы МТС для выездных ────────────────────────────────────────────────
 
 export const OFFICES: Office[] = [
-  { id: 'msk', city: 'Москва', lat: 55.7558, lon: 37.6173 },
-  { id: 'spb', city: 'Санкт-Петербург', lat: 59.9343, lon: 30.3351 },
-  { id: 'kzn', city: 'Казань', lat: 55.7963, lon: 49.1088 },
-  { id: 'ekb', city: 'Екатеринбург', lat: 56.8389, lon: 60.6057 },
-  { id: 'nsk', city: 'Новосибирск', lat: 55.0084, lon: 82.9357 },
-  { id: 'vvo', city: 'Владивосток', lat: 43.1155, lon: 131.8855 },
+  { id: 'rnd', city: 'Ростов-на-Дону', lat: 47.2225, lon: 39.7187 },
+  { id: 'krd', city: 'Краснодар', lat: 45.0393, lon: 38.9872 },
+  { id: 'vlg', city: 'Волгоград', lat: 48.7071, lon: 44.5169 },
+  { id: 'ast', city: 'Астрахань', lat: 46.3497, lon: 48.0408 },
+  { id: 'aer', city: 'Сочи', lat: 43.5853, lon: 39.7203 },
 ];
+
+/** Населённые пункты ЮФО, где стоят площадки (БС, узлы связи), — по зоне ответственности офиса. */
+export interface Site {
+  city: string;
+  code: string; // код региона для номера площадки
+  lat: number;
+  lon: number;
+  spread: number; // радиус разброса площадок, км
+}
+export const SITES: Record<string, Site[]> = {
+  rnd: [
+    { city: 'Ростов-на-Дону', code: '61', lat: 47.2357, lon: 39.7015, spread: 7 },
+    { city: 'Таганрог', code: '61', lat: 47.2362, lon: 38.8969, spread: 3 },
+    { city: 'Новочеркасск', code: '61', lat: 47.4222, lon: 40.0939, spread: 3 },
+    { city: 'Шахты', code: '61', lat: 47.7085, lon: 40.216, spread: 3 },
+    { city: 'Батайск', code: '61', lat: 47.1383, lon: 39.7448, spread: 2 },
+    { city: 'Азов', code: '61', lat: 47.1121, lon: 39.4232, spread: 2 },
+    { city: 'Аксай', code: '61', lat: 47.2676, lon: 39.8756, spread: 2 },
+    { city: 'Волгодонск', code: '61', lat: 47.5136, lon: 42.1514, spread: 3 },
+  ],
+  krd: [
+    { city: 'Краснодар', code: '23', lat: 45.0355, lon: 38.9753, spread: 7 },
+    { city: 'Новороссийск', code: '23', lat: 44.7235, lon: 37.7686, spread: 3 },
+    { city: 'Анапа', code: '23', lat: 44.8948, lon: 37.3167, spread: 2.5 },
+    { city: 'Армавир', code: '23', lat: 44.9892, lon: 41.1234, spread: 3 },
+    { city: 'Майкоп', code: '01', lat: 44.6098, lon: 40.1006, spread: 3 },
+    { city: 'Ейск', code: '23', lat: 46.7106, lon: 38.2764, spread: 2 },
+    { city: 'Кропоткин', code: '23', lat: 45.4375, lon: 40.5756, spread: 2 },
+    { city: 'Тихорецк', code: '23', lat: 45.8546, lon: 40.1256, spread: 2 },
+  ],
+  vlg: [
+    { city: 'Волгоград', code: '34', lat: 48.708, lon: 44.5133, spread: 8 },
+    { city: 'Волжский', code: '34', lat: 48.7858, lon: 44.7797, spread: 3 },
+    { city: 'Камышин', code: '34', lat: 50.0983, lon: 45.416, spread: 2.5 },
+    { city: 'Михайловка', code: '34', lat: 50.06, lon: 43.2378, spread: 2 },
+    { city: 'Калач-на-Дону', code: '34', lat: 48.6889, lon: 43.5306, spread: 1.5 },
+    { city: 'Урюпинск', code: '34', lat: 50.7955, lon: 42.0058, spread: 1.5 },
+  ],
+  ast: [
+    { city: 'Астрахань', code: '30', lat: 46.3479, lon: 48.0336, spread: 6 },
+    { city: 'Ахтубинск', code: '30', lat: 48.2789, lon: 46.1664, spread: 2 },
+    { city: 'Знаменск', code: '30', lat: 48.5853, lon: 45.7372, spread: 1.5 },
+    { city: 'Камызяк', code: '30', lat: 46.1103, lon: 48.0731, spread: 1.5 },
+    { city: 'Элиста', code: '08', lat: 46.3078, lon: 44.2558, spread: 2.5 },
+  ],
+  aer: [
+    { city: 'Сочи', code: '23', lat: 43.5855, lon: 39.7231, spread: 4 },
+    { city: 'Адлер', code: '23', lat: 43.4285, lon: 39.9239, spread: 2.5 },
+    { city: 'Хоста', code: '23', lat: 43.5153, lon: 39.8697, spread: 1.5 },
+    { city: 'Красная Поляна', code: '23', lat: 43.6797, lon: 40.2058, spread: 2 },
+    { city: 'Туапсе', code: '23', lat: 44.0956, lon: 39.0747, spread: 2 },
+    { city: 'Геленджик', code: '23', lat: 44.5622, lon: 38.0768, spread: 2.5 },
+  ],
+};
+
+/** Границы ЮФО для карты: [[запад, юг], [восток, север]]. */
+export const REGION_BOUNDS: [[number, number], [number, number]] = [[36.2, 42.9], [49.6, 51.4]];
 export const officeById = (id: string | null | undefined) => OFFICES.find((o) => o.id === id);
 
 // ─── сотрудники ────────────────────────────────────────────────────────────
@@ -139,10 +195,10 @@ const parseEmployee = (s: string) => {
 
 // Офис выездного: группа ОГЭ подсказывает город, остальных распределяем по офисам (условно, в данных адресов нет).
 const OFFICE_HINTS: [RegExp, string][] = [
-  [/Приморье/i, 'vvo'],
-  [/Санкт-Петербург/i, 'spb'],
+  [/Приморье/i, 'aer'],
+  [/Санкт-Петербург/i, 'rnd'],
 ];
-const FALLBACK_OFFICES = ['msk', 'kzn', 'ekb', 'nsk', 'msk', 'spb'];
+const FALLBACK_OFFICES = ['krd', 'vlg', 'ast', 'rnd', 'krd', 'vlg'];
 
 export const EMPLOYEES: EmployeeDef[] = (() => {
   const by = new Map<string, { name: string; groups: Set<string>; total: number; field: number; officeHint: string | null }>();

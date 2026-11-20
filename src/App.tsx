@@ -1,21 +1,24 @@
 import { useEffect } from 'react';
 import { WifiOff } from 'lucide-react';
-import { connect, select, useStore } from './store';
+import { checkAuth, select, useStore } from './store';
 import { unlockAudio } from './lib/sound';
 import { TopBar } from './components/TopBar';
 import { OfflineCenter, OnlineCenter } from './components/Center';
 import { Cabinet } from './components/Cabinet';
 import { CriticalBanner, Toasts } from './components/Alerts';
+import { Login } from './components/Login';
 
 export function App() {
   const theme = useStore((s) => s.theme);
+  const me = useStore((s) => s.me);
+  const authChecked = useStore((s) => s.authChecked);
   const screen = useStore((s) => s.screen);
   const connected = useStore((s) => s.connected);
   const everConnected = useStore((s) => s.everConnected);
   const loaded = useStore((s) => s.workers.length > 0);
 
   useEffect(() => {
-    connect();
+    void checkAuth();
     const unlock = () => unlockAudio();
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
@@ -30,10 +33,16 @@ export function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  if (!authChecked) return <div className="boot full"><span className="boot-ring" /></div>;
+  if (!me) return <Login />;
+
+  const coord = me.role === 'coordinator';
+  const view = coord ? (screen === 'offline' ? 'offline' : 'online') : 'cabinet';
+
   return (
-    <div className={`app screen-${screen}`}>
+    <div className={`app screen-${view} role-${me.role}`}>
       <TopBar />
-      <CriticalBanner />
+      {coord && <CriticalBanner />}
       {!connected && everConnected && (
         <div className="offline">
           <WifiOff size={14} /> Нет связи с сервером — переподключаемся.
@@ -45,9 +54,9 @@ export function App() {
             <span className="boot-ring" />
             Подключаемся…
           </div>
-        ) : screen === 'online' ? (
+        ) : view === 'online' ? (
           <OnlineCenter />
-        ) : screen === 'offline' ? (
+        ) : view === 'offline' ? (
           <OfflineCenter />
         ) : (
           <Cabinet />

@@ -12,6 +12,9 @@ import type {
   SystemInfo,
   TeamInfo,
   Office,
+  Me,
+  PlanItem,
+  Snapshot,
   Worker,
   WorkMode,
 } from '../shared/types';
@@ -57,6 +60,9 @@ export const DEFAULT_METRICS: MetricsCfg = {
 };
 
 export interface State {
+  me: Me | null;
+  authChecked: boolean;
+  config: Snapshot['config'] | null;
   connected: boolean;
   everConnected: boolean;
   offset: number;
@@ -107,6 +113,9 @@ function writePref(key: string, v: unknown) {
 }
 
 let state: State = {
+  me: null,
+  authChecked: false,
+  config: null,
   connected: false,
   everConnected: false,
   offset: 0,
@@ -167,11 +176,54 @@ export const serverNow = () => Date.now() + state.offset;
 
 let es: EventSource | null = null;
 
+// ─── Вход ──────────────────────────────────────────────────────────────────
+
+export async function checkAuth() {
+  try {
+    const r = await fetch('/api/me');
+    const me = r.ok ? ((await r.json()) as Me) : null;
+    setState({ me, authChecked: true });
+    if (me) connect();
+  } catch {
+    setState({ authChecked: true });
+  }
+}
+
+export async function doLogin(login: string, password: string): Promise<string | null> {
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, password }) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) return data.error ?? `Ошибка ${r.status}`;
+  unlockAudio();
+  setState({ me: data as Me, selectedId: null });
+  connect();
+  return null;
+}
+
+export async function doLogout() {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => undefined);
+  es?.close();
+  es = null;
+  setState({ me: null, connected: false, everConnected: false, incidents: new Map(), workers: [], selectedId: null, attention: [], toasts: [] });
+}
+
+/** Мой профиль сотрудника (для онлайн- и выездных). */
+export const myWorker = (s: State) => (s.me?.workerId ? s.workers.find((w) => w.id === s.me!.workerId) : undefined);
+
 export function connect() {
   if (es) return;
   es = new EventSource('/api/stream');
   es.onopen = () => setState({ connected: true, everConnected: true });
-  es.onerror = () => setState({ connected: false });
+  es.onerror = () => {
+    setState({ connected: false });
+    // Сессия могла истечь: проверяем и, если нужно, возвращаем на экран входа.
+    void fetch('/api/me').then((r) => {
+      if (r.status === 401) {
+        es?.close();
+        es = null;
+        setState({ me: null });
+      }
+    });
+  };
   es.onmessage = (e) => {
     try {
       handle(JSON.parse(e.data) as ServerMessage);
@@ -207,6 +259,7 @@ function handle(msg: ServerMessage) {
         attention,
         workers: d.workers ?? [],
         offices: d.offices ?? [],
+        config: d.config ?? null,
       });
       break;
     }
@@ -308,10 +361,24 @@ function notifyBrowser(title: string, body: string) {
 }
 
 function onFeed(ev: FeedEvent) {
-  if (ev.actor === ME) return; // свои действия не подсвечиваем
+  const me = state.me;
+  if (!me || ev.actor === me.name) return; // свои действия не подсвечиваем
   const inc = state.incidents.get(ev.incidentId);
   const title = inc?.title ?? ev.text;
   const sys = systemName(ev.systemId);
+  // Сотруднику — только то, что касается его: новая задача, вернули, срок горит.
+  if (me.role !== 'coordinator') {
+    const mine = inc?.assignee === me.workerId;
+    if (ev.kind === 'assigned' && mine) {
+      toast({ kind: inc?.priority === 'P1' ? 'p1' : 'coord', title: inc?.mode === 'offline' ? 'Новый выезд' : 'Новая задача', body: `${inc?.region && inc.mode === 'offline' ? `${inc.region} · ` : ''}${title}`, incidentId: ev.incidentId, ttl: 12_000 });
+      cue(inc?.priority === 'P1' ? 'p1' : 'coord');
+      notifyBrowser('Новая задача', title);
+    } else if (mine && (ev.kind === 'sla_warning' || ev.kind === 'sla_breach')) {
+      toast({ kind: 'warn', title: ev.kind === 'sla_breach' ? 'Дедлайн прошёл' : 'Дедлайн близко', body: title, incidentId: ev.incidentId, ttl: 9_000 });
+      cue('warn');
+    }
+    return;
+  }
   switch (ev.kind) {
     case 'p1':
       addAttention(ev.incidentId);
@@ -448,6 +515,23 @@ export function setCabinet(cabinet: { mode: WorkMode; workerId: string | null })
 
 export async function workerAct(workerId: string, body: { action: string; incidentId?: string; status?: string; focus?: string; queue?: string[] }) {
   return post(`/api/workers/${encodeURIComponent(workerId)}`, body);
+}
+
+/** План распределения пачкой (венгерский алгоритм на сервере). */
+export async function fetchPlan(mode: WorkMode): Promise<PlanItem[]> {
+  const r = await fetch(`/api/plan?mode=${mode}`);
+  return r.ok ? ((await r.json()) as PlanItem[]) : [];
+}
+
+export async function applyPlan(items: PlanItem[]) {
+  const r = await post('/api/bulk-assign', { items: items.map((x) => ({ id: x.incidentId, workerId: x.workerId })) });
+  toast({ kind: 'info', title: 'Распределено', body: `Назначено задач: ${r.assigned}`, ttl: 5000 });
+  setState({ attention: state.attention.filter((x) => !items.some((i) => i.incidentId === x)) });
+}
+
+export function itsmLink(id: string) {
+  const t = state.config?.itsmUrl;
+  return t ? t.replace('{id}', encodeURIComponent(id)) : null;
 }
 
 export function workerName(id: string | null | undefined) {

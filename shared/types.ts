@@ -149,10 +149,32 @@ export interface TeamScore {
   reasons: string[];
 }
 
+/** Подбор исполнителя: балл 0–100 и из чего он сложился. */
 export interface WorkerScore {
   workerId: string;
-  confidence: number;
-  reasons: string[];
+  confidence: number; // доля среди допущенных (softmax)
+  score: number; // 0–100
+  reasons: string[]; // коротко: «40 мин езды», «свободен», «3 похожих закрыл», «6 ч на смене»
+  parts: { label: string; points: number }[];
+  km: number | null;
+  etaMin: number | null;
+  blocked: string | null; // жёсткий фильтр: перерыв, конец смены
+}
+
+/** Пара «инцидент → сотрудник» в плане распределения пачкой. */
+export interface PlanItem {
+  incidentId: string;
+  workerId: string;
+  score: number;
+  etaMin: number | null;
+}
+
+export type Role = 'coordinator' | 'online' | 'offline';
+export interface Me {
+  login: string;
+  name: string;
+  role: Role;
+  workerId: string | null;
 }
 
 export type WorkerStatus = 'free' | 'busy' | 'break' | 'enroute' | 'onsite';
@@ -170,6 +192,11 @@ export interface Worker {
   focus: string; // «чем занимаюсь» коротко
   done: number; // сделано за смену
   manual: boolean; // кабинетом управляет человек
+  shiftStart: number; // начало смены, мс
+  trips: number; // выездов за смену
+  lat: number | null; // где сейчас (для выездных)
+  lon: number | null;
+  place: string; // «офис Краснодар», «Анапа · БС 23-0451»
 }
 
 export interface Office {
@@ -239,6 +266,7 @@ export interface Snapshot {
   ai: AiStatus;
   workers: Worker[];
   offices: Office[];
+  config: { itsmUrl: string | null; bounds: [[number, number], [number, number]]; source: string };
 }
 
 export type ServerMessage =
