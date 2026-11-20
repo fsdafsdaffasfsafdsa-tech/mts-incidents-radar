@@ -1,0 +1,36 @@
+{
+  "name": "mts-incidents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Радар инцидентов — дашборд координатора IT-инцидентов (кейс МТС, Cyber Garden)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "tsc --noEmit -p . && vite build",
+    "start": "vite build && tsx server/index.ts --prod",
+    "test": "tsx --test server/*.test.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
+    "@fontsource-variable/jetbrains-mono": "^5.1.0",
+    "@fontsource-variable/onest": "^5.1.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "lucide-react": "^0.460.0",
+    "maplibre-gl": "^4.7.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.2",
+    "vite": "^5.4.11",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
