@@ -5,7 +5,7 @@ import { Siren } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { getState, openIncident, useStore } from '../store';
 import { siren, unlockAudio } from '../lib/sound';
-import { announce } from './Jarvis';
+import { announceIncident } from './Jarvis';
 
 export function Alarm() {
   const incidents = useStore((s) => s.incidents);
@@ -30,7 +30,7 @@ export function Alarm() {
     setInc(fresh);
     unlockAudio();
     if (sound && p1Sound) stop.current = siren();
-    announce(fresh.p1Proposal ? `Внимание. ИИ предлагает наивысший уровень: ${fresh.title}` : `Внимание. Критический инцидент: ${fresh.title}`);
+    announceIncident(fresh.id, fresh.p1Proposal ? `Внимание. ИИ предлагает наивысший уровень: ${fresh.title}` : `Внимание. Критический инцидент: ${fresh.title}`);
   }, [incidents, on]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => stop.current?.(), []);
@@ -44,11 +44,32 @@ export function Alarm() {
       setInc(pick);
       stop.current?.();
       if (getState().sound) stop.current = siren();
-      announce(`Внимание. Критический инцидент: ${pick.title}`);
+      announceIncident(pick.id, `Внимание. Критический инцидент: ${pick.title}`);
     };
     window.addEventListener('radar:alarm-test', test);
     return () => window.removeEventListener('radar:alarm-test', test);
   }, []);
+  // Джарвис заговорил — сирена смолкает (мигание остаётся до «Принял»);
+  // Джарвис открыл этот инцидент по голосовой команде — тревога принята.
+  useEffect(() => {
+    const quiet = () => {
+      stop.current?.();
+      stop.current = null;
+    };
+    const opened = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== incRef.current?.id) return;
+      quiet();
+      setInc(null);
+    };
+    window.addEventListener('radar:siren-stop', quiet);
+    window.addEventListener('radar:jarvis-open', opened);
+    return () => {
+      window.removeEventListener('radar:siren-stop', quiet);
+      window.removeEventListener('radar:jarvis-open', opened);
+    };
+  }, []);
+  const incRef = useRef(inc);
+  incRef.current = inc;
   if (!inc) return null;
   const ack = (open: boolean) => {
     stop.current?.();

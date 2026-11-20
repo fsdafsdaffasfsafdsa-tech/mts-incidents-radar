@@ -15,7 +15,7 @@ import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
 import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
-import { ask as askJarvis, jarvisStatus, speak } from './jarvis.ts';
+import { ask as askJarvis, brief as jarvisBrief, jarvisStatus, speak } from './jarvis.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -208,14 +208,37 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       pointOnly();
       const body = await readBody(req);
       const history = Array.isArray(body.history) ? (body.history as { role: string; content: string }[]).filter((h) => (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : [];
-      return json(res, 200, await askJarvis(point, me, str(body.text).slice(0, 500), str(body.selectedId) || null, history as { role: 'user' | 'assistant'; content: string }[]));
+      return json(
+        res,
+        200,
+        await askJarvis(point, me, {
+          text: str(body.text).slice(0, 500),
+          selectedId: str(body.selectedId) || null,
+          focusId: str(body.focusId) || null,
+          tab: str(body.tab) || null,
+          mode: body.mode === 'control' ? 'control' : 'chat',
+          history: history as { role: 'user' | 'assistant'; content: string }[],
+        }),
+      );
+    }
+    m = p.match(/^\/api\/jarvis\/brief\/([\w-]+)$/);
+    if (m) {
+      pointOnly();
+      const text = jarvisBrief(point, m[1]);
+      return text ? json(res, 200, { text }) : json(res, 404, { error: 'Инцидент не найден' });
     }
     if (p === '/api/jarvis/speak' && post) {
       const body = await readBody(req);
-      const audio = await speak(str(body.text), str(body.voice));
+      let audio: Awaited<ReturnType<typeof speak>>;
+      try {
+        audio = await speak(str(body.text), str(body.voice));
+      } catch (err) {
+        console.error('Джарвис: голос не получился —', err instanceof Error ? err.message : err);
+        return json(res, 502, { error: 'Голос сейчас недоступен' });
+      }
       if (!audio) return void res.writeHead(204).end();
-      res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length, 'Cache-Control': 'no-store' });
-      return void res.end(audio);
+      res.writeHead(200, { 'Content-Type': audio.type, 'Content-Length': audio.buf.length, 'Cache-Control': 'no-store', 'X-Jarvis-Voice': audio.voice });
+      return void res.end(audio.buf);
     }
 
     if (p === '/api/point/assign' && post) {

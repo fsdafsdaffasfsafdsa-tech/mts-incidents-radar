@@ -62,6 +62,9 @@ export function routeTeams(inc: Incident, ctx: PointCtx, limit = 5): TeamPick[] 
     for (const t of TEAMS) if (t.itsm && t.name.toLowerCase().includes(inc.productName.toLowerCase().split(' ')[0])) add(t.id, 50, 'группа продукта');
   }
 
+  // Справочник ничего не нашёл (например, продукт без своей группы) — дежурная ИТ-поддержка: разберёт и передаст дальше.
+  if (!cand.size) add('itsup-duty', 46, 'группы этого продукта нет в справочнике — дежурная ИТ-поддержка разберёт и передаст');
+
   // Команда не на смене — предлагаем её дежурную замену.
   for (const [id, c] of [...cand]) {
     const t = teamById(id)!;

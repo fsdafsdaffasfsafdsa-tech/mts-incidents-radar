@@ -1,14 +1,21 @@
-// «Джарвис» — с ИИ можно разговаривать голосом: «Джарвис, что горит?», «открой мобильный интернет в Москве»,
-// «передай по совету», «кто на смене», «перемотай карту». Отвечает голосом и показывает нужное на экране.
-// Голос ElevenLabs и мозг Claude — на сервере через OpenRouter (ключ не уходит в браузер). Без ключа —
-// понятные команды по правилам и встроенный голос браузера.
+// «Джарвис» — голосовой ИИ-помощник дежурного. Две независимые функции, обе включаются в настройках:
+//   «Джарвис управляет экраном» — слушает всегда («Джарвис, …»), открывает вкладки и инциденты, объясняет ситуацию,
+//      подсказывает, кому дать, и по команде выдаёт. Пока включено — Джарвиса не выключить (только в настройках).
+//   «Голос Джарвиса» — отвечает вслух живым голосом (говорящие модели OpenRouter, ключ на сервере), объявляет критические.
+// Разговор помнит, о каком инциденте речь: «объясни», «кому дать?», «выдай» — без номеров.
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Mic, MicOff, Send, Volume2, VolumeX, X } from 'lucide-react';
-import { getState, openIncident, readLocal, setTab, writeLocal } from '../store';
+import { Bot, Check, Lock, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
+import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
 
 type Phase = 'idle' | 'listen' | 'think' | 'speak';
-type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean };
-type Action = { type: 'open'; id: string } | { type: 'tab'; tab: string } | { type: 'replay' };
+type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean; done?: string[]; event?: boolean };
+type Action =
+  | { type: 'open'; id: string }
+  | { type: 'tab'; tab: string }
+  | { type: 'replay'; on: boolean }
+  | { type: 'settings'; open: boolean }
+  | { type: 'theme'; id: string }
+  | { type: 'team'; name: string };
 interface Status {
   llm: boolean;
   tts: boolean;
@@ -16,24 +23,27 @@ interface Status {
   voices: string[];
 }
 
-// ─── настройки (в браузере) ────────────────────────────────────────────────
+// ─── настройки (в браузере, у каждого дежурного свои) ──────────────────────
 export const JARVIS_VOICES: { id: string; name: string }[] = [
-  { id: 'adam', name: 'Адам — низкий, спокойный' },
-  { id: 'brian', name: 'Брайан — глубокий' },
-  { id: 'bill', name: 'Билл — строгий' },
-  { id: 'george', name: 'Джордж — мягкий' },
-  { id: 'matilda', name: 'Матильда — женский' },
+  { id: 'mm-guy', name: 'Русский мужской — живой (MiniMax)' },
+  { id: 'mm-reliable', name: 'Русский мужской — спокойный диктор (MiniMax)' },
+  { id: 'grok-rex', name: 'Рекс — энергичный (Grok)' },
+  { id: 'gm-charon', name: 'Харон — выразительный, «как Джарвис» (Gemini, отвечает дольше)' },
+  { id: 'gm-puck', name: 'Пак — бодрый (Gemini, отвечает дольше)' },
+  { id: 'el-brian', name: 'Брайан — тёплый, глубокий (ElevenLabs)' },
+  { id: 'el-adam', name: 'Адам — прежний голос (ElevenLabs)' },
+  { id: 'el-matilda', name: 'Матильда — женский (ElevenLabs)' },
 ];
 export const jarvisPrefs = {
-  voice: readLocal<string>('radar.jarvis.voice', 'adam'),
-  speak: readLocal<boolean>('radar.jarvis.speak', true),
-  announce: readLocal<boolean>('radar.jarvis.announce', true),
-  wake: readLocal<boolean>('radar.jarvis.wake', false),
+  control: readLocal<boolean>('radar.jarvis.control', false), // управляет экраном, слушает всегда
+  speak: readLocal<boolean>('radar.jarvis.speak', true), // голос Джарвиса
+  announce: readLocal<boolean>('radar.jarvis.announce', true), // объявлять критические голосом
+  voice: readLocal<string>('radar.jarvis.voice2', 'mm-guy'), // новый набор голосов: прежний «Адам» не прижился
 };
 const listeners = new Set<() => void>();
 export function setJarvisPref<K extends keyof typeof jarvisPrefs>(k: K, v: (typeof jarvisPrefs)[K]) {
   jarvisPrefs[k] = v;
-  writeLocal(`radar.jarvis.${k}`, v);
+  writeLocal(`radar.jarvis.${k === 'voice' ? 'voice2' : k}`, v);
   listeners.forEach((f) => f());
 }
 function usePrefs() {
@@ -53,22 +63,44 @@ export const jarvisStatus = () =>
     .catch(() => null));
 
 // ─── голос ─────────────────────────────────────────────────────────────────
+// Голос Джарвиса не зависит от общего выключателя звука сигналов — у него своя настройка.
 let audio: HTMLAudioElement | null = null;
 let actx: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
 let onPhase: (p: Phase) => void = () => undefined;
+let onVoiceNote: (s: string) => void = () => undefined;
 let speaking = 0;
 
-function stopVoice() {
+/** Браузер даёт звук только после действия человека — «будим» звук при первом клике или клавише. */
+export function unlockJarvisAudio() {
+  try {
+    actx ??= new AudioContext();
+    if (actx.state === 'suspended') void actx.resume();
+  } catch {
+    actx = null;
+  }
+}
+if (typeof window !== 'undefined') {
+  const once = () => {
+    unlockJarvisAudio();
+    window.removeEventListener('pointerdown', once);
+    window.removeEventListener('keydown', once);
+  };
+  window.addEventListener('pointerdown', once);
+  window.addEventListener('keydown', once);
+}
+
+export function stopVoice() {
   speaking++;
   audio?.pause();
   audio = null;
+  analyser = null;
   if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
 function browserVoice(text: string, id: number) {
   return new Promise<void>((done) => {
-    if (!('speechSynthesis' in window)) return done();
+    if (!('speechSynthesis' in window) || id !== speaking) return done();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'ru-RU';
     const ru = speechSynthesis.getVoices().filter((v) => v.lang.startsWith('ru'));
@@ -76,58 +108,80 @@ function browserVoice(text: string, id: number) {
     u.rate = 1.05;
     u.pitch = 0.85;
     u.onend = u.onerror = () => done();
-    if (id === speaking) speechSynthesis.speak(u);
-    else done();
+    speechSynthesis.speak(u);
   });
 }
 
-/** Сказать вслух. Сначала голос ElevenLabs с сервера, если его нет — голос браузера. */
+/** Сказать вслух голосом выбранной говорящей модели с сервера; если его нет — голосом браузера. Ждёт, пока договорит. */
 export async function say(text: string) {
   stopVoice();
   const id = speaking;
   const t = text.replace(/[«»"*_#]/g, '').trim();
   if (!t) return;
+  window.dispatchEvent(new Event('radar:siren-stop')); // сирена не перекрикивает Джарвиса
   onPhase('speak');
   try {
     const st = await jarvisStatus();
     if (st?.tts) {
       const r = await fetch('/api/jarvis/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t, voice: jarvisPrefs.voice }) });
-      if (r.status === 200 && id === speaking) {
+      if (id !== speaking) return;
+      if (r.status === 200) {
         const url = URL.createObjectURL(await r.blob());
         const a = new Audio(url);
         audio = a;
-        try {
-          actx ??= new AudioContext();
-          if (actx.state === 'suspended') await actx.resume();
-          analyser = actx.createAnalyser();
-          analyser.fftSize = 256;
-          actx.createMediaElementSource(a).connect(analyser).connect(actx.destination);
-        } catch {
-          analyser = null;
+        // Пульс шара под голос — только если звук уже «разбужен», иначе играем напрямую.
+        if (actx?.state === 'running') {
+          try {
+            analyser = actx.createAnalyser();
+            analyser.fftSize = 256;
+            actx.createMediaElementSource(a).connect(analyser).connect(actx.destination);
+          } catch {
+            analyser = null;
+          }
         }
-        await new Promise<void>((done) => {
-          a.onended = a.onerror = () => done();
-          a.play().catch(() => done());
+        const played = await new Promise<boolean>((done) => {
+          a.onended = () => done(true);
+          a.onerror = () => done(false);
+          a.play().catch(() => done(false));
         });
         URL.revokeObjectURL(url);
         analyser = null;
-        if (id === speaking) onPhase('idle');
-        return;
-      }
+        if (played) {
+          const used = r.headers.get('X-Jarvis-Voice');
+          const name = JARVIS_VOICES.find((x) => x.id === used)?.name.split(' (')[0];
+          onVoiceNote(used && used !== jarvisPrefs.voice && name ? `Выбранный голос сейчас недоступен — говорю голосом «${name}».` : '');
+          if (id === speaking) onPhase('idle');
+          return;
+        }
+        onVoiceNote('Браузер не дал включить звук — нажмите на шар Джарвиса один раз.');
+      } else onVoiceNote('Живой голос сейчас недоступен — говорю голосом браузера.');
     }
   } catch {
-    /* сервер не озвучил — говорим голосом браузера */
+    onVoiceNote('Живой голос сейчас недоступен — говорю голосом браузера.');
   }
   if (id !== speaking) return;
   await browserVoice(t, id);
   if (id === speaking) onPhase('idle');
 }
 
-/** Объявление о событии (тревога, критический) — если в настройках включено «объявлять голосом». */
-export function announce(text: string) {
-  if (!jarvisPrefs.announce || getState().me?.role !== 'coordinator' || !getState().sound) return;
+// Мост к окну Джарвиса: объявления о критических попадают в разговор и становятся его темой.
+let bridge: { announce: (text: string, id: string) => void } | null = null;
+
+/** Объявить критический инцидент голосом: что случилось, где и что советует ИИ. */
+export function announceIncident(id: string, fallback: string) {
+  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce) return;
   // Даём сирене прозвучать первой.
-  setTimeout(() => void say(text), 1800);
+  setTimeout(async () => {
+    let text = fallback;
+    try {
+      const r = await fetch(`/api/jarvis/brief/${encodeURIComponent(id)}`);
+      if (r.ok) text = ((await r.json()) as { text: string }).text;
+    } catch {
+      /* по шаблону с клиента */
+    }
+    if (bridge) bridge.announce(text, id);
+    else void say(text);
+  }, 1800);
 }
 
 // ─── распознавание речи ────────────────────────────────────────────────────
@@ -142,18 +196,58 @@ type Rec = {
   onend: (() => void) | null;
   onerror: ((e: { error: string }) => void) | null;
 };
-const RecCtor = (window as unknown as { SpeechRecognition?: new () => Rec; webkitSpeechRecognition?: new () => Rec }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => Rec }).webkitSpeechRecognition;
+const W = window as unknown as { SpeechRecognition?: new () => Rec; webkitSpeechRecognition?: new () => Rec };
+const RecCtor = W.SpeechRecognition ?? W.webkitSpeechRecognition;
 export const canListen = !!RecCtor;
-const WAKE = /(?:^|\s)(джарвис|жарвис|джервис|jarvis)[,.!?\s]*/i;
+const WAKE = /(?:^|\s)(джарвис|жарвис|джервис|джарвиз|джавис|jarvis)[,.!?\s]*/i;
+const afterWake = (t: string) => {
+  const m = WAKE.exec(t);
+  return m ? t.slice(m.index + m[0].length).trim() : t.trim();
+};
+const FOLLOW_MS = 9000; // после ответа можно продолжать без слова «Джарвис»
 
 const TABS = ['map', 'inbox', 'teams', 'done', 'requests', 'signals', 'shift', 'ai', 'wall', 'directory', 'desk'];
-const SUGGEST = ['Что горит?', 'Кто на смене?', 'Открой самый срочный', 'Сколько жалоб?', 'Перемотай карту', 'Открой видеостену'];
+const SUGGEST_CONTROL = ['Что горит?', 'Открой входящие и объясни ситуацию', 'Кому можно дать?', 'Кто на смене?', 'Перемотай карту'];
+const SUGGEST_CHAT = ['Что горит?', 'Кто на смене?', 'Сколько жалоб?', 'Что с самым срочным?'];
+
+function flash(sel: string) {
+  setTimeout(() => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    el.classList.remove('jv-flash');
+    void (el as HTMLElement).offsetWidth;
+    el.classList.add('jv-flash');
+    setTimeout(() => el.classList.remove('jv-flash'), 1600);
+  }, 80);
+}
 
 function runActions(actions: Action[]) {
   for (const a of actions) {
-    if (a.type === 'open' && getState().incidents.has(a.id)) openIncident(a.id);
-    if (a.type === 'tab' && TABS.includes(a.tab)) setTab(a.tab);
-    if (a.type === 'replay') setTimeout(() => window.dispatchEvent(new Event('radar:replay')), 350);
+    switch (a.type) {
+      case 'open':
+        if (getState().incidents.has(a.id)) openIncident(a.id);
+        window.dispatchEvent(new CustomEvent('radar:jarvis-open', { detail: a.id }));
+        break;
+      case 'tab':
+        if (TABS.includes(a.tab)) {
+          setTab(a.tab);
+          flash(`.stab[data-tab="${a.tab}"]`);
+        }
+        break;
+      case 'replay':
+        if (a.on) setTimeout(() => window.dispatchEvent(new Event('radar:replay')), 350);
+        else setReplay(null);
+        break;
+      case 'settings':
+        setSettings(a.open);
+        break;
+      case 'theme':
+        setSkin(a.id);
+        break;
+      case 'team':
+        openTeamInDirectory(a.name);
+        break;
+    }
   }
 }
 
@@ -167,18 +261,49 @@ export function Jarvis() {
   const [text, setText] = useState('');
   const [status, setStatus] = useState<Status | null>(null);
   const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+  const [awaiting, setAwaiting] = useState(false); // ждёт продолжения без слова «Джарвис»
+  const [micDenied, setMicDenied] = useState(false);
   const rec = useRef<Rec | null>(null);
-  const wakeRec = useRef<Rec | null>(null);
   const orb = useRef<HTMLButtonElement | null>(null);
   const log = useRef<HTMLDivElement | null>(null);
   const linesRef = useRef<Line[]>([]);
+  const focus = useRef<string | null>(null);
+  const followUntil = useRef(0);
+  const followTimer = useRef<number | null>(null);
   linesRef.current = lines;
+  const control = prefs.control;
 
   useEffect(() => {
     onPhase = setPhase;
+    onVoiceNote = setNote;
     void jarvisStatus().then(setStatus);
     return () => {
       onPhase = () => undefined;
+      onVoiceNote = () => undefined;
+    };
+  }, []);
+
+  /** Окно продолжения: несколько секунд после ответа Джарвис слушает без слова «Джарвис». */
+  function follow(ms = FOLLOW_MS) {
+    if (!jarvisPrefs.control) return;
+    followUntil.current = Date.now() + ms;
+    setAwaiting(true);
+    if (followTimer.current) clearTimeout(followTimer.current);
+    followTimer.current = window.setTimeout(() => setAwaiting(false), ms);
+  }
+
+  // Объявления о критических: строка в разговоре, тема разговора — этот инцидент.
+  useEffect(() => {
+    bridge = {
+      announce: (t, id) => {
+        focus.current = id;
+        setLines((l) => [...l, { role: 'assistant', content: t, event: true }]);
+        void say(t).then(() => follow());
+      },
+    };
+    return () => {
+      bridge = null;
     };
   }, []);
 
@@ -192,52 +317,67 @@ export function Jarvis() {
         analyser.getByteFrequencyData(buf);
         lvl = buf.slice(2, 40).reduce((a, b) => a + b, 0) / (38 * 255);
       } else if (phase === 'speak') lvl = 0.25 + Math.abs(Math.sin(performance.now() / 140)) * 0.35;
-      else if (phase === 'listen') lvl = 0.15 + Math.abs(Math.sin(performance.now() / 420)) * 0.2;
+      else if (phase === 'listen' || awaiting) lvl = 0.15 + Math.abs(Math.sin(performance.now() / 420)) * 0.2;
       orb.current?.style.setProperty('--lvl', lvl.toFixed(3));
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [phase]);
+  }, [phase, awaiting]);
 
   useEffect(() => {
     log.current?.scrollTo({ top: log.current.scrollHeight, behavior: 'smooth' });
   }, [lines, heard]);
 
   async function ask(q: string) {
-    const question = q.replace(WAKE, ' ').trim() || q.trim();
+    const question = afterWake(q) || q.trim();
     if (!question) return;
     setErr('');
-    setOpen(true);
-    const history = linesRef.current.slice(-6).map(({ role, content }) => ({ role, content }));
+    setHeard('');
+    setAwaiting(false);
+    followUntil.current = 0;
+    const history = linesRef.current.slice(-8).map(({ role, content, done }) => ({ role, content: done?.length ? `${content} (Сделано: ${done.join('; ')})` : content }));
     setLines((l) => [...l, { role: 'user', content: question }]);
     setPhase('think');
     try {
-      const r = await fetch('/api/jarvis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: question, selectedId: getState().selectedId, history }) });
-      const data = (await r.json()) as { reply: string; actions: Action[]; llm: boolean; error?: string };
+      const s = getState();
+      const r = await fetch('/api/jarvis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control ? 'control' : 'chat', history }),
+      });
+      const data = (await r.json()) as { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
       if (!r.ok) throw new Error(data.error ?? 'нет ответа');
-      setLines((l) => [...l, { role: 'assistant', content: data.reply, llm: data.llm }]);
+      if (data.focus) focus.current = data.focus;
+      setLines((l) => [...l, { role: 'assistant', content: data.reply, llm: data.llm, done: data.done }]);
       runActions(data.actions ?? []);
-      if (jarvisPrefs.speak && getState().sound) void say(data.reply);
-      else setPhase('idle');
+      if (jarvisPrefs.speak) await say(data.reply);
+      setPhase('idle');
+      follow();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setPhase('idle');
     }
   }
+  const askRef = useRef(ask);
+  askRef.current = ask;
 
-  function listen() {
+  function micError(e: string) {
+    if (e === 'not-allowed' || e === 'service-not-allowed') {
+      setMicDenied(true);
+      setErr(window.isSecureContext ? 'Нет доступа к микрофону — разрешите его в адресной строке браузера.' : `Микрофон работает только по https — откройте https://${location.hostname}`);
+    } else if (e !== 'no-speech' && e !== 'aborted' && e !== 'network') setErr(`Микрофон: ${e}`);
+  }
+
+  // Разовое прослушивание (когда Джарвис не управляет экраном): нажали — сказали — ответ.
+  function listenOnce() {
     if (!RecCtor) {
       setOpen(true);
       setErr('Браузер не умеет распознавать речь — напишите вопрос (голос работает в Chrome и Edge).');
       return;
     }
-    if (phase === 'listen') {
-      rec.current?.stop();
-      return;
-    }
+    if (phase === 'listen') return rec.current?.stop();
     stopVoice();
-    wakeRec.current?.abort();
     setOpen(true);
     setErr('');
     setHeard('');
@@ -255,109 +395,150 @@ export function Jarvis() {
       }
       setHeard(final + interim);
     };
-    r.onerror = (e) => {
-      if (e.error === 'not-allowed') setErr('Нет доступа к микрофону — разрешите его в адресной строке.');
-      else if (e.error !== 'no-speech' && e.error !== 'aborted') setErr(`Микрофон: ${e.error}`);
-    };
+    r.onerror = (e) => micError(e.error);
     r.onend = () => {
       rec.current = null;
       setHeard('');
-      if (final.trim()) void ask(final);
+      if (final.trim()) void askRef.current(final);
       else setPhase((p) => (p === 'listen' ? 'idle' : p));
     };
     rec.current = r;
     setPhase('listen');
     r.start();
   }
-  const listenRef = useRef(listen);
-  listenRef.current = listen;
-  const askRef = useRef(ask);
-  askRef.current = ask;
 
-  // Горячая клавиша (по умолчанию V) — говорить с Джарвисом.
+  // Режим «управляет экраном»: слушаем всегда, пока Джарвис не думает и не говорит.
+  // Фраза со словом «Джарвис» — команда; после ответа несколько секунд можно продолжать без него.
   useEffect(() => {
-    const f = () => listenRef.current();
-    window.addEventListener('radar:jarvis', f);
-    return () => window.removeEventListener('radar:jarvis', f);
-  }, []);
-
-  // «Слушать всегда»: фраза, начинающаяся со слова «Джарвис», сразу уходит помощнику.
-  useEffect(() => {
-    if (!prefs.wake || !RecCtor || phase !== 'idle') return;
+    if (!control || !RecCtor || micDenied || phase === 'think' || phase === 'speak' || phase === 'listen') return;
     let alive = true;
+    let r: Rec | null = null;
     const start = () => {
       if (!alive) return;
-      const r = new RecCtor();
+      r = new RecCtor();
       r.lang = 'ru-RU';
       r.continuous = true;
-      r.interimResults = false;
+      r.interimResults = true;
       r.onresult = (e) => {
         for (let k = e.resultIndex; k < e.results.length; k++) {
           const t = e.results[k][0].transcript;
-          if (e.results[k].isFinal && WAKE.test(t)) {
+          const live = Date.now() < followUntil.current;
+          if (!e.results[k].isFinal) {
+            if (live || WAKE.test(t)) setHeard(afterWake(t));
+            continue;
+          }
+          if (live) {
+            if (t.trim().length < 2) continue;
             alive = false;
-            r.abort();
-            const rest = t.split(WAKE).slice(2).join(' ').trim();
-            if (rest.length > 2) void askRef.current(rest);
-            else listenRef.current();
+            r?.abort();
+            void askRef.current(t);
             return;
           }
+          if (WAKE.test(t)) {
+            const rest = afterWake(t);
+            if (rest.length > 2) {
+              alive = false;
+              r?.abort();
+              setOpen(true);
+              void askRef.current(rest);
+              return;
+            }
+            setOpen(true);
+            setHeard('');
+            follow(); // «Джарвис» — и пауза: слушаем команду
+          } else setHeard('');
         }
       };
       r.onerror = (e) => {
-        if (e.error === 'not-allowed') alive = false;
+        micError(e.error);
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') alive = false;
       };
-      r.onend = () => setTimeout(start, 300);
-      wakeRec.current = r;
+      r.onend = () => setTimeout(start, 250);
+      rec.current = r;
       try {
         r.start();
       } catch {
-        /* уже запущен */
+        /* уже слушает */
       }
     };
     start();
     return () => {
       alive = false;
-      wakeRec.current?.abort();
-      wakeRec.current = null;
+      r?.abort();
+      if (rec.current === r) rec.current = null;
     };
-  }, [prefs.wake, phase]);
+  }, [control, phase, micDenied]);
 
-  const label = { idle: canListen ? 'Нажмите и говорите' : 'Напишите вопрос', listen: 'Слушаю…', think: 'Думаю…', speak: 'Говорю…' }[phase];
+  // Нажали на шар или клавишу V.
+  function press() {
+    unlockJarvisAudio();
+    if (phase === 'speak') {
+      stopVoice();
+      setPhase('idle');
+      follow();
+      return;
+    }
+    setOpen(true);
+    if (control) {
+      if (micDenied) setMicDenied(false); // попробовать ещё раз после разрешения микрофона
+      follow(); // слушает и так — просто ждём команду без слова «Джарвис»
+    } else listenOnce();
+  }
+  const pressRef = useRef(press);
+  pressRef.current = press;
+  useEffect(() => {
+    const f = () => pressRef.current();
+    window.addEventListener('radar:jarvis', f);
+    return () => window.removeEventListener('radar:jarvis', f);
+  }, []);
+
+  const label =
+    phase === 'think' ? 'Думаю…' : phase === 'speak' ? 'Говорю… (нажмите, чтобы прервать)' : phase === 'listen' || awaiting ? 'Слушаю…' : control ? (micDenied ? 'Нет микрофона' : 'Скажите «Джарвис, …»') : canListen ? 'Нажмите и говорите' : 'Напишите вопрос';
   const last = [...lines].reverse().find((l) => l.role === 'assistant');
+  const suggest = control ? SUGGEST_CONTROL : SUGGEST_CHAT;
 
   return (
-    <div className={`jv jv-${phase} ${open ? 'jv-open' : ''}`}>
+    <div className={`jv jv-${phase} ${awaiting ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''}`}>
       {open && (
         <div className="jv-panel" role="dialog" aria-label="Джарвис — голосовой помощник">
           <div className="jv-head">
             <Bot size={16} />
             <b>Джарвис</b>
-            <span className={`jv-mode ${status?.llm ? 'on' : ''}`} title={status?.llm ? `Мозг: ${status.model}. Голос: ElevenLabs` : 'Без ключа OpenRouter: команды по правилам и голос браузера'}>
-              {status?.llm ? 'Claude + ElevenLabs' : 'по правилам'}
+            <span className={`jv-mode ${status?.llm ? 'on' : ''}`} title={status?.llm ? `Думает: ${status.model}. Говорит: живой голос через OpenRouter` : 'Без ключа OpenRouter: команды по правилам и голос браузера'}>
+              {status?.llm ? 'Claude + живой голос' : 'по правилам'}
             </span>
-            <button className="icon-btn" onClick={() => setJarvisPref('speak', !prefs.speak)} title={prefs.speak ? 'Отвечать голосом — вкл.' : 'Отвечать голосом — выкл.'} aria-label="Отвечать голосом">
-              {prefs.speak ? <Volume2 size={15} /> : <VolumeX size={15} />}
-            </button>
             <button
               className="icon-btn"
               onClick={() => {
-                stopVoice();
-                rec.current?.abort();
-                setPhase('idle');
+                if (!control) {
+                  stopVoice();
+                  rec.current?.abort();
+                  setPhase('idle');
+                }
                 setOpen(false);
               }}
-              aria-label="Закрыть"
+              aria-label={control ? 'Скрыть окно (Джарвис продолжит слушать)' : 'Закрыть'}
+              title={control ? 'Скрыть окно — Джарвис продолжит слушать. Выключается только в настройках.' : 'Закрыть'}
             >
               <X size={15} />
+            </button>
+          </div>
+          <div className="jv-flags">
+            <button className={`jv-flag ${control ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
+              {control ? <Lock size={12} /> : null}
+              {control ? 'управляет экраном · слушает всегда' : 'только ответы'}
+            </button>
+            <button className={`jv-flag ${prefs.speak ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
+              {prefs.speak ? <Volume2 size={12} /> : <VolumeX size={12} />}
+              {prefs.speak ? 'голос' : 'без голоса'}
             </button>
           </div>
           <div className="jv-log" ref={log}>
             {!lines.length && (
               <div className="jv-hello">
-                Спросите голосом или текстом.{prefs.wake ? ' Можно просто сказать «Джарвис, …».' : ''}
+                {control ? 'Скажите «Джарвис» и команду — или нажмите на шар и говорите.' : 'Спросите голосом или текстом.'}
                 <div className="jv-sug">
-                  {SUGGEST.map((s) => (
+                  {suggest.map((s) => (
                     <button key={s} className="chip" onClick={() => void ask(s)}>
                       {s}
                     </button>
@@ -366,8 +547,17 @@ export function Jarvis() {
               </div>
             )}
             {lines.map((l, k) => (
-              <div key={k} className={`jv-line ${l.role}`}>
+              <div key={k} className={`jv-line ${l.role} ${l.event ? 'event' : ''}`}>
                 {l.content}
+                {!!l.done?.length && (
+                  <span className="jv-done">
+                    {l.done.map((d, j) => (
+                      <span key={j}>
+                        <Check size={11} /> {d}
+                      </span>
+                    ))}
+                  </span>
+                )}
                 {l.role === 'assistant' && l.llm === false && <span className="jv-rule">по правилам</span>}
               </div>
             ))}
@@ -380,6 +570,7 @@ export function Jarvis() {
               </div>
             )}
             {err && <div className="jv-err">{err}</div>}
+            {note && <div className="jv-note">{note}</div>}
           </div>
           <form
             className="jv-input"
@@ -390,7 +581,7 @@ export function Jarvis() {
               void ask(q);
             }}
           >
-            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Например: что горит в Москве?" aria-label="Вопрос Джарвису" />
+            <input value={text} onChange={(e) => setText(e.target.value)} placeholder={control ? 'Например: открой входящие и объясни ситуацию' : 'Например: что горит в Москве?'} aria-label="Вопрос Джарвису" />
             <button type="submit" className="icon-btn" disabled={!text.trim() || phase === 'think'} aria-label="Отправить">
               <Send size={15} />
             </button>
@@ -398,30 +589,34 @@ export function Jarvis() {
         </div>
       )}
       {!open && last && phase === 'speak' && <div className="jv-sub">{last.content}</div>}
+      {!open && heard && <div className="jv-sub user">{heard}</div>}
       <div className="jv-dock">
-        {phase !== 'idle' && <span className="jv-label">{label}</span>}
+        {(phase !== 'idle' || awaiting || (control && !open)) && <span className="jv-label">{label}</span>}
         <button
           ref={orb}
           className="jv-orb"
-          onClick={() => (open ? listen() : (setOpen(true), canListen && listen()))}
+          onClick={press}
           onContextMenu={(e) => {
             e.preventDefault();
             setOpen((o) => !o);
           }}
-          title={`Джарвис — ${label}. Правая кнопка — показать/скрыть окно`}
+          title={`Джарвис — ${label}. Правая кнопка — показать или скрыть окно`}
           aria-label="Говорить с Джарвисом"
         >
           <span className="jv-core" />
           <span className="jv-ring r1" />
           <span className="jv-ring r2" />
-          <span className="jv-ico">{phase === 'listen' ? <MicOff size={18} /> : <Mic size={18} />}</span>
+          <span className="jv-ico">
+            <Mic size={18} />
+          </span>
+          {control && <span className="jv-live" aria-hidden />}
         </button>
       </div>
     </div>
   );
 }
 
-/** Раздел настроек: голос, озвучка ответов и событий, «слушать всегда». */
+/** Раздел настроек: две независимые функции — «управляет экраном» и «голос». */
 export function JarvisSettings() {
   const prefs = usePrefs();
   const [status, setStatus] = useState<Status | null>(null);
@@ -430,32 +625,54 @@ export function JarvisSettings() {
     <section>
       <h3>
         Джарвис — голосовой помощник
-        <span className={`jv-mode ${status?.llm ? 'on' : ''}`}>{status?.llm ? 'Claude + ElevenLabs' : 'по правилам, голос браузера'}</span>
+        <span className={`jv-mode ${status?.llm ? 'on' : ''}`}>{status?.llm ? 'Claude + живой голос' : 'по правилам, голос браузера'}</span>
       </h3>
-      <div className="jv-set">
-        <label>
-          Голос
-          <select value={prefs.voice} onChange={(e) => setJarvisPref('voice', e.target.value)} disabled={!status?.tts}>
-            {JARVIS_VOICES.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.name}
-              </option>
-            ))}
-          </select>
+
+      <div className={`jv-opt ${prefs.control ? 'on' : ''}`}>
+        <label className="jv-switch">
+          <input type="checkbox" checked={prefs.control} onChange={(e) => setJarvisPref('control', e.target.checked)} />
+          <span className="jv-knob" />
+          <b>Джарвис управляет экраном</b>
         </label>
-        <button className="btn btn-sm" onClick={() => void say('Добрый вечер, сэр. Все системы пункта в норме.')}>
-          Прослушать
-        </button>
+        <p className="muted">
+          Слушает всегда: скажите «Джарвис, открой входящие и объясни ситуацию», «кому можно дать?», «выдай». Открывает вкладки и инциденты, подсказывает и по команде передаёт, поручает коллеге, поднимает уровень, пишет в переписку. Пока включено, Джарвиса не выключить — только здесь.
+        </p>
+        {!canListen && <p className="jv-warn">Этот браузер не распознаёт речь — работает в Chrome и Edge.</p>}
+        {canListen && !window.isSecureContext && <p className="jv-warn">Микрофон работает только по https: https://{location.hostname}</p>}
       </div>
-      <label className="chk">
-        <input type="checkbox" checked={prefs.speak} onChange={(e) => setJarvisPref('speak', e.target.checked)} /> Отвечать голосом
-      </label>
-      <label className="chk">
-        <input type="checkbox" checked={prefs.announce} onChange={(e) => setJarvisPref('announce', e.target.checked)} /> Объявлять голосом критические инциденты
-      </label>
-      <label className="chk">
-        <input type="checkbox" checked={prefs.wake} disabled={!canListen} onChange={(e) => setJarvisPref('wake', e.target.checked)} /> Слушать всегда — отвечать на «Джарвис, …» {canListen ? '' : '(браузер не умеет)'}
-      </label>
+
+      <div className={`jv-opt ${prefs.speak ? 'on' : ''}`}>
+        <label className="jv-switch">
+          <input type="checkbox" checked={prefs.speak} onChange={(e) => setJarvisPref('speak', e.target.checked)} />
+          <span className="jv-knob" />
+          <b>Голос Джарвиса</b>
+        </label>
+        <p className="muted">Отвечает вслух: думает Claude, говорит живой голос — по умолчанию родной русский голос MiniMax, можно выбрать другой. Не зависит от звука сигналов.</p>
+        <div className={`jv-set ${prefs.speak ? '' : 'off'}`}>
+          <label>
+            Голос
+            <select value={prefs.voice} onChange={(e) => setJarvisPref('voice', e.target.value)} disabled={!status?.tts}>
+              {JARVIS_VOICES.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="btn btn-sm"
+            onClick={() => {
+              unlockJarvisAudio();
+              void say('Добрый вечер, сэр. Все системы пункта в норме.');
+            }}
+          >
+            Прослушать
+          </button>
+        </div>
+        <label className="chk">
+          <input type="checkbox" checked={prefs.announce} disabled={!prefs.speak} onChange={(e) => setJarvisPref('announce', e.target.checked)} /> Объявлять критические инциденты: что случилось и что советует ИИ
+        </label>
+      </div>
     </section>
   );
 }

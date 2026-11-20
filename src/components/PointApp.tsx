@@ -86,7 +86,7 @@ export function PointApp() {
           return (
             <span key={t.id} className="stage-wrap">
               {!t.flow && tabs[k - 1]?.flow && <span className="stage-gap" />}
-              <button className={`stab ${t.id === cur.id ? 'on' : ''} ${t.tone ?? ''}`} onClick={() => setTab(t.id)} aria-current={t.id === cur.id ? 'page' : undefined}>
+              <button data-tab={t.id} className={`stab ${t.id === cur.id ? 'on' : ''} ${t.tone ?? ''}`} onClick={() => setTab(t.id)} aria-current={t.id === cur.id ? 'page' : undefined}>
                 <t.icon size={15} />
                 <span>{t.label}</span>
                 {t.count !== undefined && <span key={t.count} className="stage-n num pop">{t.count}</span>}
@@ -162,6 +162,20 @@ function Seg<T extends string>({ value, onChange, items }: { value: T; onChange:
   );
 }
 
+/**
+ * Инцидент открыли извне (Джарвис, поиск, уведомление), а он не попадает в текущий фильтр — переключаем на «Все».
+ * Делаем это ещё до отрисовки списка (иначе список успеет выбрать свою первую строку), и только когда сменился
+ * выбранный инцидент — чтобы дежурный мог сам переключить фильтр обратно.
+ */
+function useScopeFollowsSelection(list: Incident[], all: Incident[], showAll: () => void) {
+  const selectedId = useStore((s) => s.selectedId);
+  const [seen, setSeen] = useState<string | null>(null);
+  if (selectedId !== seen) {
+    setSeen(selectedId);
+    if (selectedId && !list.some((i) => i.id === selectedId) && all.some((i) => i.id === selectedId)) showAll();
+  }
+}
+
 function InboxPage() {
   const me = useStore((s) => s.me)!;
   const incidents = useStore((s) => s.incidents);
@@ -172,6 +186,7 @@ function InboxPage() {
   const mine = at.filter((i) => i.coordinatorId === me.personId);
   const free = at.filter((i) => !i.coordinatorId);
   const list = scope === 'mine' ? mine : scope === 'free' ? free : at;
+  useScopeFollowsSelection(list, at, () => setScope('all'));
   return (
     <ListWithCard
       list={list}
@@ -207,6 +222,7 @@ function TeamsPage() {
   const at = [...incidents.values()].filter((i) => i.status === 'assigned' || i.status === 'in_progress').sort((a, b) => urgency(b, now) - urgency(a, now));
   const mine = at.filter((i) => i.coordinatorId === me.personId);
   const list = scope === 'mine' ? mine : at;
+  useScopeFollowsSelection(list, at, () => setScope('all'));
   const flagged = new Set([...signals.values()].filter((s) => s.status !== 'closed').map((s) => s.incidentId));
   return (
     <ListWithCard
