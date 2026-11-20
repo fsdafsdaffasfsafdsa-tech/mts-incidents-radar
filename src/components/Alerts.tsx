@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { CheckCircle2, Flame, Info, TriangleAlert, Users, X } from 'lucide-react';
-import { act, dismissToast, select, useStore, type ToastKind } from '../store';
+import { dismissToast, select, useStore, type ToastKind } from '../store';
 import { fmtAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
 
@@ -30,16 +30,6 @@ export function Toasts() {
                   >
                     Открыть
                   </button>
-                  {t.kind === 'p1' && (
-                    <button
-                      onClick={() => {
-                        void act(t.incidentId!, 'ack');
-                        dismissToast(t.id);
-                      }}
-                    >
-                      Взять на контроль
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -54,43 +44,37 @@ export function Toasts() {
   );
 }
 
-/** Полоса под шапкой: непросмотренные P1. Не мигает, но не даёт забыть. */
+/** Полоса под шапкой: критические без дежурного и предложения ИИ поднять до «Наивысшего». */
 export function CriticalBanner() {
   const incidents = useStore((s) => s.incidents);
-  const systems = useStore((s) => s.systems);
   const now = useNow(5000);
-  const unack = useMemo(
+  const urgent = useMemo(
     () =>
       [...incidents.values()]
-        .filter((i) => i.priority === 'P1' && i.status !== 'resolved' && !i.acknowledged)
+        .filter((i) => i.status !== 'resolved' && ((i.priority === 'P1' && !i.coordinatorId && i.status === 'coordinators') || i.p1Proposal))
         .sort((a, b) => b.createdAt - a.createdAt),
     [incidents],
   );
 
   useEffect(() => {
-    const base = 'Радар инцидентов';
-    document.title = unack.length ? `(${unack.length}) P1 без внимания · ${base}` : base;
-  }, [unack.length]);
+    const base = 'Координирующий пункт';
+    document.title = urgent.length ? `(${urgent.length}) требует решения · ${base}` : base;
+  }, [urgent.length]);
 
-  if (!unack.length) return null;
-  const first = unack[0];
-  const sys = systems.find((s) => s.id === first.systemId)?.short;
+  if (!urgent.length) return null;
+  const first = urgent[0];
   return (
     <div className="crit-banner" role="alert">
       <span className="crit-pulse" aria-hidden />
-      <b>P1 без внимания</b>
-      <span className="crit-sys">{sys}</span>
+      <b>{first.p1Proposal ? 'ИИ предлагает «Наивысший»' : 'Критический без дежурного'}</b>
       <button className="crit-title" onClick={() => select(first.id)}>
         {first.title}
       </button>
       <span className="crit-age">{fmtAgo(now - first.createdAt)}</span>
-      {unack.length > 1 && <span className="crit-more">+{unack.length - 1} ещё</span>}
+      {urgent.length > 1 && <span className="crit-more">+{urgent.length - 1} ещё</span>}
       <span className="grow" />
-      <button className="crit-btn" onClick={() => select(first.id)}>
+      <button className="crit-btn solid" onClick={() => select(first.id)}>
         Открыть
-      </button>
-      <button className="crit-btn solid" onClick={() => void act(first.id, 'ack')}>
-        Взять на контроль
       </button>
     </div>
   );

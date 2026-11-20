@@ -1,16 +1,19 @@
-// Сервер: API, поток SSE и фронтенд на одном порту.
+// Сервер координирующего пункта: вход, API для четырёх кабинетов, поток SSE, фронтенд на одном порту.
 // Разработка: Vite в middleware-режиме с HMR. Прод (--prod): раздаём собранный dist/.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Incident, Insight, Intensity, ScenarioKind, ServerMessage, Snapshot, WorkMode } from '../shared/types.ts';
-import { COORDINATORS_GROUP, GROUPS, PRODUCTS, REGION_BOUNDS } from './catalog.ts';
-import { Sim } from './sim.ts';
-import { heuristicInsight } from './ai-heuristic.ts';
-import { aiStatus, handleLlmError, llmEnabled, refineWithClaude } from './ai-llm.ts';
-import { Persister, getMeta, loadState, openDb, resetState, setMeta } from './db.ts';
-import { currentUser, listAccounts, login, logout, seedUsers } from './auth.ts';
+import type { Me, PointMessage, PointSnapshot, Priority } from '../shared/types.ts';
+import { Point } from './point.ts';
+import { RULES } from './complaints.ts';
+import { POINT_ID, POINT_STAFF, PEOPLE, TEAMS, SERVICES, membersOf, teamById } from './directory.ts';
+import { REGIONS } from './regions.ts';
+import { routeTeams } from './ai-point.ts';
+import { assessRisk, buildContext } from './ai-heuristic.ts';
+import { aiStatus } from './ai-llm.ts';
+import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
+import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -22,122 +25,70 @@ try {
 
 const PROD = process.argv.includes('--prod');
 const PORT = Number(process.env.PORT || 5190);
-// Пароль демо-учёток задаётся в .env (см. .env.example); значение по умолчанию — только для локального запуска.
-const DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'radar-demo';
-const ITSM_URL = process.env.ITSM_URL || null; // шаблон ссылки, {id} заменяется номером инцидента
+// Пароль демо-учёток задаётся в .env (см. .env.example). Смена значения и перезапуск меняют пароль всем.
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD || '1234';
+const ITSM_URL = process.env.ITSM_URL || null;
+const MODEL = 'point-1'; // версия модели данных: при смене состояние пересобирается
 
 // ─── база и состояние ──────────────────────────────────────────────────────
 
 const db = openDb(path.resolve(root, process.env.DB_FILE || 'data/radar.db'));
-if (process.argv.includes('--reset')) resetState(db);
-const saved = loadState(db);
+if (process.argv.includes('--reset') || getMeta(db, 'model') !== MODEL) resetState(db);
+const saved = loadPoint(db);
 const savedShift = getMeta(db, 'shift');
-const sim = new Sim();
-sim.start(saved, saved && savedShift ? Number(savedShift) : undefined);
+const point = new Point();
+point.start(saved, saved && savedShift ? Number(savedShift) : undefined);
 const persister = new Persister(db);
 if (!saved) {
-  persister.saveAll(sim.incidents.values(), sim.workers, sim.feed);
-  setMeta(db, 'shift', String(sim.shift));
+  persister.saveAll(point.incidents.values(), [], point.feed, point.complaints);
+  setMeta(db, 'shift', String(point.shift));
+  setMeta(db, 'model', MODEL);
 }
-sim.onMessage((msg) => persister.track(msg));
-seedUsers(db, sim.workers, DEMO_PASSWORD);
+point.onMessage((m) => persister.track(m));
+seedUsers(
+  db,
+  PEOPLE.map((p) => ({ login: p.id, name: p.name, role: p.role, teamId: p.teamId })),
+  DEMO_PASSWORD,
+);
 
-// Выгрузка ITSM: рабочая копия data/incidents.json, при первом запуске — из набора данных ТЗ.
 const itsm = new ItsmFile(
   path.resolve(root, process.env.INCIDENTS_FILE || 'data/incidents.json'),
   path.join(root, 'data', 'character_problems.json'),
-  (records, initial) => sim.ingest(records, initial),
+  (records, initial) => point.ingest(records, initial),
 );
 itsm.start();
 
 // ─── SSE ───────────────────────────────────────────────────────────────────
 
-const clients = new Set<http.ServerResponse>();
-
-function send(res: http.ServerResponse, msg: ServerMessage) {
+const clients = new Map<http.ServerResponse, Me>();
+function send(res: http.ServerResponse, msg: PointMessage) {
   res.write(`data: ${JSON.stringify(msg)}\n\n`);
 }
-
-sim.onMessage((msg) => {
-  for (const res of clients) send(res, msg);
+point.onMessage((m) => {
+  for (const res of clients.keys()) send(res, m);
 });
 
-function snapshot(): Snapshot {
+function snapshot(me: Me): PointSnapshot {
+  const people = new Map(point.activePeople(me.teamId).map((p) => [p.id, p]));
+  if (me.teamId) for (const p of membersOf(me.teamId)) people.set(p.id, p);
   return {
     serverTime: Date.now(),
-    incidents: [...sim.incidents.values()],
-    feed: sim.feed.slice(0, 120),
-    systems: PRODUCTS.map(({ id, name, short, icon }) => ({ id, name, short, icon, dependsOn: [] })),
-    teams: GROUPS.map(({ id, name, short }) => ({ id, name, short, members: [], isCoordinators: id === COORDINATORS_GROUP })),
-    workers: sim.workers,
-    offices: sim.offices,
-    stats: sim.stats(),
-    intensity: sim.intensity,
+    incidents: [...point.incidents.values()],
+    complaints: point.complaints.filter((c) => Date.now() - c.at < 60 * 60_000),
+    clusters: point.clusters,
+    regions: REGIONS,
+    teams: TEAMS,
+    staff: POINT_STAFF,
+    people: [...people.values()].filter((p) => p.teamId !== POINT_ID),
+    load: Object.fromEntries(point.load()),
+    requests: [...point.requests.values()].filter((r) => r.status === 'pending' || Date.now() - r.at < 3 * 3_600_000),
+    signals: [...point.signals.values()],
+    feed: point.feed.slice(0, 120),
+    stats: point.stats(),
     ai: aiStatus(),
-    config: { itsmUrl: ITSM_URL, bounds: REGION_BOUNDS, source: itsm.status.error ? `ошибка в ${itsm.status.file}: ${itsm.status.error}` : itsm.status.file },
+    config: { itsmUrl: ITSM_URL, source: itsm.status.error ? `ошибка в ${itsm.status.file}: ${itsm.status.error}` : itsm.status.file, rules: RULES },
   };
 }
-
-// ─── ИИ-разбор: эвристика сразу, Claude — в фоне с кэшем ───────────────────
-
-const llmCache = new Map<string, { key: string; insight: Insight }>();
-const inFlight = new Set<string>();
-const llmQueue: string[] = [];
-const MAX_PARALLEL = 2;
-
-function versionKey(inc: Incident) {
-  return [inc.priority, inc.status, inc.teamId, inc.parentId, inc.relatedIds.length, inc.trend].join('|');
-}
-
-function insightFor(inc: Incident): Insight {
-  const base = heuristicInsight(inc, sim.ctx());
-  const cached = llmCache.get(inc.id);
-  if (cached && cached.key === versionKey(inc)) {
-    // Свежие цифры риска и SLA — из эвристики, тексты — от Claude.
-    return { ...cached.insight, risk: { ...cached.insight.risk, minutesToBreach: base.risk.minutesToBreach, factors: base.risk.factors }, correlation: base.correlation };
-  }
-  if (llmEnabled() && inc.status !== 'resolved') {
-    enqueueLlm(inc.id);
-    return { ...base, pendingLlm: true };
-  }
-  return base;
-}
-
-function enqueueLlm(id: string) {
-  if (inFlight.has(id) || llmQueue.includes(id)) return;
-  llmQueue.push(id);
-  pumpLlm();
-}
-
-function pumpLlm() {
-  while (inFlight.size < MAX_PARALLEL && llmQueue.length) {
-    const id = llmQueue.shift()!;
-    const inc = sim.incidents.get(id);
-    if (!inc) continue;
-    inFlight.add(id);
-    const key = versionKey(inc);
-    const base = heuristicInsight(inc, sim.ctx());
-    const related = (base.correlation?.ids ?? []).map((r) => sim.incidents.get(r)).filter(Boolean) as Incident[];
-    refineWithClaude(inc, base, related)
-      .then((insight) => {
-        llmCache.set(id, { key, insight });
-        for (const res of clients) send(res, { type: 'insight', data: insight });
-      })
-      .catch((err) => {
-        handleLlmError(err);
-        for (const res of clients) send(res, { type: 'insight', data: { ...base, pendingLlm: false } });
-      })
-      .finally(() => {
-        inFlight.delete(id);
-        pumpLlm();
-      });
-  }
-}
-
-// Новые P1 разбираем через Claude сразу, не дожидаясь клика.
-sim.onMessage((msg) => {
-  if (msg.type === 'feed' && msg.data.kind === 'p1' && llmEnabled()) enqueueLlm(msg.data.incidentId);
-});
 
 // ─── HTTP ──────────────────────────────────────────────────────────────────
 
@@ -146,7 +97,7 @@ function json(res: http.ServerResponse, code: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req: http.IncomingMessage): Promise<any> {
+async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -158,111 +109,177 @@ async function readBody(req: http.IncomingMessage): Promise<any> {
   return raw ? JSON.parse(raw) : {};
 }
 
-const INTENSITIES: Intensity[] = ['calm', 'normal', 'storm'];
-const SCENARIOS: ScenarioKind[] = ['mass_outage', 'field_wave', 'coord_flood'];
+class Forbidden extends Error {}
+const str = (v: unknown) => (typeof v === 'string' ? v : v == null ? '' : String(v));
+const PRIOS: Priority[] = ['P1', 'P2', 'P3', 'P4'];
 
 async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
   const p = url.pathname;
+  const post = req.method === 'POST';
   try {
-    // ─── вход ───
-    if (p === '/api/health') return json(res, 200, { ok: true, incidents: sim.incidents.size, clients: clients.size, ai: aiStatus(), source: itsm.status });
-    if (p === '/api/accounts' && req.method === 'GET') return json(res, 200, listAccounts(db));
-    if (p === '/api/login' && req.method === 'POST') {
+    // ─── без входа: вход и поиск себя на экране входа ───
+    if (p === '/api/health') return json(res, 200, { ok: true, incidents: point.incidents.size, complaints: point.complaints.length, teams: TEAMS.length, people: PEOPLE.length, clients: clients.size, source: itsm.status });
+    if (p === '/api/accounts') {
+      const role = str(url.searchParams.get('role')) as Me['role'];
+      return json(res, 200, findAccounts(db, role, str(url.searchParams.get('q')), url.searchParams.get('team')));
+    }
+    if (p === '/api/login-people') {
+      // Для экрана входа: имя, команда и график (без паролей), чтобы сразу видеть, кто сейчас на смене.
+      const role = str(url.searchParams.get('role'));
+      const team = url.searchParams.get('team');
+      const q = str(url.searchParams.get('q')).toLowerCase().trim();
+      const list = PEOPLE.filter((x) => x.role === role && (!team || x.teamId === team || x.teams?.includes(team)) && (!q || x.name.toLowerCase().includes(q) || x.id.includes(q))).slice(0, 60);
+      return json(res, 200, list.map((x) => ({ ...x, teamName: teamById(x.teamId)?.name ?? '' })));
+    }
+    if (p === '/api/login-teams') {
+      const q = str(url.searchParams.get('q')).toLowerCase().trim();
+      const list = TEAMS.filter((t) => t.id !== POINT_ID && (!q || t.name.toLowerCase().includes(q))).slice(0, 30);
+      return json(res, 200, list.map((t) => ({ id: t.id, name: t.name, schedule: t.schedule })));
+    }
+    if (p === '/api/login' && post) {
       const body = await readBody(req);
       try {
-        const { me, cookie } = login(db, req, String(body.login ?? ''), String(body.password ?? ''));
+        const { me, cookie } = login(db, req, str(body.login), str(body.password));
         res.setHeader('Set-Cookie', cookie);
         return json(res, 200, me);
       } catch (err) {
         return json(res, 401, { error: err instanceof Error ? err.message : String(err) });
       }
     }
-    if (p === '/api/logout' && req.method === 'POST') {
+    if (p === '/api/logout' && post) {
       res.setHeader('Set-Cookie', logout(db, req));
       return json(res, 200, { ok: true });
     }
     const me = currentUser(db, req);
     if (p === '/api/me') return me ? json(res, 200, me) : json(res, 401, { error: 'Нужно войти' });
     if (!me) return json(res, 401, { error: 'Нужно войти' });
-    const coordinatorOnly = () => {
-      if (me.role !== 'coordinator') throw new Forbidden('Только для координатора');
+    const atPoint = me.role === 'coordinator' || me.role === 'commander';
+    const pointOnly = () => {
+      if (!atPoint) throw new Forbidden('Только для координирующего пункта');
     };
+    const actor = me.name;
+    const pid = me.personId ?? me.login;
 
     if (p === '/api/stream' && req.method === 'GET') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
       res.write('retry: 2000\n\n');
-      send(res, { type: 'snapshot', data: snapshot() });
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
+      send(res, { type: 'snapshot', data: snapshot(me) });
+      clients.set(res, me);
+      point.setOnline(me.personId, 1);
+      req.on('close', () => {
+        clients.delete(res);
+        point.setOnline(me.personId, -1);
+      });
       return;
     }
-    if (p === '/api/snapshot') return json(res, 200, snapshot());
 
-    let m = p.match(/^\/api\/incidents\/([\w-]+)\/insight$/);
-    if (m && req.method === 'GET') {
-      const inc = sim.incidents.get(m[1]);
+    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve)$/);
+    if (m) {
+      const [, id, what] = m;
+      const inc = point.incidents.get(id);
       if (!inc) return json(res, 404, { error: 'Инцидент не найден' });
-      return json(res, 200, insightFor(inc));
-    }
-    m = p.match(/^\/api\/incidents\/([\w-]+)\/action$/);
-    if (m && req.method === 'POST') {
-      coordinatorOnly();
+      if (what === 'route' && !post) {
+        const ctx = point.ctx();
+        return json(res, 200, { picks: routeTeams(inc, ctx, 6), risk: assessRisk(inc, buildContext(point.incidents, ctx.now)) });
+      }
+      if (what === 'complaints') return json(res, 200, point.complaints.filter((c) => c.incidentId === id).slice(-150));
+      pointOnly();
       const body = await readBody(req);
-      const inc = sim.act(m[1], String(body.type), { ...body, actor: me.name });
-      return json(res, 200, inc);
+      if (what === 'route') return json(res, 200, point.route(id, str(body.teamId), actor));
+      if (what === 'level') {
+        const pr = str(body.priority) as Priority;
+        if (!PRIOS.includes(pr)) throw new Error('Неизвестный уровень');
+        return json(res, 200, point.setLevel(id, pr, actor, str(body.reason)));
+      }
+      if (what === 'p1') return json(res, 200, body.confirm ? point.setLevel(id, 'P1', actor, 'подтверждено дежурным по предложению ИИ') : point.dismissP1(id, actor));
+      if (what === 'resolve') return json(res, 200, point.resolveAtPoint(id, actor));
     }
-    m = p.match(/^\/api\/workers\/([\w.-]+)$/);
-    if (m && req.method === 'POST') {
-      // Сотрудник управляет только своим кабинетом.
-      if (me.role !== 'coordinator' && me.workerId !== m[1]) throw new Forbidden('Это не ваш кабинет');
+
+    if (p === '/api/point/assign' && post) {
+      pointOnly();
       const body = await readBody(req);
-      return json(res, 200, sim.workerAct(m[1], body));
+      const target = str(body.personId) || pid;
+      if (me.role === 'coordinator' && target !== pid) throw new Forbidden('Распределяет командир смены');
+      return json(res, 200, point.assignCoordinator(str(body.incidentId), target, actor));
     }
-    if (p === '/api/plan' && req.method === 'GET') {
-      coordinatorOnly();
-      const mode = url.searchParams.get('mode') === 'offline' ? 'offline' : ('online' satisfies WorkMode);
-      return json(res, 200, sim.plan(mode));
-    }
-    if (p === '/api/bulk-assign' && req.method === 'POST') {
-      coordinatorOnly();
+    if (p === '/api/point/plan') {
+      if (me.role !== 'commander') throw new Forbidden('Только для командира смены');
+      if (!post) return json(res, 200, point.planPoint());
       const body = await readBody(req);
-      const items = Array.isArray(body.items) ? body.items : [];
-      const n = sim.bulkAssign(items, me.name);
-      return json(res, 200, { assigned: n });
+      return json(res, 200, { assigned: point.applyPointPlan(Array.isArray(body.items) ? body.items : [], actor) });
     }
-    if (p === '/api/events' && req.method === 'GET') {
-      coordinatorOnly();
-      const id = url.searchParams.get('incident');
-      const rows = id
-        ? db.prepare('SELECT at, kind, actor, text FROM events WHERE incident_id = ? ORDER BY at DESC LIMIT 100').all(id)
-        : db.prepare('SELECT at, kind, incident_id, actor, text FROM events ORDER BY at DESC LIMIT 200').all();
-      return json(res, 200, rows);
+    m = p.match(/^\/api\/clusters\/(.+)\/create$/);
+    if (m && post) {
+      pointOnly();
+      return json(res, 200, point.createFromCluster(decodeURIComponent(m[1]), actor));
     }
-    if (p.startsWith('/api/demo/')) coordinatorOnly();
-    if (p === '/api/demo/intensity' && req.method === 'POST') {
+    m = p.match(/^\/api\/signals\/([\w-]+)\/(notify|close)$/);
+    if (m && post) {
+      pointOnly();
+      return json(res, 200, m[2] === 'notify' ? point.notifyLead(m[1], actor) : point.closeSignal(m[1], actor));
+    }
+    m = p.match(/^\/api\/requests\/([\w-]+)$/);
+    if (m && post) {
+      pointOnly();
       const body = await readBody(req);
-      if (!INTENSITIES.includes(body.level)) return json(res, 400, { error: 'Неизвестный режим' });
-      sim.setIntensity(body.level);
-      return json(res, 200, { ok: true });
+      return json(res, 200, point.resolveRequest(m[1], !!body.approve, actor, str(body.teamId) || undefined, str(body.comment) || undefined));
     }
-    if (p === '/api/demo/scenario' && req.method === 'POST') {
+
+    // ─── команда ───
+    m = p.match(/^\/api\/team\/(take|assign|resolve|release|transfer|help|report)$/);
+    if (m && post) {
+      if (atPoint) throw new Forbidden('Это действие команды');
       const body = await readBody(req);
-      if (!SCENARIOS.includes(body.kind)) return json(res, 400, { error: 'Неизвестный сценарий' });
-      sim.scenario(body.kind);
-      return json(res, 200, { ok: true });
+      const id = str(body.incidentId);
+      switch (m[1]) {
+        case 'take':
+          return json(res, 200, point.take(id, pid));
+        case 'assign':
+          if (me.role !== 'lead') throw new Forbidden('Назначает руководитель команды');
+          return json(res, 200, point.leadAssign(id, str(body.personId), actor));
+        case 'resolve':
+          return json(res, 200, point.resolveByTeam(id, pid, str(body.solution) || null));
+        case 'release':
+          return json(res, 200, point.release(id, pid));
+        case 'transfer':
+          return json(res, 200, point.requestTransfer(id, pid, str(body.toTeamId) || null, str(body.reason)));
+        case 'help':
+          return json(res, 200, point.help(id, pid, str(body.text) || 'Нужна помощь'));
+        case 'report':
+          return json(res, 200, point.report(pid, str(body.toTeamId), str(body.text)));
+      }
+    }
+    if (p === '/api/me/away' && post) {
+      const body = await readBody(req);
+      return json(res, 200, point.setAway(pid, !!body.away));
+    }
+    m = p.match(/^\/api\/teams\/([\w-]+)$/);
+    if (m) {
+      const team = teamById(m[1]);
+      if (!team) return json(res, 404, { error: 'Нет такой команды' });
+      return json(res, 200, { team, members: membersOf(team.id) });
+    }
+
+    // ─── демо ───
+    if (p === '/api/demo/outage' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      const service = SERVICES.find((s) => s.name === str(body.service))?.name;
+      const regions = (Array.isArray(body.regionIds) ? body.regionIds : []).map(str).filter((r) => REGIONS.some((x) => x.id === r));
+      if (!service || !regions.length) throw new Error('Укажите сервис и регион');
+      return json(res, 200, point.outage(service, regions, Number(body.minutes) || 6, Number(body.perSec) || 0.5));
+    }
+    if (p === '/api/demo/auto' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      point.stream.auto = !!body.on;
+      return json(res, 200, { auto: point.stream.auto });
     }
     return json(res, 404, { error: 'Нет такого метода' });
   } catch (err) {
     return json(res, err instanceof Forbidden ? 403 : 400, { error: err instanceof Error ? err.message : String(err) });
   }
 }
-
-class Forbidden extends Error {}
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -275,7 +292,7 @@ const MIME: Record<string, string> = {
   '.json': 'application/json',
 };
 
-function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+function serveStatic(res: http.ServerResponse, url: URL) {
   const dist = path.join(root, 'dist');
   let file = path.normalize(path.join(dist, decodeURIComponent(url.pathname)));
   if (!file.startsWith(dist)) {
@@ -289,7 +306,6 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, url: U
     'Cache-Control': url.pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
   });
   fs.createReadStream(file).pipe(res);
-  void req;
 }
 
 let viteMiddlewares: ((req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void) | null = null;
@@ -303,17 +319,12 @@ const server = http.createServer((req, res) => {
       res.end();
     });
   }
-  serveStatic(req, res, url);
+  serveStatic(res, url);
 });
 
 if (!PROD) {
   const { createServer } = await import('vite');
-  const vite = await createServer({
-    root,
-    configFile: path.join(root, 'vite.config.ts'),
-    server: { middlewareMode: true, hmr: { server } },
-    appType: 'spa',
-  });
+  const vite = await createServer({ root, configFile: path.join(root, 'vite.config.ts'), server: { middlewareMode: true, hmr: { server } }, appType: 'spa' });
   viteMiddlewares = vite.middlewares;
 } else if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) {
   console.error('Нет собранного фронтенда: выполните npm run build');
@@ -321,17 +332,16 @@ if (!PROD) {
 }
 
 server.listen(PORT, () => {
-  const ai = aiStatus();
-  console.log(`\n  Радар инцидентов: http://localhost:${PORT}  (${PROD ? 'прод' : 'разработка'})`);
-  console.log(`  ИИ: ${ai.mode === 'claude' ? `Claude (${ai.model})` : 'эвристика'} — ${ai.reason}\n`);
+  console.log(`\n  Координирующий пункт: http://localhost:${PORT}  (${PROD ? 'прод' : 'разработка'})`);
+  console.log(`  Команд: ${TEAMS.length}, сотрудников: ${PEOPLE.length}\n`);
 });
 
 function shutdown() {
-  sim.stop();
+  point.stop();
   itsm.stop();
   persister.close();
   db.close();
-  for (const res of clients) res.end();
+  for (const res of clients.keys()) res.end();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();
 }

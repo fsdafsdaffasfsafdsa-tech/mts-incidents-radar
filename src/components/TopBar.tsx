@@ -1,47 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { FileJson, FlaskConical, LogOut, Monitor, Moon, Sun, Truck, Volume2, VolumeX } from 'lucide-react';
-import type { Intensity, ScenarioKind } from '../../shared/types';
-import { doLogout, runScenario, setIntensity, setScreen, toggleSound, toggleTheme, useStore, type Screen } from '../store';
-import { Initials } from './ui';
+import { useEffect, useRef, useState } from 'react';
+import { BookUser, FileJson, FlaskConical, LayoutDashboard, LogOut, Moon, Sun, Volume2, VolumeX } from 'lucide-react';
+import { demoAuto, demoOutage, doLogout, setView, teamName, toggleSound, toggleTheme, useStore } from '../store';
 import { fmtClockSec } from '../lib/format';
 import { useNow } from '../lib/hooks';
+import { Initials } from './ui';
+import { ROLE_TEXT } from './kit';
 
-const INTENSITY: { id: Intensity; label: string }[] = [
-  { id: 'calm', label: 'Спокойно' },
-  { id: 'normal', label: 'Норма' },
-  { id: 'storm', label: 'Шторм' },
-];
-
-const SCENARIOS: { id: ScenarioKind; title: string }[] = [
-  { id: 'mass_outage', title: 'Массовый сбой: главный + 3 дубля' },
-  { id: 'field_wave', title: 'Волна выездов в 4 городах' },
-  { id: 'coord_flood', title: '6 новых проблем без сотрудника' },
+const SCENARIOS: { title: string; service: string; regions: string[]; perSec: number }[] = [
+  { title: 'Нет мобильного интернета · Новосибирская обл.', service: 'Мобильный интернет', regions: ['nsk'], perSec: 0.8 },
+  { title: 'Не проходят звонки · Краснодарский край', service: 'Мобильная связь', regions: ['krd'], perSec: 0.7 },
+  { title: 'Мой МТС не открывается · Москва и Петербург', service: 'Мой МТС', regions: ['msk', 'spb'], perSec: 0.7 },
+  { title: 'Не проходит оплата · три региона (ИИ предложит P1)', service: 'Оплата и баланс', regions: ['msk', 'svr', 'tat'], perSec: 1.4 },
 ];
 
 export function TopBar() {
   const connected = useStore((s) => s.connected);
   const sound = useStore((s) => s.sound);
   const theme = useStore((s) => s.theme);
-  const intensity = useStore((s) => s.intensity);
-  const screen = useStore((s) => s.screen);
-  const incidents = useStore((s) => s.incidents);
+  const view = useStore((s) => s.view);
   const me = useStore((s) => s.me);
   const source = useStore((s) => s.config?.source ?? '');
+  const requests = useStore((s) => s.requests);
+  const signals = useStore((s) => s.signals);
   const now = useNow(1000);
-  const coord = me?.role === 'coordinator';
   const [demo, setDemo] = useState(false);
+  const [auto, setAuto] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
-
-  const waiting = useMemo(() => {
-    let online = 0;
-    let offline = 0;
-    for (const i of incidents.values()) {
-      if (i.status !== 'coordinators') continue;
-      if (i.mode === 'online') online++;
-      else offline++;
-    }
-    return { online, offline };
-  }, [incidents]);
+  const atPoint = me?.role === 'coordinator' || me?.role === 'commander';
+  const pending = [...requests.values()].filter((r) => r.status === 'pending').length + [...signals.values()].filter((s) => s.status === 'open').length;
 
   useEffect(() => {
     if (!demo) return;
@@ -50,11 +36,7 @@ export function TopBar() {
     return () => window.removeEventListener('mousedown', close);
   }, [demo]);
 
-  const tabs: { id: Screen; label: string; icon: typeof Monitor; badge?: number }[] = [
-    { id: 'online', label: 'Онлайн-центр', icon: Monitor, badge: waiting.online },
-    { id: 'offline', label: 'Офлайн-центр', icon: Truck, badge: waiting.offline },
-  ];
-
+  const main = me?.role === 'commander' ? 'Смена' : atPoint ? 'Пункт' : 'Моя команда';
   return (
     <header className="topbar">
       <div className="brand">
@@ -66,29 +48,25 @@ export function TopBar() {
           </g>
           <circle cx="16" cy="16" r="2.4" className="core" />
         </svg>
-        <div className="brand-name">Радар</div>
+        <div className="brand-name">{atPoint ? 'Координирующий пункт' : teamName(me?.teamId)}</div>
       </div>
 
       <nav className="nav" aria-label="Экраны">
-        {!coord && (
-          <span className="nav-me">
-            {me?.role === 'offline' ? <Truck size={16} /> : <Monitor size={16} />}
-            <span>{me?.role === 'offline' ? 'Выездной сотрудник' : 'Онлайн-сотрудник'}</span>
-          </span>
-        )}
-        {coord && tabs.map((t) => (
-          <button key={t.id} className={screen === t.id ? 'on' : ''} onClick={() => setScreen(t.id)} aria-current={screen === t.id ? 'page' : undefined}>
-            <t.icon size={16} />
-            <span>{t.label}</span>
-            {!!t.badge && <span className="nav-badge num">{t.badge}</span>}
-          </button>
-        ))}
+        <button className={view === 'main' ? 'on' : ''} onClick={() => setView('main')}>
+          <LayoutDashboard size={16} />
+          <span>{main}</span>
+          {atPoint && pending > 0 && <span className="nav-badge num">{pending}</span>}
+        </button>
+        <button className={view === 'directory' ? 'on' : ''} onClick={() => setView('directory')}>
+          <BookUser size={16} />
+          <span>Справочник команд</span>
+        </button>
       </nav>
 
       <div className="topbar-spacer" />
 
-      {coord && (
-        <span className={`src-chip ${source.startsWith('ошибка') ? 'bad' : ''}`} title={`Выгрузка ITSM: ${source}. Правка файла сразу видна на экране.`}>
+      {atPoint && (
+        <span className={`src-chip ${source.startsWith('ошибка') ? 'bad' : ''}`} title={`Выгрузка ITSM: ${source}`}>
           <FileJson size={14} />
           <span>{source.startsWith('ошибка') ? 'ошибка выгрузки' : 'ITSM'}</span>
         </span>
@@ -98,46 +76,58 @@ export function TopBar() {
         <span className="live-text">{connected ? 'LIVE' : 'нет связи'}</span>
       </div>
 
-      {coord && <div className="demo-wrap" ref={ref}>
-        <button className={`tb-btn ${demo ? 'active' : ''}`} onClick={() => setDemo((v) => !v)} title="Демо">
-          <FlaskConical size={16} />
-          <span>Демо</span>
-        </button>
-        {demo && (
-          <div className="popover demo-pop">
-            <div className="seg">
-              {INTENSITY.map((i) => (
-                <button key={i.id} className={intensity === i.id ? 'on' : ''} onClick={() => void setIntensity(i.id)}>
-                  {i.label}
+      {atPoint && (
+        <div className="demo-wrap" ref={ref}>
+          <button className={`tb-btn ${demo ? 'active' : ''}`} onClick={() => setDemo((v) => !v)} title="Демо: сбои">
+            <FlaskConical size={16} />
+            <span>Демо</span>
+          </button>
+          {demo && (
+            <div className="popover demo-pop">
+              <div className="demo-h">Устроить сбой — пойдут жалобы</div>
+              {SCENARIOS.map((s) => (
+                <button
+                  key={s.title}
+                  className="scenario"
+                  onClick={() => {
+                    demoOutage(s.service, s.regions, 7, s.perSec);
+                    setDemo(false);
+                  }}
+                >
+                  <b>{s.title}</b>
                 </button>
               ))}
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={auto}
+                  onChange={(e) => {
+                    setAuto(e.target.checked);
+                    demoAuto(e.target.checked);
+                  }}
+                />
+                случайные сбои раз в 3–7 минут
+              </label>
             </div>
-            {SCENARIOS.map((s) => (
-              <button
-                key={s.id}
-                className="scenario"
-                onClick={() => {
-                  void runScenario(s.id);
-                  setDemo(false);
-                }}
-              >
-                <b>{s.title}</b>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>}
+          )}
+        </div>
+      )}
       <button className={`tb-icon ${sound ? '' : 'muted'}`} onClick={toggleSound} aria-label="Звук">
         {sound ? <Volume2 size={17} /> : <VolumeX size={17} />}
       </button>
       <button className="tb-icon" onClick={toggleTheme} aria-label="Тема">
         {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
       </button>
-      <div className="clock num">{fmtClockSec(now)}</div>
+      <div className="clock num" title="Московское время">
+        {fmtClockSec(now)} <span className="muted">МСК</span>
+      </div>
       {me && (
         <div className="user-chip" title={`${me.name} · ${me.login}`}>
           <Initials name={me.name} />
-          <span className="user-name">{me.name}</span>
+          <span className="user-name">
+            {me.name}
+            <span className="muted">{ROLE_TEXT[me.role]}</span>
+          </span>
           <button className="tb-icon" onClick={() => void doLogout()} aria-label="Выйти" title="Выйти">
             <LogOut size={16} />
           </button>

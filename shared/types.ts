@@ -85,8 +85,19 @@ export interface Incident {
   isDouble: boolean;
   isEffect: boolean; // причина дочерних
   isReason: boolean; // дочерний
-  origin: 'dataset' | 'stream';
+  origin: 'dataset' | 'stream' | 'complaints';
   takenAt: number | null; // координатор взял на контроль
+  // ─── координирующий пункт ───
+  coordinatorId?: string | null; // дежурный пункта, который ведёт инцидент
+  coordinatorName?: string | null;
+  regionId?: string | null; // где возник (для инцидентов из жалоб)
+  regionIds?: string[];
+  regionName?: string | null;
+  complaints?: number; // привязано жалоб
+  complaintsSeries?: number[]; // жалоб за каждые 5 минут, последние 12 точек
+  levelLog?: LevelChange[];
+  p1Proposal?: string | null; // ИИ предлагает «Наивысший», ждёт подтверждения человеком
+  leadNotifiedAt?: number | null;
   startedAt: number | null;
   priority: Priority;
   status: Status;
@@ -130,7 +141,10 @@ export type FeedKind =
   | 'resolved'
   | 'linked'
   | 'crew'
-  | 'comment';
+  | 'comment'
+  | 'routed'
+  | 'request'
+  | 'signal';
 
 export interface FeedEvent {
   id: string;
@@ -169,13 +183,177 @@ export interface PlanItem {
   etaMin: number | null;
 }
 
-export type Role = 'coordinator' | 'online' | 'offline';
+/** coordinator — дежурный пункта, commander — командир смены пункта, engineer — сотрудник команды, lead — руководитель команды. */
+export type Role = 'coordinator' | 'commander' | 'engineer' | 'lead';
 export interface Me {
   login: string;
   name: string;
   role: Role;
-  workerId: string | null;
+  personId: string | null;
+  teamId: string | null;
 }
+
+// ─── Координирующий пункт: регионы, команды, люди, жалобы, запросы ─────────
+
+export type ScheduleKindT = '24/7' | '8-22' | '5/2';
+
+export interface Region {
+  id: string;
+  name: string;
+  district: string; // код ФО: cfo, szfo, yufo, skfo, pfo, ufo, sfo, dfo
+  city: string;
+  lat: number;
+  lon: number;
+  tz: number; // UTC+N
+  weight: number; // доля абонентов, для фона жалоб
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  direction: string; // направление: «Радиосеть», «Биллинг» …
+  kind: string; // код направления: ran, fix, l2, dev …
+  services: string[]; // какие сервисы абонентов обслуживает
+  regionId: string | null;
+  district: string | null;
+  schedule: ScheduleKindT;
+  tz: number;
+  leadId: string | null;
+  backupId: string | null; // дежурная смена, если команда сейчас не работает
+  size: number;
+  itsm?: boolean; // группа из выгрузки ITSM
+}
+
+export interface Person {
+  id: string; // = логин
+  name: string;
+  teamId: string;
+  role: 'engineer' | 'lead' | 'coordinator' | 'commander';
+  schedule: ScheduleKindT;
+  crew: number;
+  tz: number;
+  spec?: string; // специализация дежурного пункта: Сеть, ИТ-продукты, B2B
+  teams?: string[]; // ещё в каких командах состоит (бывает у людей из выгрузки ITSM)
+  away?: boolean; // отошёл (перерыв)
+}
+
+export interface Complaint {
+  id: string;
+  at: number;
+  regionId: string;
+  lat: number;
+  lon: number;
+  service: string;
+  channel: string;
+  text: string;
+  b2b: boolean;
+  incidentId: string | null;
+}
+
+export interface LevelChange {
+  at: number;
+  from: Priority;
+  to: Priority;
+  reason: string;
+  auto: boolean;
+}
+
+/** Команда пишет в пункт: «это не наше — передайте команде X» или «у команды X проблема». */
+export interface TeamRequest {
+  id: string;
+  at: number;
+  kind: 'transfer' | 'report';
+  incidentId: string | null;
+  fromTeamId: string;
+  fromPersonId: string;
+  toTeamId: string | null;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  aiNote: string;
+  aiTeamId: string | null;
+  doneAt?: number;
+  doneBy?: string;
+  comment?: string;
+}
+
+/** Сигнал пункту: сотрудник просит помощи или ИИ видит, что инцидент застрял. */
+export interface Signal {
+  id: string;
+  at: number;
+  kind: 'help' | 'stuck';
+  incidentId: string;
+  personId: string | null;
+  teamId: string | null;
+  text: string;
+  status: 'open' | 'notified' | 'closed';
+  notifiedAt?: number;
+  notifiedBy?: string;
+}
+
+/** Подбор команды для инцидента. */
+export interface TeamPick {
+  teamId: string;
+  score: number; // 0–100
+  reasons: string[];
+  onDuty: boolean;
+  onDutyCount: number;
+  load: number;
+  backupFor?: string | null; // предложена как дежурная замена этой команды
+}
+
+/** Кластер жалоб, который ещё не стал инцидентом. */
+export interface Cluster {
+  key: string;
+  service: string;
+  regionId: string;
+  count: number; // за 10 минут
+  expected: number;
+  pValue: number;
+}
+
+export interface PointSnapshot {
+  serverTime: number;
+  incidents: Incident[];
+  complaints: Complaint[];
+  clusters: Cluster[];
+  regions: Region[];
+  teams: Team[];
+  staff: Person[]; // люди пункта
+  people: Person[]; // люди команд, с которыми сейчас есть работа, и своя команда
+  load: Record<string, number>; // открытых инцидентов у команды
+  requests: TeamRequest[];
+  signals: Signal[];
+  feed: FeedEvent[];
+  stats: Stats;
+  ai: AiStatus;
+  config: { itsmUrl: string | null; source: string; rules: EscalationRules };
+}
+
+export interface EscalationRules {
+  windowMin: number;
+  p3: number;
+  p2: number;
+  p2multi: number;
+  p1: number;
+  p1regions: number;
+  ceiling: Priority;
+  gapMin: number;
+}
+
+export type PointMessage =
+  | { type: 'snapshot'; data: PointSnapshot }
+  | { type: 'incident'; data: Incident }
+  | { type: 'remove'; data: { id: string } }
+  | { type: 'complaints'; data: Complaint[] }
+  | { type: 'clusters'; data: Cluster[] }
+  | { type: 'request'; data: TeamRequest }
+  | { type: 'signal'; data: Signal }
+  | { type: 'people'; data: Person[] }
+  | { type: 'load'; data: Record<string, number> }
+  | { type: 'feed'; data: FeedEvent }
+  | { type: 'stats'; data: Stats }
+  | { type: 'tick'; data: { serverTime: number } }
+  | { type: 'insight'; data: Insight };
 
 export type WorkerStatus = 'free' | 'busy' | 'break' | 'enroute' | 'onsite';
 

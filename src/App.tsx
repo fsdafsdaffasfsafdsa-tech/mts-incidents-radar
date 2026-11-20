@@ -3,8 +3,10 @@ import { WifiOff } from 'lucide-react';
 import { checkAuth, select, useStore } from './store';
 import { unlockAudio } from './lib/sound';
 import { TopBar } from './components/TopBar';
-import { OfflineCenter, OnlineCenter } from './components/Center';
-import { Cabinet } from './components/Cabinet';
+import { PointScreen } from './components/PointScreen';
+import { CommanderScreen } from './components/CommanderScreen';
+import { TeamScreen } from './components/TeamScreen';
+import { Directory } from './components/Directory';
 import { CriticalBanner, Toasts } from './components/Alerts';
 import { Login } from './components/Login';
 
@@ -12,10 +14,10 @@ export function App() {
   const theme = useStore((s) => s.theme);
   const me = useStore((s) => s.me);
   const authChecked = useStore((s) => s.authChecked);
-  const screen = useStore((s) => s.screen);
+  const view = useStore((s) => s.view);
   const connected = useStore((s) => s.connected);
   const everConnected = useStore((s) => s.everConnected);
-  const loaded = useStore((s) => s.workers.length > 0);
+  const loaded = useStore((s) => s.teams.length > 0);
 
   useEffect(() => {
     void checkAuth();
@@ -35,14 +37,12 @@ export function App() {
 
   if (!authChecked) return <div className="boot full"><span className="boot-ring" /></div>;
   if (!me) return <Login />;
-
-  const coord = me.role === 'coordinator';
-  const view = coord ? (screen === 'offline' ? 'offline' : 'online') : 'cabinet';
+  const atPoint = me.role === 'coordinator' || me.role === 'commander';
 
   return (
-    <div className={`app screen-${view} role-${me.role}`}>
+    <div className={`app role-${me.role} view-${view}`}>
       <TopBar />
-      {coord && <CriticalBanner />}
+      {atPoint && <CriticalBanner />}
       {!connected && everConnected && (
         <div className="offline">
           <WifiOff size={14} /> Нет связи с сервером — переподключаемся.
@@ -54,12 +54,14 @@ export function App() {
             <span className="boot-ring" />
             Подключаемся…
           </div>
-        ) : view === 'online' ? (
-          <OnlineCenter />
-        ) : view === 'offline' ? (
-          <OfflineCenter />
+        ) : view === 'directory' ? (
+          <Directory />
+        ) : me.role === 'commander' ? (
+          <CommanderScreen />
+        ) : me.role === 'coordinator' ? (
+          <PointScreen />
         ) : (
-          <Cabinet />
+          <TeamScreen />
         )}
       </div>
       <Toasts />

@@ -16,5 +16,24 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["src", "server", "shared", "vite.config.ts"]
+  "include": ["src", "server", "shared", "vite.config.ts"],
+  // Экраны прошлой версии (онлайн/офлайн-центр, выезды) — не подключены к приложению, ждут решения об удалении.
+  "exclude": [
+    "src/components/AiPanel.tsx",
+    "src/components/Cabinet.tsx",
+    "src/components/Center.tsx",
+    "src/components/Feed.tsx",
+    "src/components/IncidentSheet.tsx",
+    "src/components/Kpis.tsx",
+    "src/components/MapCanvas.tsx",
+    "src/components/MapView.tsx",
+    "src/components/Queue.tsx",
+    "src/components/RoutingModal.tsx",
+    "src/components/SysIcon.tsx",
+    "src/components/Views.tsx",
+    "src/components/bits.tsx",
+    "src/lib/folders.ts",
+    "src/lib/queue.ts",
+    "server/sim.ts"
+  ]
 }

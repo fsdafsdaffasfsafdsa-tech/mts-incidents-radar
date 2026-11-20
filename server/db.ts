@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { FeedEvent, Incident, ServerMessage, Worker } from '../shared/types.ts';
+import type { Complaint, FeedEvent, Incident, PointMessage, ServerMessage, Signal, TeamRequest, Worker } from '../shared/types.ts';
 
 export type Db = DatabaseSync;
 
@@ -13,20 +13,7 @@ export function openDb(file: string): Db {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA busy_timeout = 3000;
-    CREATE TABLE IF NOT EXISTS users (
-      login      TEXT PRIMARY KEY,
-      name       TEXT NOT NULL,
-      role       TEXT NOT NULL CHECK (role IN ('coordinator', 'online', 'offline')),
-      worker_id  TEXT,
-      pass_hash  TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash TEXT PRIMARY KEY,
-      login      TEXT NOT NULL REFERENCES users(login) ON DELETE CASCADE,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL
-    );
+    -- users и sessions создаёт auth.ts (ensureUsersTable): там же переход со старой схемы.
     CREATE TABLE IF NOT EXISTS incidents (
       id         TEXT PRIMARY KEY,
       mode       TEXT NOT NULL,
@@ -51,6 +38,22 @@ export function openDb(file: string): Db {
       data        TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS events_at ON events(at);
+    CREATE TABLE IF NOT EXISTS complaints (
+      id          TEXT PRIMARY KEY,
+      at          INTEGER NOT NULL,
+      region      TEXT NOT NULL,
+      service     TEXT NOT NULL,
+      incident_id TEXT,
+      data        TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS complaints_at ON complaints(at);
+    CREATE TABLE IF NOT EXISTS items (
+      kind TEXT NOT NULL,
+      id   TEXT NOT NULL,
+      at   INTEGER NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (kind, id)
+    );
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -73,6 +76,17 @@ export function loadState(db: Db): SavedState | null {
   return { incidents, workers, feed };
 }
 
+/** Состояние пункта: инциденты, жалобы за 2 часа, запросы команд, сигналы, лента. */
+export function loadPoint(db: Db) {
+  const incidents = (db.prepare('SELECT data FROM incidents').all() as { data: string }[]).map((r) => JSON.parse(r.data) as Incident);
+  if (!incidents.length) return null;
+  const since = Date.now() - 2 * 3_600_000;
+  const complaints = (db.prepare('SELECT data FROM complaints WHERE at > ? ORDER BY at').all(since) as { data: string }[]).map((r) => JSON.parse(r.data) as Complaint);
+  const items = (kind: string) => (db.prepare('SELECT data FROM items WHERE kind = ?').all(kind) as { data: string }[]).map((r) => JSON.parse(r.data));
+  const feed = (db.prepare('SELECT data FROM events ORDER BY at DESC LIMIT 300').all() as { data: string }[]).map((r) => JSON.parse(r.data) as FeedEvent);
+  return { incidents, complaints, requests: items('request') as TeamRequest[], signals: items('signal') as Signal[], feed };
+}
+
 export function getMeta(db: Db, key: string): string | null {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined;
   return row?.value ?? null;
@@ -88,14 +102,25 @@ export class Persister {
   private removed = new Set<string>();
   private workers = new Map<string, Worker>();
   private events: FeedEvent[] = [];
+  private complaints = new Map<string, Complaint>();
+  private items = new Map<string, { kind: string; id: string; at: number; data: unknown }>();
   private timer: NodeJS.Timeout;
 
   constructor(private db: Db) {
     this.timer = setInterval(() => this.flush(), 2000);
   }
 
-  track(msg: ServerMessage) {
+  track(msg: ServerMessage | PointMessage) {
     switch (msg.type) {
+      case 'complaints':
+        for (const c of msg.data) this.complaints.set(c.id, c);
+        break;
+      case 'request':
+        this.items.set(`request:${msg.data.id}`, { kind: 'request', id: msg.data.id, at: msg.data.at, data: msg.data });
+        break;
+      case 'signal':
+        this.items.set(`signal:${msg.data.id}`, { kind: 'signal', id: msg.data.id, at: msg.data.at, data: msg.data });
+        break;
       case 'incident':
         this.removed.delete(msg.data.id);
         this.incidents.set(msg.data.id, msg.data);
@@ -114,15 +139,21 @@ export class Persister {
   }
 
   /** Полная запись состояния (первый запуск или сброс). */
-  saveAll(incidents: Iterable<Incident>, workers: Worker[], feed: FeedEvent[]) {
+  saveAll(incidents: Iterable<Incident>, workers: Worker[], feed: FeedEvent[], complaints: Complaint[] = []) {
     for (const i of incidents) this.incidents.set(i.id, i);
     for (const w of workers) this.workers.set(w.id, w);
+    for (const c of complaints) this.complaints.set(c.id, c);
     this.events.push(...[...feed].reverse());
     this.flush();
   }
 
   flush() {
-    if (!this.incidents.size && !this.removed.size && !this.workers.size && !this.events.length) return;
+    if (!this.incidents.size && !this.removed.size && !this.workers.size && !this.events.length && !this.complaints.size && !this.items.size) return;
+    const putComplaint = this.db.prepare(
+      `INSERT INTO complaints(id, at, region, service, incident_id, data) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET incident_id = excluded.incident_id, data = excluded.data`,
+    );
+    const putItem = this.db.prepare('INSERT INTO items(kind, id, at, data) VALUES (?, ?, ?, ?) ON CONFLICT(kind, id) DO UPDATE SET at = excluded.at, data = excluded.data');
     const putInc = this.db.prepare(
       `INSERT INTO incidents(id, mode, status, priority, assignee, updated_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET mode = excluded.mode, status = excluded.status, priority = excluded.priority,
@@ -137,6 +168,10 @@ export class Persister {
       for (const id of this.removed) delInc.run(id);
       for (const w of this.workers.values()) putWorker.run(w.id, JSON.stringify(w));
       for (const e of this.events) putEvent.run(e.at, e.kind, e.incidentId, e.actor ?? null, e.text, JSON.stringify(e));
+      for (const c of this.complaints.values()) putComplaint.run(c.id, c.at, c.regionId, c.service, c.incidentId, JSON.stringify(c));
+      for (const it of this.items.values()) putItem.run(it.kind, it.id, it.at, JSON.stringify(it.data));
+      // Жалобы храним сутки.
+      this.db.prepare('DELETE FROM complaints WHERE at < ?').run(Date.now() - 86_400_000);
       // Журнал храним 14 дней.
       this.db.prepare('DELETE FROM events WHERE at < ?').run(Date.now() - 14 * 86_400_000);
       this.db.exec('COMMIT');
@@ -149,6 +184,8 @@ export class Persister {
     this.removed.clear();
     this.workers.clear();
     this.events = [];
+    this.complaints.clear();
+    this.items.clear();
   }
 
   close() {
@@ -159,5 +196,5 @@ export class Persister {
 
 /** Сброс игрового состояния (учётные записи остаются). */
 export function resetState(db: Db) {
-  db.exec('DELETE FROM incidents; DELETE FROM workers; DELETE FROM events; DELETE FROM meta;');
+  db.exec('DELETE FROM incidents; DELETE FROM workers; DELETE FROM events; DELETE FROM complaints; DELETE FROM items; DELETE FROM meta;');
 }

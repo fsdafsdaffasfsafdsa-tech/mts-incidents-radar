@@ -1,44 +1,57 @@
-// Вход: роль → кто вы → пароль. Логин запоминается, чтобы утром входить в два касания.
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Headset, LogIn, Radar, Truck, UserCog } from 'lucide-react';
-import type { Me, Role } from '../../shared/types';
+// Вход: роль → (команда) → кто вы → пароль. Сразу видно, кто сейчас на смене.
+import { useEffect, useRef, useState } from 'react';
+import { Crown, Headset, LogIn, Radar, Users, Wrench } from 'lucide-react';
+import type { Person, Role } from '../../shared/types';
+import { SCHEDULE_TEXT } from '../../shared/schedule';
 import { doLogin, readLocal, writeLocal } from '../store';
 import { Initials } from './ui';
+import { Duty, isOn, shiftHint } from './kit';
 
 const ROLES: { id: Role; title: string; hint: string; icon: typeof Radar }[] = [
-  { id: 'coordinator', title: 'Координатор', hint: 'распределяет задачи', icon: UserCog },
-  { id: 'online', title: 'Онлайн-сотрудник', hint: 'решает удалённо', icon: Headset },
-  { id: 'offline', title: 'Выездной', hint: 'едет на площадку', icon: Truck },
+  { id: 'coordinator', title: 'Дежурный пункта', hint: 'ведёт инциденты, передаёт командам', icon: Headset },
+  { id: 'commander', title: 'Командир смены', hint: 'распределяет между дежурными', icon: Crown },
+  { id: 'engineer', title: 'Сотрудник команды', hint: 'решает инциденты команды', icon: Wrench },
+  { id: 'lead', title: 'Руководитель команды', hint: 'назначает в команде, видит сигналы', icon: Users },
 ];
 
+type LoginPerson = Person & { teamName: string };
+
 export function Login() {
-  const last = readLocal<{ role: Role; login: string } | null>('radar.lastLogin', null);
-  const [accounts, setAccounts] = useState<Me[]>([]);
+  const last = readLocal<{ role: Role; login: string; team?: { id: string; name: string } } | null>('radar.lastLogin2', null);
   const [role, setRole] = useState<Role>(last?.role ?? 'coordinator');
+  const [team, setTeam] = useState<{ id: string; name: string } | null>(last?.team ?? null);
+  const [teamQ, setTeamQ] = useState('');
+  const [teams, setTeams] = useState<{ id: string; name: string; schedule: Person['schedule'] }[]>([]);
+  const [people, setPeople] = useState<LoginPerson[]>([]);
   const [login, setLogin] = useState(last?.login ?? '');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [q, setQ] = useState('');
   const pass = useRef<HTMLInputElement>(null);
+  const now = Date.now();
+  const teamRole = role === 'engineer' || role === 'lead';
 
   useEffect(() => {
-    void fetch('/api/accounts')
+    if (!teamRole) return;
+    const t = setTimeout(() => {
+      void fetch(`/api/login-teams?q=${encodeURIComponent(teamQ)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then(setTeams);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [teamQ, teamRole]);
+
+  useEffect(() => {
+    if (teamRole && !team) return setPeople([]);
+    const qs = new URLSearchParams({ role, ...(teamRole && team ? { team: team.id } : {}) });
+    void fetch(`/api/login-people?${qs}`)
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: Me[]) => setAccounts(list));
-  }, []);
-
-  const people = useMemo(
-    () => accounts.filter((a) => a.role === role && (!q || a.name.toLowerCase().includes(q.toLowerCase()) || a.login.includes(q.toLowerCase()))),
-    [accounts, role, q],
-  );
-
-  // При смене роли подставляем первого из списка, если прежний логин к ней не относится.
-  useEffect(() => {
-    if (!accounts.length) return;
-    const ok = accounts.some((a) => a.role === role && a.login === login);
-    if (!ok) setLogin(accounts.find((a) => a.role === role)?.login ?? '');
-  }, [role, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+      .then((list: LoginPerson[]) => {
+        const sorted = list.sort((a, b) => Number(isOn(b, Date.now())) - Number(isOn(a, Date.now())) || a.crew - b.crew);
+        setPeople(sorted);
+        if (!sorted.some((p) => p.id === login)) setLogin(sorted.find((p) => isOn(p, Date.now()))?.id ?? sorted[0]?.id ?? '');
+      });
+  }, [role, team?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -51,52 +64,74 @@ export function Login() {
       setError(err);
       setPassword('');
       pass.current?.focus();
-    } else writeLocal('radar.lastLogin', { role, login });
-  };
-
-  const pick = (l: string) => {
-    setLogin(l);
-    setTimeout(() => pass.current?.focus(), 0);
+    } else writeLocal('radar.lastLogin2', { role, login, team: team ?? undefined });
   };
 
   return (
     <div className="login">
-      <form className="login-card" onSubmit={submit}>
+      <form className="login-card wide" onSubmit={submit}>
         <div className="login-brand">
           <span className="brand-mark">
             <Radar size={20} />
           </span>
           <div>
-            <b>Радар инцидентов</b>
-            <span className="muted">МТС · ЮФО</span>
+            <b>Координирующий пункт ИТ</b>
+            <span className="muted">жалобы → инциденты → команды</span>
           </div>
         </div>
 
-        <div className="role-tiles" role="radiogroup" aria-label="Роль">
+        <div className="role-tiles four" role="radiogroup" aria-label="Роль">
           {ROLES.map((r) => (
             <button key={r.id} type="button" role="radio" aria-checked={role === r.id} className={`role-tile ${role === r.id ? 'on' : ''}`} onClick={() => setRole(r.id)}>
-              <r.icon size={22} />
+              <r.icon size={20} />
               <b>{r.title}</b>
               <span>{r.hint}</span>
             </button>
           ))}
         </div>
 
-        {role !== 'coordinator' && accounts.length > 6 && (
-          <input className="login-search" placeholder="Найти себя…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по имени" />
+        {teamRole && (
+          <div className="team-pick">
+            {team ? (
+              <div className="tp-chosen">
+                <b>{team.name}</b>
+                <button type="button" className="link" onClick={() => setTeam(null)}>
+                  сменить команду
+                </button>
+              </div>
+            ) : (
+              <>
+                <input className="login-search" placeholder="Ваша команда: «Радиосеть · Новосибирская», «Мой МТС», «KION»…" value={teamQ} onChange={(e) => setTeamQ(e.target.value)} aria-label="Поиск команды" />
+                <div className="tp-list">
+                  {teams.map((t) => (
+                    <button key={t.id} type="button" onClick={() => setTeam({ id: t.id, name: t.name })}>
+                      <b>{t.name}</b>
+                      <span className="muted">{SCHEDULE_TEXT[t.schedule]}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         )}
-        <div className={`who-list ${role === 'coordinator' ? 'short' : ''}`} role="listbox" aria-label="Учётная запись">
-          {people.map((a) => (
-            <button key={a.login} type="button" role="option" aria-selected={login === a.login} className={`who-item ${login === a.login ? 'on' : ''}`} onClick={() => pick(a.login)}>
-              <Initials name={a.name} />
-              <span>
-                <b>{a.name}</b>
-                <span className="muted">{a.login}</span>
-              </span>
-            </button>
-          ))}
-          {!people.length && <div className="empty">Нет учётных записей</div>}
-        </div>
+
+        {(!teamRole || team) && (
+          <div className="who-list" role="listbox" aria-label="Учётная запись">
+            {people.map((p) => (
+              <button key={p.id} type="button" role="option" aria-selected={login === p.id} className={`who-item ${login === p.id ? 'on' : ''}`} onClick={() => (setLogin(p.id), setTimeout(() => pass.current?.focus(), 0))}>
+                <Initials name={p.name} />
+                <span>
+                  <b>{p.name}</b>
+                  <span className="muted">
+                    {p.spec ?? p.id} · {shiftHint(p, now)}
+                  </span>
+                </span>
+                <Duty on={isOn(p, now)} />
+              </button>
+            ))}
+            {!people.length && <div className="empty">Нет учётных записей</div>}
+          </div>
+        )}
 
         <label className="login-field">
           <span>Пароль</span>

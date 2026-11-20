@@ -1,153 +1,147 @@
+// Тесты координирующего пункта: справочник и графики, детектор жалоб, правила уровня, подбор команды, процессы, база.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Sim } from './sim.ts';
-import { EMPLOYEES, OFFICES, PRODUCTS, RAW, REGION_BOUNDS, isOfflineRecord } from './catalog.ts';
-import { assessRisk, hungarian, planBatch, rankWorkers, recommendWorkers } from './ai-heuristic.ts';
-import { hashPassword, verifyPassword } from './auth.ts';
-import { Persister, loadState, openDb } from './db.ts';
+import { onDuty } from '../shared/schedule.ts';
+import type { Complaint } from '../shared/types.ts';
+import { PEOPLE, POINT_ID, POINT_STAFF, TEAMS, isOn, membersOf, onShift, teamById } from './directory.ts';
+import { RULES, findClusters, isIncidentCluster, makeComplaint, nextAutoLevel, poissonTail, targetLevel } from './complaints.ts';
+import { planPoint, routeTeams } from './ai-point.ts';
+import { Point } from './point.ts';
+import { hashPassword, seedUsers, verifyPassword } from './auth.ts';
+import { Persister, loadPoint, openDb } from './db.ts';
 
-test('набор данных загружен целиком, статусы и режимы разложены', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  assert.equal(RAW.length, 44);
-  assert.equal(sim.incidents.size, 44);
-  const resolved = [...sim.incidents.values()].filter((i) => i.status === 'resolved').length;
-  assert.equal(resolved, RAW.filter((r) => r.stateId === 7 || r.stateId === 10).length);
-  const offline = [...sim.incidents.values()].filter((i) => i.mode === 'offline').length;
-  assert.equal(offline, RAW.filter(isOfflineRecord).length);
-  assert.ok(offline >= 9, `офлайн: ${offline}`);
+const H = 3_600_000;
+// Понедельник 2026-11-16, 00:00 МСК.
+const MONDAY = Date.UTC(2026, 10, 15, 21, 0, 0);
+
+test('справочник: около 900 команд, уникальные логины, у пункта 4 смены', () => {
+  assert.ok(TEAMS.length >= 850 && TEAMS.length <= 950, `команд ${TEAMS.length}`);
+  assert.equal(new Set(PEOPLE.map((p) => p.id)).size, PEOPLE.length);
+  assert.equal(POINT_STAFF.filter((p) => p.role === 'commander').length, 4);
+  assert.equal(POINT_STAFF.filter((p) => p.role === 'coordinator').length, 12);
+  assert.ok(TEAMS.some((t) => t.itsm), 'группы из выгрузки ITSM в справочнике');
 });
 
-test('выездные и онлайн-сотрудники выделены из данных', () => {
-  const offline = EMPLOYEES.filter((e) => e.mode === 'offline');
-  assert.ok(offline.length >= 5 && offline.length < EMPLOYEES.length, `выездных ${offline.length} из ${EMPLOYEES.length}`);
-  assert.ok(offline.every((e) => e.office), 'у каждого выездного есть офис');
-  assert.ok(EMPLOYEES.find((e) => e.id === 'koschei')?.mode === 'offline', 'дежурная смена ОГЭ — выездной');
+test('графики: круглосуточные команды закрыты в любой час недели, 5/2 не работает в воскресенье', () => {
+  const allDay = TEAMS.filter((t) => t.schedule === '24/7').slice(0, 40);
+  for (let h = 0; h < 7 * 24; h++) {
+    const at = MONDAY + h * H + 15 * 60_000;
+    for (const t of allDay) assert.ok(onShift(t.id, at).some((p) => p.role !== 'lead'), `${t.name} пустая в час ${h}`);
+    // Ровно одна дневная или ночная смена в каждый момент.
+    assert.equal([0, 1, 2, 3].filter((c) => onDuty('24/7', c, 3, at)).length, 1);
+  }
+  const office = TEAMS.find((t) => t.schedule === '5/2' && t.tz === 3)!;
+  const sunday = MONDAY + 6 * 24 * H + 12 * H;
+  assert.equal(onShift(office.id, sunday).length, 0);
+  assert.ok(onShift(office.id, MONDAY + 11 * H).length > 0);
 });
 
-test('ИИ советует того, кто уже решал этот сервис, и только сотрудника нужного режима', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const p = PRODUCTS.find((x) => x.name === 'Летающий ковер')!;
-  const inc = sim.spawn({ product: p, service: 'Руль-пульт', mode: 'online', quiet: true });
-  const top = recommendWorkers(inc, sim.ctx());
-  assert.ok(top.length > 0);
-  const modes = top.map((t) => sim.workers.find((w) => w.id === t.workerId)!.mode);
-  assert.ok(modes.every((m) => m === 'online'));
-  assert.ok(top[0].reasons.length > 0 && top[0].parts.some((x) => x.label === 'Опыт'));
-  assert.ok(top[0].score >= top[top.length - 1].score);
+test('детектор: всплеск в регионе — инцидент, единичные жалобы — нет', () => {
+  assert.ok(poissonTail(10, 1) < 1e-6 && poissonTail(1, 1) > 0.6);
+  const now = Date.now();
+  const list: Complaint[] = [];
+  for (let i = 0; i < 12; i++) list.push(makeComplaint(now - i * 20_000, 'Мобильный интернет', 'nsk'));
+  list.push(makeComplaint(now, 'KION', 'tom'), makeComplaint(now, 'SMS', 'kir'));
+  const clusters = findClusters(list, now);
+  const nsk = clusters.find((c) => c.regionId === 'nsk');
+  assert.ok(nsk && isIncidentCluster(nsk));
+  assert.ok(!clusters.some((c) => c.regionId === 'tom'));
 });
 
-test('риск растёт к дедлайну', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const inc = sim.spawn({ priority: 'P3', mode: 'online', quiet: true });
-  const ctx = sim.ctx();
-  const fresh = assessRisk(inc, ctx).score;
-  const late = assessRisk({ ...inc, createdAt: inc.createdAt - 690 * 60_000, slaDeadline: inc.slaDeadline - 690 * 60_000 }, ctx).score;
-  const gone = assessRisk({ ...inc, createdAt: inc.createdAt - 800 * 60_000, slaDeadline: inc.slaDeadline - 800 * 60_000 }, ctx).score;
-  assert.ok(fresh < late && late < gone, `${fresh} < ${late} < ${gone}`);
+test('уровень по жалобам: только вверх, с паузой, сам — не выше «Высокого», «Наивысший» лишь предложение', () => {
+  assert.equal(targetLevel(5, 1, true).level, 'P4');
+  assert.equal(targetLevel(RULES.p3, 1, true).level, 'P3');
+  assert.equal(targetLevel(RULES.p2multi, 2, false).level, 'P2');
+  const t = targetLevel(500, 4, true);
+  assert.equal(t.level, 'P2');
+  assert.ok(t.p1);
+  const now = Date.now();
+  assert.equal(nextAutoLevel('P4', 'P2', null, now), 'P3', 'по одной ступени');
+  assert.equal(nextAutoLevel('P3', 'P2', now - 60_000, now), null, 'пауза между повышениями');
+  assert.equal(nextAutoLevel('P2', 'P1', null, now), null, 'автоматика не поднимает выше потолка');
+  assert.equal(nextAutoLevel('P2', 'P3', null, now), null, 'не понижает');
 });
 
-test('кабинет: свой порядок задач и «сделал»', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const w = sim.workers.find((x) => x.mode === 'online')!;
-  const a = sim.spawn({ mode: 'online', quiet: true });
-  const b = sim.spawn({ mode: 'online', quiet: true });
-  sim.act(a.id, 'assign', { workerId: w.id });
-  sim.act(b.id, 'assign', { workerId: w.id });
-  sim.workerAct(w.id, { action: 'queue', queue: [b.id, a.id] });
-  assert.equal(sim.ordered(w)[0].id, b.id);
-  sim.workerAct(w.id, { action: 'start', incidentId: b.id });
-  assert.equal(sim.incidents.get(b.id)!.status, 'in_progress');
-  const before = w.done;
-  sim.workerAct(w.id, { action: 'done', incidentId: b.id });
-  assert.equal(sim.incidents.get(b.id)!.status, 'resolved');
-  assert.equal(w.done, before + 1);
+test('подбор команды: регион — команда филиала, платформа — L2, ночью — дежурная замена', () => {
+  const p = new Point();
+  const ctx = { now: MONDAY + 12 * H, load: new Map<string, number>() };
+  const regional = { ...p['blank']({ id: 'X1', title: 't', priority: 'P3', status: 'coordinators', createdAt: ctx.now, slaDeadline: ctx.now + H, origin: 'complaints' }), service: 'Мобильный интернет', regionId: 'nsk', regionIds: ['nsk'] };
+  assert.equal(routeTeams(regional, ctx)[0].teamId, 'ran-nsk');
+  const platform = { ...regional, service: 'Мой МТС', regionIds: ['msk', 'spb'] };
+  assert.match(teamById(routeTeams(platform, ctx)[0].teamId)!.name, /Мой МТС/);
+  // Домашний интернет в 23:30 по местному времени — команда 08–22 не работает, лучше центр управления сетью.
+  const night = { now: MONDAY + 23.5 * H, load: new Map<string, number>() };
+  const home = { ...regional, service: 'Домашний интернет', regionId: 'krd', regionIds: ['krd'] };
+  const picks = routeTeams(home, night);
+  assert.equal(picks[0].teamId, 'noc-yufo');
+  assert.ok(picks.some((x) => x.teamId === 'fix-krd' && !x.onDuty));
 });
 
-test('выезд: офисы и точки только в ЮФО, у каждого кандидата время в пути', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const [[w, s], [e, n]] = REGION_BOUNDS;
-  const inside = (g: { lat: number; lon: number }) => g.lon > w && g.lon < e && g.lat > s && g.lat < n;
-  assert.ok(OFFICES.every(inside), 'офисы в ЮФО');
-  const field = [...sim.incidents.values()].filter((i) => i.mode === 'offline');
-  assert.ok(field.every((i) => inside(i.geo)), 'точки выездов в ЮФО');
-  assert.ok(field.every((i) => /БС \d{2}-\d{4}/.test(i.region)), 'у выезда есть площадка');
-  const inc = sim.spawn({ mode: 'offline', priority: 'P2', quiet: true });
-  const list = rankWorkers(inc, sim.ctx(), 99).filter((x) => !x.blocked);
-  assert.ok(list.length > 0 && list.every((x) => x.etaMin !== null && x.km !== null));
-  assert.ok(list[0].reasons[0].includes('езды'));
+test('пункт: распределение между дежурными на смене, не больше трёх каждому', () => {
+  const p = new Point();
+  const now = Date.now();
+  const incs = Array.from({ length: 12 }, (_, i) => p['blank']({ id: `T${i}`, title: 't', priority: i < 2 ? 'P2' : 'P4', status: 'coordinators', createdAt: now, slaDeadline: now + H, origin: 'complaints', service: 'Мобильный интернет' }));
+  const plan = planPoint(incs, POINT_STAFF, new Map(), now);
+  const duty = POINT_STAFF.filter((x) => x.role === 'coordinator' && isOn(x, now));
+  assert.equal(plan.length, Math.min(12, duty.length * 3));
+  assert.ok(plan.every((x) => duty.some((d) => d.id === x.personId)));
+  const per = new Map<string, number>();
+  for (const x of plan) per.set(x.personId, (per.get(x.personId) ?? 0) + 1);
+  assert.ok([...per.values()].every((n) => n <= 3));
 });
 
-test('жёсткий фильтр: на перерыве не предлагаем, но показываем с причиной', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const inc = sim.spawn({ mode: 'online', quiet: true });
-  const best = recommendWorkers(inc, sim.ctx())[0];
-  sim.workerAct(best.workerId, { action: 'status', status: 'break' });
-  const all = rankWorkers(inc, sim.ctx(), 99);
-  assert.equal(all.find((x) => x.workerId === best.workerId)?.blocked, 'на перерыве');
-  assert.notEqual(recommendWorkers(inc, sim.ctx())[0].workerId, best.workerId);
+test('процесс: передача команде, «не наше» через пункт, сигнал руководителю', () => {
+  const p = new Point();
+  p['seed']();
+  const now = Date.now();
+  const inc = p.fromCluster({ key: 'Мобильный интернет|rnd', service: 'Мобильный интернет', regionId: 'rnd', count: 8, expected: 0.5, pValue: 1e-6 }, 'тест');
+  assert.equal(inc.status, 'coordinators');
+  p.route(inc.id, 'ran-rnd', 'Дежурный');
+  assert.equal(inc.status, 'assigned');
+  const eng = onShift('ran-rnd', now).find((x) => x.role === 'engineer')!;
+  const off = membersOf('ran-rnd').find((x) => x.role === 'engineer' && !isOn(x, now))!;
+  assert.throws(() => p.take(inc.id, off.id), /не на смене/);
+  p.take(inc.id, eng.id);
+  assert.equal(inc.assignee, eng.id);
+  const req = p.requestTransfer(inc.id, eng.id, 'core-yufo', 'Проблема в ядре, не в радиосети');
+  assert.equal(req.status, 'pending');
+  assert.ok(req.aiNote.length > 0);
+  p.resolveRequest(req.id, true, 'Дежурный', 'core-yufo');
+  assert.equal(inc.teamId, 'core-yufo');
+  const eng2 = onShift('core-yufo', Date.now()).find((x) => x.role === 'engineer')!;
+  p.take(inc.id, eng2.id);
+  const s = p.help(inc.id, eng2.id, 'Нет доступа к PGW');
+  p.notifyLead(s.id, 'Дежурный');
+  assert.equal(p.signals.get(s.id)!.status, 'notified');
+  assert.ok(inc.leadNotifiedAt);
+  p.resolveByTeam(inc.id, eng2.id, 'Перезапущен PGW');
+  assert.equal(inc.status, 'resolved');
+  assert.equal(p.signals.get(s.id)!.status, 'closed');
+  assert.notEqual(POINT_ID, inc.teamId);
 });
 
-test('распределение пачкой: венгерский алгоритм, не больше одной задачи на человека', () => {
-  assert.deepEqual(hungarian([[4, 1, 3], [2, 0, 5], [3, 2, 2]]), [1, 0, 2]);
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const incs = [1, 2, 3, 4].map(() => sim.spawn({ mode: 'offline', quiet: true }));
-  const plan = planBatch(incs, sim.ctx());
-  assert.ok(plan.length > 0);
-  assert.equal(new Set(plan.map((x) => x.workerId)).size, plan.length);
-  assert.ok(plan.every((x) => sim.workers.find((w) => w.id === x.workerId)?.mode === 'offline'));
-});
+test('база: состояние пункта переживает перезапуск, смена пароля — всем', () => {
+  const db = openDb(':memory:');
+  const p = new Point();
+  p['seed']();
+  const per = new Persister(db);
+  per.saveAll(p.incidents.values(), [], p.feed, p.complaints);
+  per.close();
+  const saved = loadPoint(db)!;
+  assert.equal(saved.incidents.length, p.incidents.size);
+  assert.ok(saved.complaints.length > 0);
+  const again = new Point();
+  again.start(saved, p.shift);
+  again.stop();
+  assert.equal(again.incidents.size, p.incidents.size);
 
-test('выгрузка ITSM: новый инцидент и смена статуса из файла', () => {
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const kinds: string[] = [];
-  sim.onMessage((m) => {
-    if (m.type === 'feed') kinds.push(m.data.kind);
-  });
-  const base = RAW.map((r) => ({ ...r }));
-  sim.ingest(base, true);
-  const now = new Date().toISOString();
-  const fresh = {
-    ...base[0],
-    id: 'INC000999001',
-    priorityId: 4,
-    priority: 'Наивысший',
-    submitDate: now,
-    deadline: new Date(Date.now() + 4 * 3_600_000).toISOString(),
-    state: 'Назначен',
-    stateId: 0,
-    completionDate: null,
-  };
-  sim.ingest([...base, fresh], false);
-  const inc = sim.incidents.get('INC000999001');
-  assert.ok(inc && inc.priority === 'P1' && Math.abs(inc.createdAt - Date.now()) < 60_000);
-  assert.ok(kinds.includes('p1'));
-  sim.ingest([...base, { ...fresh, state: 'Завершен', stateId: 7, completionDate: now }], false);
-  assert.equal(sim.incidents.get('INC000999001')!.status, 'resolved');
-});
-
-test('база и пароли: scrypt, состояние переживает перезапуск', () => {
   const h = hashPassword('секрет');
   assert.ok(verifyPassword('секрет', h) && !verifyPassword('другой', h));
-  const db = openDb(':memory:');
-  const sim = new Sim();
-  (sim as unknown as { seed: () => void }).seed();
-  const p = new Persister(db);
-  p.saveAll(sim.incidents.values(), sim.workers, sim.feed);
-  p.close();
-  const saved = loadState(db)!;
-  assert.equal(saved.incidents.length, sim.incidents.size);
-  const again = new Sim();
-  again.start(saved, sim.shift);
-  again.stop();
-  assert.equal(again.incidents.size, sim.incidents.size);
-  assert.equal(again.workers.length, sim.workers.length);
+  const accounts = PEOPLE.slice(0, 50).map((x) => ({ login: x.id, name: x.name, role: x.role, teamId: x.teamId }));
+  seedUsers(db, accounts, 'старый');
+  seedUsers(db, accounts, '1234');
+  const rows = db.prepare('SELECT pass_hash FROM users').all() as { pass_hash: string }[];
+  assert.equal(rows.length, 50);
+  assert.ok(rows.every((r) => verifyPassword('1234', r.pass_hash)));
   db.close();
 });

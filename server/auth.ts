@@ -1,12 +1,13 @@
-// Вход: координатор, онлайн-сотрудник, выездной сотрудник.
+// Вход для четырёх ролей: дежурный пункта, командир смены пункта, сотрудник команды, руководитель команды.
 // Пароли — scrypt с солью, сессия — случайный токен в HttpOnly-cookie, в базе только его хэш.
 import crypto from 'node:crypto';
 import type http from 'node:http';
-import type { Me, Role, Worker } from '../shared/types.ts';
-import type { Db } from './db.ts';
+import type { Me, Role } from '../shared/types.ts';
+import { getMeta, setMeta, type Db } from './db.ts';
 
 const COOKIE = 'radar_sid';
 const SESSION_DAYS = 14;
+const ROLES: Role[] = ['coordinator', 'commander', 'engineer', 'lead'];
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16);
@@ -24,34 +25,70 @@ export function verifyPassword(password: string, stored: string): boolean {
 
 const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
-/** Первый запуск: координатор и по учётной записи на каждого сотрудника. Пароль — DEMO_PASSWORD из .env. */
-export function seedUsers(db: Db, workers: Worker[], password: string) {
-  const count = (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n;
-  const ins = db.prepare('INSERT OR IGNORE INTO users(login, name, role, worker_id, pass_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)');
-  const now = Date.now();
-  if (count === 0) {
-    const hash = hashPassword(password);
-    ins.run('coord', 'Координатор смены', 'coordinator', null, hash, now);
-    ins.run('coord2', 'Старший координатор', 'coordinator', null, hash, now);
-    for (const w of workers) ins.run(w.id, w.name, w.mode, w.id, hash, now);
-    return;
-  }
-  // Новые сотрудники из выгрузки получают учётную запись с тем же паролем, что у координатора по умолчанию.
-  const known = new Set((db.prepare('SELECT worker_id FROM users WHERE worker_id IS NOT NULL').all() as { worker_id: string }[]).map((r) => r.worker_id));
-  const fresh = workers.filter((w) => !known.has(w.id));
-  if (fresh.length) {
-    const hash = hashPassword(password);
-    for (const w of fresh) ins.run(w.id, w.name, w.mode, w.id, hash, now);
-  }
+/** Таблица учётных записей под четыре роли. Старая схема (онлайн/выездной) пересоздаётся. */
+export function ensureUsersTable(db: Db) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get() as { sql: string } | undefined;
+  if (row && !row.sql.includes('commander')) db.exec('DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS users;');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      login      TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      role       TEXT NOT NULL CHECK (role IN ('coordinator', 'commander', 'engineer', 'lead')),
+      person_id  TEXT,
+      team_id    TEXT,
+      pass_hash  TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS users_team ON users(team_id);
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      login      TEXT NOT NULL REFERENCES users(login) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+  `);
 }
 
-export interface Account extends Me {}
+export interface AccountSeed {
+  login: string;
+  name: string;
+  role: Role;
+  teamId: string;
+}
 
-/** Список для экрана входа: только логины и имена, без паролей. */
-export function listAccounts(db: Db): Account[] {
-  return (db.prepare('SELECT login, name, role, worker_id FROM users ORDER BY role, name').all() as { login: string; name: string; role: Role; worker_id: string | null }[]).map(
-    (r) => ({ login: r.login, name: r.name, role: r.role, workerId: r.worker_id }),
+/** Учётные записи из справочника: новые добавляются, смена DEMO_PASSWORD меняет пароль всем. */
+export function seedUsers(db: Db, accounts: AccountSeed[], password: string) {
+  ensureUsersTable(db);
+  const stored = getMeta(db, 'demo_password');
+  const same = !!stored && verifyPassword(password, stored);
+  const hash = same ? stored! : hashPassword(password);
+  const ins = db.prepare(
+    `INSERT INTO users(login, name, role, person_id, team_id, pass_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(login) DO UPDATE SET name = excluded.name, role = excluded.role, team_id = excluded.team_id`,
   );
+  const now = Date.now();
+  db.exec('BEGIN');
+  try {
+    for (const a of accounts) ins.run(a.login, a.name, a.role, a.login, a.teamId, hash, now);
+    if (!same) db.prepare('UPDATE users SET pass_hash = ?').run(hash);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  if (!same) setMeta(db, 'demo_password', hash);
+}
+
+/** Поиск для экрана входа: только логины, имена и команды, без паролей. */
+export function findAccounts(db: Db, role: Role, q: string, teamId: string | null, limit = 40): Me[] {
+  if (!ROLES.includes(role)) return [];
+  const like = `%${q.trim().toLowerCase()}%`;
+  const rows = (
+    teamId
+      ? db.prepare('SELECT login, name, role, person_id, team_id FROM users WHERE role = ? AND team_id = ? ORDER BY name LIMIT ?').all(role, teamId, limit)
+      : db.prepare('SELECT login, name, role, person_id, team_id FROM users WHERE role = ? AND (lower(name) LIKE ? OR login LIKE ?) ORDER BY name LIMIT ?').all(role, like, like, limit)
+  ) as { login: string; name: string; role: Role; person_id: string | null; team_id: string | null }[];
+  return rows.map((r) => ({ login: r.login, name: r.name, role: r.role, personId: r.person_id, teamId: r.team_id }));
 }
 
 // Не больше 8 неудачных попыток за 5 минут с одного адреса.
@@ -63,12 +100,13 @@ function tooMany(ip: string) {
   return list.length >= 8;
 }
 
+type UserRow = { login: string; name: string; role: Role; person_id: string | null; team_id: string | null };
+const toMe = (r: UserRow): Me => ({ login: r.login, name: r.name, role: r.role, personId: r.person_id, teamId: r.team_id });
+
 export function login(db: Db, req: http.IncomingMessage, loginName: string, password: string): { me: Me; cookie: string } {
   const ip = req.socket.remoteAddress ?? '?';
   if (tooMany(ip)) throw new Error('Слишком много попыток, подождите пару минут');
-  const row = db.prepare('SELECT login, name, role, worker_id, pass_hash FROM users WHERE login = ?').get(loginName.trim()) as
-    | { login: string; name: string; role: Role; worker_id: string | null; pass_hash: string }
-    | undefined;
+  const row = db.prepare('SELECT login, name, role, person_id, team_id, pass_hash FROM users WHERE login = ?').get(loginName.trim()) as (UserRow & { pass_hash: string }) | undefined;
   if (!row || !verifyPassword(password, row.pass_hash)) {
     fails.get(ip)!.push(Date.now());
     throw new Error('Неверный логин или пароль');
@@ -77,10 +115,7 @@ export function login(db: Db, req: http.IncomingMessage, loginName: string, pass
   const now = Date.now();
   db.prepare('INSERT INTO sessions(token_hash, login, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha(token), row.login, now, now + SESSION_DAYS * 86_400_000);
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
-  return {
-    me: { login: row.login, name: row.name, role: row.role, workerId: row.worker_id },
-    cookie: `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86_400}`,
-  };
+  return { me: toMe(row), cookie: `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86_400}` };
 }
 
 function tokenOf(req: http.IncomingMessage): string | null {
@@ -96,9 +131,9 @@ export function currentUser(db: Db, req: http.IncomingMessage): Me | null {
   const token = tokenOf(req);
   if (!token) return null;
   const row = db
-    .prepare('SELECT u.login, u.name, u.role, u.worker_id FROM sessions s JOIN users u ON u.login = s.login WHERE s.token_hash = ? AND s.expires_at > ?')
-    .get(sha(token), Date.now()) as { login: string; name: string; role: Role; worker_id: string | null } | undefined;
-  return row ? { login: row.login, name: row.name, role: row.role, workerId: row.worker_id } : null;
+    .prepare('SELECT u.login, u.name, u.role, u.person_id, u.team_id FROM sessions s JOIN users u ON u.login = s.login WHERE s.token_hash = ? AND s.expires_at > ?')
+    .get(sha(token), Date.now()) as UserRow | undefined;
+  return row ? toMe(row) : null;
 }
 
 export function logout(db: Db, req: http.IncomingMessage): string {
