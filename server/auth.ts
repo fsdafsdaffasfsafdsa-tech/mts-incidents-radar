@@ -1,4 +1,4 @@
-// Вход для четырёх ролей: дежурный пункта, командир смены пункта, сотрудник команды, руководитель команды.
+// Вход для трёх ролей: дежурный пункта, сотрудник команды, руководитель команды.
 // Пароли — scrypt с солью, сессия — случайный токен в HttpOnly-cookie, в базе только его хэш.
 import crypto from 'node:crypto';
 import type http from 'node:http';
@@ -7,7 +7,7 @@ import { getMeta, setMeta, type Db } from './db.ts';
 
 const COOKIE = 'radar_sid';
 const SESSION_DAYS = 14;
-const ROLES: Role[] = ['coordinator', 'commander', 'engineer', 'lead'];
+const ROLES: Role[] = ['coordinator', 'engineer', 'lead'];
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16);
@@ -70,6 +70,11 @@ export function seedUsers(db: Db, accounts: AccountSeed[], password: string) {
   db.exec('BEGIN');
   try {
     for (const a of accounts) ins.run(a.login, a.name, a.role, a.login, a.teamId, hash, now);
+    // Учётные записи, которых больше нет в справочнике (например, командиры смены), удаляем вместе с сессиями.
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS keep_logins(login TEXT PRIMARY KEY); DELETE FROM keep_logins;');
+    const keep = db.prepare('INSERT OR IGNORE INTO keep_logins(login) VALUES (?)');
+    for (const a of accounts) keep.run(a.login);
+    db.exec('DELETE FROM sessions WHERE login NOT IN (SELECT login FROM keep_logins); DELETE FROM users WHERE login NOT IN (SELECT login FROM keep_logins);');
     if (!same) db.prepare('UPDATE users SET pass_hash = ?').run(hash);
     db.exec('COMMIT');
   } catch (err) {

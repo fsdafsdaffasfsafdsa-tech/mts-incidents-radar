@@ -1,6 +1,6 @@
 // Вход: роль → (команда) → кто вы → пароль. Сразу видно, кто сейчас на смене.
 import { useEffect, useRef, useState } from 'react';
-import { Crown, Headset, LogIn, Radar, Users, Wrench } from 'lucide-react';
+import { Headset, LogIn, Radar, Users, Wrench } from 'lucide-react';
 import type { Person, Role } from '../../shared/types';
 import { SCHEDULE_TEXT } from '../../shared/schedule';
 import { doLogin, readLocal, writeLocal } from '../store';
@@ -9,7 +9,6 @@ import { Duty, isOn, shiftHint } from './kit';
 
 const ROLES: { id: Role; title: string; hint: string; icon: typeof Radar }[] = [
   { id: 'coordinator', title: 'Дежурный пункта', hint: 'ведёт инциденты, передаёт командам', icon: Headset },
-  { id: 'commander', title: 'Командир смены', hint: 'распределяет между дежурными', icon: Crown },
   { id: 'engineer', title: 'Сотрудник команды', hint: 'решает инциденты команды', icon: Wrench },
   { id: 'lead', title: 'Руководитель команды', hint: 'назначает в команде, видит сигналы', icon: Users },
 ];
@@ -80,7 +79,7 @@ export function Login() {
           </div>
         </div>
 
-        <div className="role-tiles four" role="radiogroup" aria-label="Роль">
+        <div className="role-tiles three" role="radiogroup" aria-label="Роль">
           {ROLES.map((r) => (
             <button key={r.id} type="button" role="radio" aria-checked={role === r.id} className={`role-tile ${role === r.id ? 'on' : ''}`} onClick={() => setRole(r.id)}>
               <r.icon size={20} />

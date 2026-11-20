@@ -98,6 +98,9 @@ export interface Incident {
   levelLog?: LevelChange[];
   p1Proposal?: string | null; // ИИ предлагает «Наивысший», ждёт подтверждения человеком
   leadNotifiedAt?: number | null;
+  routedAt?: number | null; // когда передан команде (от этого считаются таймеры автоэскалации)
+  escalation?: number; // ступень автоэскалации: 0 — нет, 1 — напомнили, 2 — руководителю, 3 — предложена дежурная смена
+  comments?: IncidentComment[];
   startedAt: number | null;
   priority: Priority;
   status: Status;
@@ -183,8 +186,8 @@ export interface PlanItem {
   etaMin: number | null;
 }
 
-/** coordinator — дежурный пункта, commander — командир смены пункта, engineer — сотрудник команды, lead — руководитель команды. */
-export type Role = 'coordinator' | 'commander' | 'engineer' | 'lead';
+/** coordinator — дежурный пункта, engineer — сотрудник команды, lead — руководитель команды. */
+export type Role = 'coordinator' | 'engineer' | 'lead';
 export interface Me {
   login: string;
   name: string;
@@ -228,7 +231,7 @@ export interface Person {
   id: string; // = логин
   name: string;
   teamId: string;
-  role: 'engineer' | 'lead' | 'coordinator' | 'commander';
+  role: 'engineer' | 'lead' | 'coordinator';
   schedule: ScheduleKindT;
   crew: number;
   tz: number;
@@ -248,6 +251,17 @@ export interface Complaint {
   text: string;
   b2b: boolean;
   incidentId: string | null;
+}
+
+/** Сообщение в карточке инцидента: пункт ↔ команда. */
+export interface IncidentComment {
+  id: string;
+  at: number;
+  author: string;
+  personId: string | null;
+  side: 'point' | 'team';
+  teamId: string | null;
+  text: string;
 }
 
 export interface LevelChange {
@@ -280,7 +294,7 @@ export interface TeamRequest {
 export interface Signal {
   id: string;
   at: number;
-  kind: 'help' | 'stuck';
+  kind: 'help' | 'stuck' | 'timer';
   incidentId: string;
   personId: string | null;
   teamId: string | null;

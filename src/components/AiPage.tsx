@@ -15,7 +15,7 @@ const KINDS: { id: Kind; title: string; what: string; icon: typeof Sparkles; tes
   { id: 'level', title: 'Поднимает уровень', what: 'По числу жалоб: по одной ступени, не чаще раза в 3 минуты, сам — не выше «Высокого»', icon: TrendingUp, test: /уровень/i },
   { id: 'p1', title: 'Предлагает «Наивысший»', what: 'Только предлагает. Поднимает дежурный, если согласен', icon: Sparkles, test: /предложил «Наивысший»/i },
   { id: 'route', title: 'Подсказывает команду', what: 'По справочнику ~900 команд, региону, графику смены и загрузке. Видно, совпало ли с решением дежурного', icon: Route, test: /советом ИИ|ИИ советовал/i },
-  { id: 'plan', title: 'Распределяет между дежурными', what: 'Каждому не больше трёх новых, сначала по специализации', icon: Users, test: /распределил/i },
+  { id: 'plan', title: 'Подсказывает дежурного', what: 'В карточке нового инцидента: кому из дежурных на смене он подходит по специализации и загрузке. Распределяет человек', icon: Users, test: /распределил/i },
   { id: 'stuck', title: 'Замечает застрявшие', what: 'Нет движения 8 минут или прошло больше 60 % срока — сигнал пункту', icon: Bell, test: /застрял/i },
   { id: 'check', title: 'Проверяет запросы команд', what: 'Сверяет «это не наше — передайте» со справочником и подсказывает лучшую команду', icon: ListChecks, test: /проверил запрос/i },
 ];
@@ -110,7 +110,7 @@ export function AiPage() {
         <div className="pl-rows">
           {!list.length && <div className="empty">ИИ пока ничего не делал</div>}
           {list.map((e, i) => (
-            <button key={`${e.incidentId}${e.at}${i}`} className="ai-entry" onClick={() => openIncident(e.incidentId)}>
+            <button key={`${e.incidentId}${e.at}${i}`} className={`ai-entry ${now - e.at < 10_000 ? 'is-new' : ''}`} onClick={() => openIncident(e.incidentId)}>
               <span className="num">{fmtClock(e.at)}</span>
               <span className="ae-main">
                 <span className="ae-text">

@@ -16,7 +16,9 @@ export function Directory() {
   const regions = useStore((s) => s.regions);
   const load = useStore((s) => s.load);
   const now = useNow(60_000);
-  const [q, setQ] = useState('');
+  const dirQuery = useStore((s) => s.dirQuery);
+  const [q, setQ] = useState(dirQuery);
+  useEffect(() => setQ(dirQuery), [dirQuery]);
   const [dir, setDir] = useState('');
   const [region, setRegion] = useState('');
   const [sched, setSched] = useState('');

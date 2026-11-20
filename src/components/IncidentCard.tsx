@@ -1,6 +1,6 @@
 // Карточка инцидента для пункта — по шагам: 1) что случилось, 2) что советует ИИ и почему, 3) ваше решение.
 import { useEffect, useMemo, useState } from 'react';
-import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Send, UserCheck, X } from 'lucide-react';
+import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, Send, UserCheck, X } from 'lucide-react';
 import type { Incident, Priority } from '../../shared/types';
 import { PRIORITY_TEXT } from '../../shared/types';
 import { SCHEDULE_TEXT } from '../../shared/schedule';
@@ -8,7 +8,9 @@ import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, resolv
 import { fmtClock } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, PRIO_COLORS, PrioDot } from './ui';
-import { STATUS_TEXT, Spark, isOn } from './kit';
+import { EscTimer, STATUS_TEXT, Spark, isOn } from './kit';
+import { Chat } from './Chat';
+import { CustomerText } from './ShiftTools';
 
 /** Пометка «это сделал или советует ИИ» — одна и та же везде. */
 export function AiBadge({ text = 'ИИ' }: { text?: string }) {
@@ -30,10 +32,12 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
   const [alt, setAlt] = useState(false);
   const [manual, setManual] = useState(false);
   const [hist, setHist] = useState(false);
+  const [cust, setCust] = useState(false);
   useEffect(() => {
     setAlt(false);
     setManual(false);
     setHist(false);
+    setCust(false);
   }, [inc.id]);
   useEffect(() => {
     void loadRoute(inc.id);
@@ -127,6 +131,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
             </span>
           )}
         </div>
+        <EscTimer inc={inc} now={now} />
       </div>
 
       {/* 2. Что советует ИИ */}
@@ -154,7 +159,7 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           {sigs.map((s) => (
             <div key={s.id} className="advice warn">
               <div className="adv-h">
-                <BellRing size={14} /> {s.kind === 'help' ? 'Сотрудник просит помощи' : 'Инцидент застрял'}
+                <BellRing size={14} /> {s.kind === 'help' ? 'Сотрудник просит помощи' : s.kind === 'timer' ? 'Автоэскалация: команда не взяла' : 'Инцидент застрял'}
               </div>
               <div className="adv-why">{s.text.replace(/^ИИ: /, '')}</div>
               <div className="adv-act">
@@ -165,12 +170,37 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
                 ) : (
                   <span className="tag ok">руководитель уведомлён</span>
                 )}
+                {s.kind === 'timer' && team?.backupId && (inc.escalation ?? 0) >= 3 && (
+                  <button className="btn btn-sm btn-ai" onClick={() => void routeTo(inc.id, team.backupId!)}>
+                    <Send size={13} /> Передать дежурной смене
+                  </button>
+                )}
                 <button className="btn btn-sm btn-ghost" onClick={() => closeSignal(s.id)}>
                   Снять
                 </button>
               </div>
             </div>
           ))}
+
+          {inc.status === 'coordinators' && route?.coordinator && route.coordinator.personId !== inc.coordinatorId && (
+            <div className="advice">
+              <div className="adv-h">
+                Кому из дежурных: {route.coordinator.personId === me.personId ? 'вам' : staff.find((p) => p.id === route.coordinator!.personId)?.name}
+              </div>
+              <div className="adv-why">Почему: {route.coordinator.why}. Распределяете вы — это только подсказка.</div>
+              <div className="adv-act">
+                {route.coordinator.personId === me.personId ? (
+                  <button className="btn btn-sm btn-ai" onClick={() => takeAtPoint(inc.id)}>
+                    <UserCheck size={13} /> Взять себе
+                  </button>
+                ) : (
+                  <button className="btn btn-sm btn-ai" onClick={() => assignCoordinator(inc.id, route.coordinator!.personId)}>
+                    <Send size={13} /> Передать коллеге
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {best && bestTeam && (
             <div className={`advice ${routedToBest ? 'done' : ''}`}>
@@ -234,10 +264,10 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
                 <UserCheck size={15} /> Взять себе
               </button>
             )}
-            {me.role === 'commander' && (
-              <select className="fsel" value={inc.coordinatorId ?? ''} onChange={(e) => e.target.value && assignCoordinator(inc.id, e.target.value)}>
-                <option value="">{inc.coordinatorId ? 'Передать другому дежурному…' : 'Назначить дежурного…'}</option>
-                {coordinators.map((p) => (
+            {coordinators.some((p) => p.id !== me.personId) && (
+              <select className="fsel" value="" onChange={(e) => e.target.value && assignCoordinator(inc.id, e.target.value)} title="Например, в конце смены или по специализации">
+                <option value="">Передать другому дежурному…</option>
+                {coordinators.filter((p) => p.id !== me.personId && p.id !== inc.coordinatorId).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} · {p.spec}
                   </option>
@@ -248,13 +278,21 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
             <button className="btn btn-sm btn-ghost" onClick={() => setManual(!manual)}>
               Изменить уровень <ChevronDown size={13} className={manual ? 'rot' : ''} />
             </button>
+            {inc.origin === 'complaints' && (
+              <button className="btn btn-sm btn-ghost" onClick={() => setCust(!cust)}>
+                <Megaphone size={13} /> Текст для абонентов
+              </button>
+            )}
             <button className="btn btn-sm btn-ok" onClick={() => resolveAtPoint(inc.id)}>
               <CheckCircle2 size={14} /> Закрыть инцидент
             </button>
           </div>
           {manual && <LevelControl inc={inc} />}
+          {cust && <CustomerText inc={inc} />}
         </div>
       )}
+
+      <Chat inc={inc} />
 
       <button className="more-toggle" onClick={() => setHist((v) => !v)} aria-expanded={hist}>
         История и описание <ChevronDown size={14} className={hist ? 'rot' : ''} />

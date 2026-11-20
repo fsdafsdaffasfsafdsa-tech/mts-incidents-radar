@@ -121,7 +121,7 @@ function addTeam(t: Omit<Team, 'leadId' | 'size'>, perCrew: number) {
   return team;
 }
 
-// Координирующий пункт: круглосуточно, 4 смены, в каждой командир и трое дежурных разной специализации.
+// Координирующий пункт: круглосуточно, 4 смены, в каждой трое дежурных разной специализации. Новые инциденты распределяет ИИ.
 export const POINT_ID = 'kp';
 const SPECS = ['Сеть', 'ИТ-продукты', 'B2B и корпоративные'];
 {
@@ -143,7 +143,8 @@ const SPECS = ['Сеть', 'ИТ-продукты', 'B2B и корпоратив
   team.leadId = head.id;
   PEOPLE.push(head);
   for (let c = 0; c < 4; c++) {
-    PEOPLE.push(makePerson(POINT_ID, 'commander', '24/7', c, 3));
+    // Роли командира больше нет. Генератор всё равно вызываем, чтобы имена и логины остальных не сдвинулись.
+    makePerson(POINT_ID, 'coordinator', '24/7', c, 3);
     for (const spec of SPECS) PEOPLE.push(makePerson(POINT_ID, 'coordinator', '24/7', c, 3, spec));
   }
   team.size = PEOPLE.filter((p) => p.teamId === POINT_ID).length;

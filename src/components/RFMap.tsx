@@ -17,9 +17,10 @@ const C = {
   dark: { P1: '#ff3150', P2: '#ff8a2b', P3: '#e6c247', P4: '#5b8cff', dot: '#ff8a2b', linked: '#ff3150', stroke: '#0b0f16', text: '#ffffff', label: '#e8ecf3' },
   light: { P1: '#e3142d', P2: '#e06a00', P3: '#c79600', P4: '#2f6bed', dot: '#e06a00', linked: '#e3142d', stroke: '#ffffff', text: '#ffffff', label: '#1d2433' },
 };
+const HALO_BASE = ['interpolate', ['linear'], ['get', 'n'], 5, 20, 50, 30, 200, 42];
 const fallback = (theme: 'dark' | 'light'): StyleSpecification => ({ version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': theme === 'dark' ? '#0b0f16' : '#e9edf3' } }] });
 
-export function RFMap() {
+export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<MlMap | null>(null);
   const ready = useRef(false);
@@ -27,12 +28,13 @@ export function RFMap() {
   const complaints = useStore((s) => s.complaints);
   const incidents = useStore((s) => s.incidents);
   const selectedId = useStore((s) => s.selectedId);
+  const replayAt = useStore((s) => s.replayAt);
 
   useEffect(() => {
     if (!el.current) return;
     const m = new maplibregl.Map({
       container: el.current,
-      style: STYLE[getState().theme],
+      style: STYLE[forceTheme ?? getState().theme],
       bounds: RF,
       fitBoundsOptions: { padding: 20 },
       maxBounds: [
@@ -53,7 +55,7 @@ export function RFMap() {
     let fitted = false;
     m.on('style.load', () => {
       clearTimeout(fail);
-      install(m, getState().theme);
+      install(m, forceTheme ?? getState().theme);
       ready.current = true;
       push(m);
       if (!fitted) {
@@ -85,10 +87,27 @@ export function RFMap() {
     };
   }, []);
 
+  // Пульс колец инцидентов: радиус растёт, кольцо гаснет. При «уменьшить движение» — без анимации.
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const t = window.setInterval(() => {
+      const m = map.current;
+      if (!m || !ready.current || !m.getLayer('inc-halo')) return;
+      if (document.documentElement.dataset.motion === 'off') {
+        m.setPaintProperty('inc-halo', 'circle-stroke-opacity', 0);
+        return;
+      }
+      const k = (Date.now() % 1800) / 1800;
+      m.setPaintProperty('inc-halo', 'circle-radius', ['+', HALO_BASE, 4 + k * 22] as any);
+      m.setPaintProperty('inc-halo', 'circle-stroke-opacity', 0.6 * (1 - k));
+    }, 60);
+    return () => clearInterval(t);
+  }, []);
+
   const applied = useRef(theme);
   useEffect(() => {
     const m = map.current;
-    if (!m || applied.current === theme) return;
+    if (!m || forceTheme || applied.current === theme) return;
     applied.current = theme;
     ready.current = false;
     m.setStyle(STYLE[theme], { diff: false });
@@ -106,7 +125,7 @@ export function RFMap() {
     const wait = 1000 - (Date.now() - last.current);
     if (wait <= 0) run();
     else if (pending.current === null) pending.current = window.setTimeout(run, wait);
-  }, [complaints, incidents, selectedId]);
+  }, [complaints, incidents, selectedId, replayAt]);
 
   useEffect(() => {
     const m = map.current;
@@ -199,6 +218,19 @@ function install(m: MlMap, theme: 'dark' | 'light') {
       'circle-stroke-width': 1,
     },
   });
+  // Расходящееся кольцо вокруг инцидента — заметно, но не мешает (анимация в компоненте).
+  m.addLayer({
+    id: 'inc-halo',
+    type: 'circle',
+    source: 'incs',
+    paint: {
+      'circle-color': 'transparent',
+      'circle-radius': HALO_BASE as any,
+      'circle-stroke-width': 2,
+      'circle-stroke-color': ['match', ['get', 'p'], 'P1', P.P1, 'P2', P.P2, 'P3', P.P3, P.P4],
+      'circle-stroke-opacity': 0,
+    },
+  });
   m.addLayer({
     id: 'inc-ring',
     type: 'circle',
@@ -222,8 +254,10 @@ function install(m: MlMap, theme: 'dark' | 'light') {
 
 function push(m: MlMap) {
   const s = getState();
-  const now = Date.now() + s.offset;
-  const pts: GeoJSON.Feature[] = s.complaints.map((c) => ({
+  const at = s.replayAt;
+  const now = at ?? Date.now() + s.offset;
+  const list = at === null ? s.complaints : s.complaints.filter((c) => c.at <= at && at - c.at < 30 * 60_000);
+  const pts: GeoJSON.Feature[] = list.map((c) => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [c.lon, c.lat] },
     properties: { linked: !!c.incidentId, age: Math.round((now - c.at) / 60_000) },
@@ -231,14 +265,16 @@ function push(m: MlMap) {
   (m.getSource('complaints') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pts });
   const incs: GeoJSON.Feature[] = [];
   for (const i of s.incidents.values()) {
-    if (i.origin !== 'complaints' || i.status === 'resolved') continue;
+    if (i.origin !== 'complaints') continue;
+    if (at === null ? i.status === 'resolved' : i.createdAt > at || (i.resolvedAt !== null && i.resolvedAt <= at)) continue;
+    const n = at === null ? i.complaints ?? 0 : list.filter((c) => c.incidentId === i.id).length;
     for (const r of i.regionIds ?? []) {
       const reg = s.regions.find((x) => x.id === r);
       if (!reg) continue;
       incs.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [reg.lon, reg.lat] },
-        properties: { id: i.id, p: i.priority, n: i.complaints ?? 0, sel: i.id === s.selectedId, label: `${i.service} · ${i.complaints ?? 0}` },
+        properties: { id: i.id, p: i.priority, n, sel: i.id === s.selectedId, label: `${i.service} · ${n}` },
       });
     }
   }

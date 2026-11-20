@@ -104,7 +104,7 @@ export function IncidentList({ onPick, forceScope }: { onPick?: (id: string) => 
         </button>
       </div>
       <div className="pl-rows">
-        {!list.length && <div className="empty">{scope === 'mine' ? 'У вас нет инцидентов. Командир распределит или возьмите из «Без дежурного»' : 'Пусто'}</div>}
+        {!list.length && <div className="empty">{scope === 'mine' ? 'У вас нет инцидентов. ИИ распределит новые, или возьмите из «Без дежурного»' : 'Пусто'}</div>}
         {list.slice(0, 80).map((i) => (
           <IncidentRow key={i.id} inc={i} sel={i.id === selectedId} onClick={() => (onPick ? onPick(i.id) : select(i.id))} />
         ))}
@@ -116,8 +116,12 @@ export function IncidentList({ onPick, forceScope }: { onPick?: (id: string) => 
 export function IncidentRow({ inc, sel, onClick }: { inc: Incident; sel: boolean; onClick: () => void }) {
   const signals = useStore((s) => s.signals);
   const flagged = [...signals.values()].some((s) => s.incidentId === inc.id && s.status === 'open');
+  const now = useNow(15_000);
+  // Сколько инцидент ждёт на пункте: для новых — с появления, для записей выгрузки — с запуска.
+  const waitMin = Math.max(0, Math.floor((now - (inc.origin === 'dataset' ? inc.updatedAt : inc.createdAt)) / 60_000));
+  const fresh = now - inc.createdAt < 8000;
   return (
-    <div className={`prow p-${inc.priority} ${sel ? 'sel' : ''}`} role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
+    <div className={`prow p-${inc.priority} ${sel ? 'sel' : ''} ${fresh ? 'is-new' : ''}`} role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
       <PrioDot p={inc.priority} />
       <span className="pr-main">
         <span className="pr-title">{inc.title}</span>
@@ -126,6 +130,7 @@ export function IncidentRow({ inc, sel, onClick }: { inc: Incident; sel: boolean
           {inc.status === 'coordinators' ? STATUS_TEXT[inc.status] : teamName(inc.teamId)}
           {inc.p1Proposal && <span className="pr-tag p1">ИИ: P1?</span>}
           {flagged && <span className="pr-tag warn">сигнал</span>}
+          {inc.status === 'coordinators' && waitMin >= 0 && waitMin < 24 * 60 && <span className={`wait ${waitMin >= 5 ? 'long' : ''}`}>ждёт {waitMin} мин</span>}
         </span>
       </span>
       <span className="pr-side">

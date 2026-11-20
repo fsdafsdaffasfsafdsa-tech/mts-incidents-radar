@@ -10,15 +10,40 @@ import { Point } from './point.ts';
 import { hashPassword, seedUsers, verifyPassword } from './auth.ts';
 import { Persister, loadPoint, openDb } from './db.ts';
 
+test('автоэскалация по таймерам и переписка в инциденте', () => {
+  const p = new Point();
+  p['seed']();
+  const inc = p.fromCluster({ key: 'Мобильная связь|krd', service: 'Мобильная связь', regionId: 'krd', count: 8, expected: 0.5, pValue: 1e-6 }, 'тест');
+  p.route(inc.id, 'ran-krd', 'Дежурный');
+  const now = Date.now();
+  inc.routedAt = now - 11 * 60_000;
+  p['timers'](now);
+  assert.equal(inc.escalation, 1);
+  const sig = [...p.signals.values()].find((s) => s.incidentId === inc.id && s.kind === 'timer')!;
+  assert.equal(sig.status, 'open');
+  inc.routedAt = now - 21 * 60_000;
+  p['timers'](now);
+  assert.equal(inc.escalation, 2);
+  assert.equal(sig.status, 'notified');
+  assert.ok(inc.leadNotifiedAt);
+  const eng = onShift('ran-krd', now).find((x) => x.role === 'engineer')!;
+  p.take(inc.id, eng.id);
+  assert.equal(sig.status, 'closed', 'взяли — таймер снят');
+  p.comment(inc.id, { name: 'Дежурный', personId: null, side: 'point', teamId: null }, 'Посмотрите БС у вокзала');
+  p.comment(inc.id, { name: eng.name, personId: eng.id, side: 'team', teamId: 'ran-krd' }, 'Смотрим, @Дежурный');
+  assert.equal(inc.comments?.length, 2);
+  assert.throws(() => p.comment(inc.id, { name: 'Чужой', personId: null, side: 'team', teamId: 'ran-msk' }, 'привет'), /не у вашей команды/);
+});
+
 const H = 3_600_000;
 // Понедельник 2026-11-16, 00:00 МСК.
 const MONDAY = Date.UTC(2026, 10, 15, 21, 0, 0);
 
-test('справочник: около 900 команд, уникальные логины, у пункта 4 смены', () => {
+test('справочник: около 900 команд, уникальные логины, у пункта 12 дежурных в 4 сменах', () => {
   assert.ok(TEAMS.length >= 850 && TEAMS.length <= 950, `команд ${TEAMS.length}`);
   assert.equal(new Set(PEOPLE.map((p) => p.id)).size, PEOPLE.length);
-  assert.equal(POINT_STAFF.filter((p) => p.role === 'commander').length, 4);
   assert.equal(POINT_STAFF.filter((p) => p.role === 'coordinator').length, 12);
+  assert.ok(POINT_STAFF.every((p) => p.role === 'coordinator' || p.role === 'lead'), 'роли командира нет');
   assert.ok(TEAMS.some((t) => t.itsm), 'группы из выгрузки ITSM в справочнике');
 });
 

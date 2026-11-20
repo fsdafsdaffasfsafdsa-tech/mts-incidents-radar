@@ -129,6 +129,9 @@ export function planPoint(incidents: Incident[], staff: Person[], owned: Map<str
 
 export const STUCK = { idleMin: 8, slaShare: 0.6 };
 
+/** Автоэскалация: команда не взяла инцидент — через 10 мин напоминание, через 20 — руководителю, через 30 — дежурная смена. */
+export const TIMERS = [10, 20, 30];
+
 export function stuckReason(inc: Incident, now: number, assigneeName: string | null): string | null {
   if (inc.status !== 'in_progress' && inc.status !== 'assigned') return null;
   if (!inc.teamId || inc.teamId === POINT_ID) return null;

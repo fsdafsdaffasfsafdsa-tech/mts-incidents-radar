@@ -8,6 +8,10 @@ import { TeamScreen } from './components/TeamScreen';
 import { Directory } from './components/Directory';
 import { CriticalBanner, Toasts } from './components/Alerts';
 import { Login } from './components/Login';
+import { QuickSearch } from './components/QuickSearch';
+import { WallPage } from './components/WallPage';
+import { Hotkeys } from './components/Hotkeys';
+import { Settings } from './components/Settings';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -30,13 +34,19 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const skin = useStore((s) => s.skin);
+  const motion = useStore((s) => s.motion);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    document.documentElement.dataset.skin = skin;
+    document.documentElement.dataset.motion = motion ? 'on' : 'off';
+  }, [theme, skin, motion]);
 
   if (!authChecked) return <div className="boot full"><span className="boot-ring" /></div>;
   if (!me) return <Login />;
-  const atPoint = me.role === 'coordinator' || me.role === 'commander';
+  const atPoint = me.role === 'coordinator';
+  // Отдельное окно для экрана стены: адрес с ?wall — только видеостена, без шапки.
+  if (atPoint && loaded && new URLSearchParams(location.search).has('wall')) return <WallPage standalone />;
 
   return (
     <div className={`app role-${me.role} view-${view}`}>
@@ -62,6 +72,9 @@ export function App() {
         )}
       </div>
       <Toasts />
+      <QuickSearch />
+      <Settings />
+      <Hotkeys />
     </div>
   );
 }

@@ -1,19 +1,23 @@
 // Пункт по вкладкам: каждая вкладка — один шаг работы. Полоса сверху показывает процесс и сколько ждёт на каждом шаге.
-//   Дежурный: Жалобы → Входящие → У команд → Решено · Запросы · Сигналы · ИИ-помощник · Справочник
-//   Командир: Смена → Распределить → У команд → Решено · Запросы · Сигналы · Жалобы · ИИ-помощник · График · Справочник
+//   Дежурный: Жалобы → Входящие → У команд → Решено · Запросы · Сигналы · Смена пункта · ИИ-помощник · Справочник
+//   Новые инциденты, которые никто не взял, распределяет ИИ; дежурные передают друг другу сами.
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, BellRing, BookUser, CalendarClock, CheckCircle2, ChevronRight, Inbox, MessageSquareShare, RefreshCw, Sparkles, Users, Wand2, Workflow } from 'lucide-react';
+import { Activity, BellRing, BookUser, CheckCircle2, ChevronRight, Inbox, MessageSquareShare, MonitorPlay, Sparkles, Users, Workflow } from 'lucide-react';
 import type { Incident } from '../../shared/types';
-import { applyPointPlan, fetchPointPlan, openIncident, savedTab, select, setTab, teamName, useStore } from '../store';
+import { openIncident, savedTab, select, setTab, teamName, useStore } from '../store';
 import { fmtDur, urgency } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { Deadline, Initials, PrioDot } from './ui';
+import { Deadline, PrioDot } from './ui';
 import { RFMap } from './RFMap';
-import { IncidentCard, AiBadge } from './IncidentCard';
+import { IncidentCard } from './IncidentCard';
 import { Detector, IncidentRow, RequestCard, Signals } from './PointScreen';
 import { Roster, Shift } from './CommanderScreen';
-import { isOn } from './kit';
+import { EscTimer, isOn } from './kit';
 import { AiPage } from './AiPage';
+import { Replay } from './Replay';
+import { WallPage } from './WallPage';
+import { hotNav } from '../lib/hotkeys';
+import { MyShift } from './ShiftTools';
 import { Directory } from './Directory';
 
 interface TabDef {
@@ -51,21 +55,13 @@ function useTabs(): TabDef[] {
       { id: 'requests', label: 'Запросы команд', icon: MessageSquareShare, count: req, tone: req ? 'warn' : undefined, hint: 'Команды пишут «это не наше — передайте» или «проблема у другой команды». ИИ уже сверил запрос со справочником.' },
       { id: 'signals', label: 'Сигналы', icon: BellRing, count: sig, tone: sig ? 'hot' : undefined, hint: 'Застрявшие инциденты и просьбы о помощи. «Указать руководителю» — и руководитель команды увидит это у себя.' },
     ];
-    if (me.role === 'commander')
-      return [
-        { id: 'shift', label: 'Смена', icon: Users, count: duty, flow: true, hint: 'Кто из дежурных на смене и что у каждого в работе.' },
-        { id: 'distribute', label: 'Распределить', icon: Wand2, count: free.length, tone: free.length ? 'warn' : undefined, flow: true, hint: 'Новые инциденты без дежурного. ИИ предлагает, кому их отдать, — проверьте и назначьте.' },
-        ...common,
-        { id: 'map', label: 'Жалобы', icon: Activity, count: stats?.flowPerMin, hint: 'Жалобы абонентов на карте и подозрительные всплески.' },
-        { id: 'ai', label: 'ИИ-помощник', icon: Sparkles, count: ai, hint: 'Что ИИ делает за пункт и почему — по каждому действию.' },
-        { id: 'roster', label: 'График', icon: CalendarClock, hint: 'Смены пункта на сутки вперёд.' },
-        { id: 'directory', label: 'Справочник', icon: BookUser, hint: 'Около 900 команд: направления, регионы, графики, кто сейчас работает.' },
-      ];
     return [
       { id: 'map', label: 'Жалобы', icon: Activity, count: stats?.flowPerMin, flow: true, hint: 'Жалобы абонентов приходят на карту. ИИ замечает всплески и сам собирает их в инциденты.' },
-      { id: 'inbox', label: 'Входящие', icon: Inbox, count: inbox.length, tone: free.length ? 'warn' : undefined, flow: true, hint: 'Новые инциденты на пункте: ваши и без дежурного. Возьмите и передайте команде — ИИ подскажет кому и почему.' },
+      { id: 'inbox', label: 'Входящие', icon: Inbox, count: inbox.length, tone: free.length ? 'warn' : undefined, flow: true, hint: 'Новые инциденты на пункте: ваши и без дежурного. Возьмите себе или передайте коллеге, затем — команде. ИИ подсказывает, кому подходит, решаете вы.' },
       ...common,
+      { id: 'shift', label: 'Смена пункта', icon: Users, count: duty, hint: 'Кто из дежурных сейчас на смене, что у каждого в работе, и график на сутки. Передать инцидент коллеге — в карточке инцидента.' },
       { id: 'ai', label: 'ИИ-помощник', icon: Sparkles, count: ai, hint: 'Что ИИ делает за пункт и почему — по каждому действию.' },
+      { id: 'wall', label: 'Видеостена', icon: MonitorPlay, hint: 'Экран для стены над рабочими местами: видно с расстояния. «На экран стены» откроет его отдельным окном, «На весь экран» — без рамок.' },
       { id: 'directory', label: 'Справочник', icon: BookUser, hint: 'Около 900 команд: направления, регионы, графики, кто сейчас работает.' },
     ];
   }, [me, incidents, requests, signals, stats, staff, now]);
@@ -76,9 +72,10 @@ export function PointApp() {
   const tab = useStore((s) => s.tab);
   const tabs = useTabs();
   useEffect(() => {
-    if (!tabs.some((t) => t.id === tab)) setTab(savedTab(me.role) && tabs.some((t) => t.id === savedTab(me.role)) ? savedTab(me.role) : me.role === 'commander' ? 'shift' : 'inbox');
+    if (!tabs.some((t) => t.id === tab)) setTab(savedTab(me.role) && tabs.some((t) => t.id === savedTab(me.role)) ? savedTab(me.role) : 'inbox');
   }, [tab, tabs, me.role]);
   const cur = tabs.find((t) => t.id === tab) ?? tabs[0];
+  hotNav.tabs = tabs.map((t) => t.id);
   return (
     <div className="pointapp">
       <nav className="stagebar" aria-label="Шаги работы пункта">
@@ -90,7 +87,7 @@ export function PointApp() {
               <button className={`stab ${t.id === cur.id ? 'on' : ''} ${t.tone ?? ''}`} onClick={() => setTab(t.id)} aria-current={t.id === cur.id ? 'page' : undefined}>
                 <t.icon size={15} />
                 <span>{t.label}</span>
-                {t.count !== undefined && <span className="stage-n num">{t.count}</span>}
+                {t.count !== undefined && <span key={t.count} className="stage-n num pop">{t.count}</span>}
               </button>
               {nextFlow && <ChevronRight size={15} className="stage-arrow" />}
             </span>
@@ -108,12 +105,7 @@ export function PointApp() {
         {cur.id === 'ai' && <AiPage />}
         {cur.id === 'directory' && <Directory />}
         {cur.id === 'shift' && <ShiftPage />}
-        {cur.id === 'distribute' && <DistributePage />}
-        {cur.id === 'roster' && (
-          <div className="page-one">
-            <Roster />
-          </div>
-        )}
+        {cur.id === 'wall' && <WallPage />}
       </div>
     </div>
   );
@@ -126,6 +118,7 @@ function MapPage() {
     <div className="page-split map">
       <div className="map-col">
         <RFMap />
+        <Replay />
       </div>
       <Detector />
     </div>
@@ -136,6 +129,7 @@ function MapPage() {
 function ListWithCard({ list, empty, header, row }: { list: Incident[]; empty: string; header?: React.ReactNode; row?: (i: Incident, sel: boolean) => React.ReactNode }) {
   const selectedId = useStore((s) => s.selectedId);
   const sel = list.find((i) => i.id === selectedId) ?? list[0];
+  hotNav.list = list.slice(0, 100).map((i) => i.id);
   useEffect(() => {
     if (sel && sel.id !== selectedId) select(sel.id);
   }, [sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -148,7 +142,7 @@ function ListWithCard({ list, empty, header, row }: { list: Incident[]; empty: s
           {list.slice(0, 100).map((i) => (row ? <div key={i.id}>{row(i, i.id === sel?.id)}</div> : <IncidentRow key={i.id} inc={i} sel={i.id === sel?.id} onClick={() => select(i.id)} />))}
         </div>
       </section>
-      {sel ? <IncidentCard inc={sel} /> : <section className="panel empty-panel">{empty}</section>}
+      {sel ? <IncidentCard key={sel.id} inc={sel} /> : <section className="panel empty-panel">{empty}</section>}
     </div>
   );
 }
@@ -170,6 +164,7 @@ function InboxPage() {
   const incidents = useStore((s) => s.incidents);
   const now = useNow(10_000);
   const [scope, setScope] = useState<'mine' | 'free' | 'all'>('mine');
+
   const at = [...incidents.values()].filter((i) => i.status === 'coordinators').sort((a, b) => urgency(b, now) - urgency(a, now));
   const mine = at.filter((i) => i.coordinatorId === me.personId);
   const free = at.filter((i) => !i.coordinatorId);
@@ -177,17 +172,19 @@ function InboxPage() {
   return (
     <ListWithCard
       list={list}
-      empty={scope === 'mine' ? 'У вас нет новых инцидентов — командир распределит, или возьмите из «Без дежурного»' : 'Пусто'}
+      empty={scope === 'mine' ? 'У вас нет новых инцидентов — возьмите из «Без дежурного»' : 'Пусто'}
       header={
-        <Seg
-          value={scope}
-          onChange={setScope}
-          items={[
-            ['mine', 'Мои', mine.length],
-            ['free', 'Без дежурного', free.length],
-            ['all', 'Все на пункте', at.length],
-          ]}
-        />
+        <>
+          <Seg
+            value={scope}
+            onChange={setScope}
+            items={[
+              ['mine', 'Мои', mine.length],
+              ['free', 'Без дежурного', free.length],
+              ['all', 'Все на пункте', at.length],
+            ]}
+          />
+        </>
       }
     />
   );
@@ -225,7 +222,7 @@ function TeamsPage() {
         ) : undefined
       }
       row={(i, sel) => (
-        <div className={`trow p-${i.priority} ${sel ? 'sel' : ''}`} role="button" tabIndex={0} onClick={() => select(i.id)} onKeyDown={(e) => e.key === 'Enter' && select(i.id)}>
+        <div className={`trow p-${i.priority} ${sel ? 'sel' : ''} ${now - i.updatedAt < 6000 ? 'is-new' : ''}`} role="button" tabIndex={0} onClick={() => select(i.id)} onKeyDown={(e) => e.key === 'Enter' && select(i.id)}>
           <PrioDot p={i.priority} />
           <span className="tr-main">
             <span className="pr-title">{i.title}</span>
@@ -234,6 +231,7 @@ function TeamsPage() {
               {i.assigneeName ? ` · ${i.assigneeName}` : ''}
               {flagged.has(i.id) && <span className="pr-tag warn">сигнал</span>}
             </span>
+            <EscTimer inc={i} now={now} />
             <span className="stepper">
               {STAGES.map((s, k) => (
                 <span key={s} className={k <= stageOf(i) ? 'on' : ''}>
@@ -314,80 +312,12 @@ function SignalsPage() {
 
 function ShiftPage() {
   return (
-    <div className="page-one">
-      <Shift />
-    </div>
-  );
-}
-
-/** Командир: ИИ предлагает распределение — галочки и «Назначить». Карточка выбранного справа. */
-function DistributePage() {
-  const incidents = useStore((s) => s.incidents);
-  const staff = useStore((s) => s.staff);
-  const selectedId = useStore((s) => s.selectedId);
-  const free = [...incidents.values()].filter((i) => i.status === 'coordinators' && !i.coordinatorId);
-  const [plan, setPlan] = useState<{ incidentId: string; personId: string; why: string }[]>([]);
-  const [off, setOff] = useState<Set<string>>(new Set());
-  const key = free.map((i) => i.id).join(',');
-  const refresh = () => void fetchPointPlan().then((p) => (setPlan(p), setOff(new Set())));
-  useEffect(refresh, [key]);
-  const chosen = plan.filter((p) => !off.has(p.incidentId) && free.some((i) => i.id === p.incidentId));
-  const sel = (selectedId ? incidents.get(selectedId) : undefined) ?? free[0];
-  return (
-    <div className="page-split">
-      <section className="panel plist">
-        <header className="pl-head">
-          <h2>
-            <AiBadge /> План распределения
-          </h2>
-          <button className="icon-btn" onClick={refresh} title="Пересчитать">
-            <RefreshCw size={15} />
-          </button>
-        </header>
-        <p className="muted plan-sub pad-x">Только дежурные на смене, каждому не больше трёх новых, сначала по специализации. Снимите галочку, если не согласны.</p>
-        <div className="pl-rows pad">
-          {!free.length && <div className="empty">Все инциденты распределены</div>}
-          {free.map((i) => {
-            const p = plan.find((x) => x.incidentId === i.id);
-            const who = p ? staff.find((s) => s.id === p.personId) : undefined;
-            const on = !!p && !off.has(i.id);
-            return (
-              <label key={i.id} className={`plan-row v ${on ? '' : 'off'} ${sel?.id === i.id ? 'sel' : ''}`} onClick={() => select(i.id)}>
-                <input
-                  type="checkbox"
-                  checked={on}
-                  disabled={!p}
-                  onChange={() => {
-                    const n = new Set(off);
-                    if (on) n.add(i.id);
-                    else n.delete(i.id);
-                    setOff(n);
-                  }}
-                />
-                <PrioDot p={i.priority} />
-                <span className="plan-inc">
-                  <b>{i.title}</b>
-                  <span className="muted">
-                    {who ? (
-                      <>
-                        → <Initials name={who.name} /> {who.name} · {p!.why}
-                      </>
-                    ) : (
-                      'нет свободного дежурного на смене'
-                    )}
-                  </span>
-                </span>
-              </label>
-            );
-          })}
-        </div>
-        <footer className="plan-foot">
-          <button className="btn btn-primary" disabled={!chosen.length} onClick={() => void applyPointPlan(chosen).then(refresh)}>
-            Назначить {chosen.length}
-          </button>
-        </footer>
-      </section>
-      {sel ? <IncidentCard inc={sel} /> : <section className="panel empty-panel">Нет нераспределённых инцидентов</section>}
+    <div className="page-split shift-page">
+      <div className="shift-col">
+        <MyShift />
+        <Shift />
+      </div>
+      <Roster />
     </div>
   );
 }

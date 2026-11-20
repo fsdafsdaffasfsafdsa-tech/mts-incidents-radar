@@ -20,7 +20,9 @@ import type {
   TeamPick,
   TeamRequest,
 } from '../shared/types';
-import { play, unlockAudio, type Cue } from './lib/sound';
+import { configureSound, play, unlockAudio, type Cue, type SoundPack } from './lib/sound';
+import { themeById } from './lib/themes';
+import { DEFAULT_HOTKEYS, type HotAction } from './lib/hotkeys';
 
 export type ToastKind = 'p1' | 'coord' | 'warn' | 'resolved' | 'info';
 export interface Toast {
@@ -36,6 +38,7 @@ export interface Toast {
 export interface RouteInfo {
   picks: TeamPick[];
   risk: { score: number; level: RiskLevel; factors: RiskFactor[]; minutesToBreach: number | null; note: string };
+  coordinator: { personId: string; why: string } | null; // кому из дежурных подходит (подсказка)
   at: number;
 }
 
@@ -67,9 +70,20 @@ export interface State {
   pointTab: PointTab;
   view: 'main' | 'directory';
   tab: string; // вкладка процесса: map, inbox, teams, requests, signals, done, ai, directory …
+  dirQuery: string; // поиск в справочнике, переданный из быстрого поиска
+  palette: boolean; // открыт быстрый поиск (Ctrl+K)
+  replayAt: number | null; // перемотка карты: момент времени или null — реальное время
+  hotkeys: Record<HotAction, string>;
+  hotkeysOn: boolean;
   toasts: Toast[];
   sound: boolean;
-  theme: 'dark' | 'light';
+  theme: 'dark' | 'light'; // подложка: от неё зависит карта
+  skin: string; // тема экрана из настроек
+  soundPack: SoundPack;
+  volume: number;
+  soundEvents: Record<Cue, boolean>;
+  motion: boolean; // анимации
+  settings: boolean; // открыто окно настроек
 }
 
 function readPref<T>(key: string, fallback: T): T {
@@ -116,10 +130,22 @@ let state: State = {
   pointTab: 'incidents',
   view: 'main',
   tab: '',
+  dirQuery: '',
+  palette: false,
+  replayAt: null,
+  hotkeys: { ...DEFAULT_HOTKEYS, ...readPref<Partial<Record<HotAction, string>>>('radar.hotkeys', {}) },
+  hotkeysOn: readPref('radar.hotkeysOn', true),
   toasts: [],
   sound: readPref('radar.sound', true),
-  theme: readPref('radar.theme', 'light'),
+  theme: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).base,
+  skin: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).id,
+  soundPack: readPref<SoundPack>('radar.soundPack', 'classic'),
+  volume: readPref('radar.volume', 0.8),
+  soundEvents: readPref<Record<Cue, boolean>>('radar.soundEvents', { p1: true, coord: true, warn: true, request: true, resolved: true }),
+  motion: readPref('radar.motion', true),
+  settings: false,
 };
+configureSound({ pack: state.soundPack, volume: state.volume, events: state.soundEvents });
 
 const listeners = new Set<() => void>();
 export const getState = () => state;
@@ -262,7 +288,7 @@ function handle(msg: PointMessage) {
       setState({ requests });
       if (!prev && msg.data.status === 'pending' && isPoint()) {
         toast({ kind: 'coord', title: msg.data.kind === 'transfer' ? 'Запрос на передачу' : 'Сообщение команды', body: `${teamName(msg.data.fromTeamId)}: ${msg.data.reason}`, incidentId: msg.data.incidentId ?? undefined, ttl: 9000 });
-        cue('coord');
+        cue('request');
       }
       break;
     }
@@ -300,7 +326,7 @@ function handle(msg: PointMessage) {
 
 // ─── уведомления по роли ───────────────────────────────────────────────────
 
-const isPoint = () => state.me?.role === 'coordinator' || state.me?.role === 'commander';
+const isPoint = () => state.me?.role === 'coordinator';
 let toastSeq = 1;
 function toast(t: Omit<Toast, 'id' | 'at'>) {
   const item: Toast = { ...t, id: `T${toastSeq++}`, at: Date.now() };
@@ -317,6 +343,17 @@ function cue(c: Cue) {
 function onIncident(prev: Incident | undefined, inc: Incident) {
   const me = state.me;
   if (!me) return;
+  const msgs = inc.comments ?? [];
+  if (prev && msgs.length > (prev.comments?.length ?? 0)) {
+    const c = msgs[msgs.length - 1];
+    const surname = me.name.split(' ')[0];
+    const mine = me.role === 'coordinator' ? inc.coordinatorId === me.personId : inc.teamId === me.teamId;
+    if (c.personId !== me.personId && (mine || c.text.includes(`@${surname}`))) {
+      toast({ kind: 'info', title: `Сообщение: ${c.author}`, body: c.text, incidentId: inc.id, ttl: 8000 });
+      cue('request');
+    }
+    return;
+  }
   if (isPoint()) {
     if (!prev && inc.status === 'coordinators') {
       const p1 = inc.priority === 'P1';
@@ -326,7 +363,7 @@ function onIncident(prev: Incident | undefined, inc: Incident) {
       toast({ kind: 'p1', title: 'ИИ предлагает «Наивысший»', body: inc.title, incidentId: inc.id, ttl: 15000 });
       cue('p1');
     } else if (prev && me.role === 'coordinator' && prev.coordinatorId !== me.personId && inc.coordinatorId === me.personId) {
-      toast({ kind: 'coord', title: 'Командир передал вам инцидент', body: inc.title, incidentId: inc.id, ttl: 9000 });
+      toast({ kind: 'coord', title: inc.history.some((h) => h.kind === 'ai' && h.at === inc.updatedAt) ? 'ИИ распределил вам инцидент' : 'Вам передали инцидент', body: inc.title, incidentId: inc.id, ttl: 9000 });
       cue('coord');
     } else if (prev && prev.priority !== inc.priority && inc.priority < prev.priority) {
       toast({ kind: 'warn', title: `Уровень повышен: ${inc.priorityText}`, body: inc.title, incidentId: inc.id, ttl: 7000 });
@@ -348,6 +385,10 @@ function onSignal(prev: Signal | undefined, s: Signal) {
   if (!me) return;
   if (isPoint() && !prev && s.status === 'open') {
     toast({ kind: 'warn', title: s.kind === 'help' ? 'Сотрудник просит помощи' : 'ИИ: инцидент застрял', body: s.text, incidentId: s.incidentId, ttl: 9000 });
+    cue('warn');
+  }
+  if (me.role !== 'coordinator' && s.kind === 'timer' && s.teamId === me.teamId && !prev) {
+    toast({ kind: 'warn', title: 'Напоминание: инцидент ждёт вашу команду', body: s.text, incidentId: s.incidentId, ttl: 12000 });
     cue('warn');
   }
   if (me.role === 'lead' && s.teamId === me.teamId && s.status === 'notified' && prev?.status !== 'notified') {
@@ -426,6 +467,7 @@ export async function teamReport(toTeamId: string, text: string) {
   toast({ kind: 'info', title: 'Сообщение отправлено в пункт', body: text, ttl: 4000 });
 }
 export const setAway = (away: boolean) => quiet(post('/api/me/away', { away }));
+export const sendComment = (id: string, text: string) => quiet(post(`/api/incidents/${id}/comment`, { text }));
 
 export async function fetchTeam(id: string): Promise<{ team: Team; members: Person[] } | null> {
   const r = await fetch(`/api/teams/${id}`);
@@ -450,10 +492,44 @@ export function toggleSound() {
   if (sound) play('coord');
 }
 export function toggleTheme() {
-  const theme = state.theme === 'dark' ? 'light' : 'dark';
-  writePref('radar.theme', theme);
-  setState({ theme });
+  setSkin(state.theme === 'dark' ? 'light' : 'dark');
 }
+
+// ─── настройки: тема экрана, звук, анимации ─────────────────────────────────
+
+export function setSkin(id: string) {
+  const t = themeById(id);
+  writePref('radar.skin', t.id);
+  setState({ skin: t.id, theme: t.base });
+}
+export function setSoundPack(pack: SoundPack) {
+  unlockAudio();
+  writePref('radar.soundPack', pack);
+  configureSound({ pack });
+  setState({ soundPack: pack, sound: true });
+  writePref('radar.sound', true);
+  play('coord', pack);
+}
+export function setVolume(volume: number) {
+  writePref('radar.volume', volume);
+  configureSound({ volume });
+  setState({ volume });
+}
+export function setSoundEvent(cue: Cue, on: boolean) {
+  const soundEvents = { ...state.soundEvents, [cue]: on };
+  writePref('radar.soundEvents', soundEvents);
+  configureSound({ events: soundEvents });
+  setState({ soundEvents });
+}
+export function previewCue(cue: Cue) {
+  unlockAudio();
+  setTimeout(() => play(cue, state.soundPack), 30);
+}
+export function setMotion(motion: boolean) {
+  writePref('radar.motion', motion);
+  setState({ motion });
+}
+export const setSettings = (settings: boolean) => setState({ settings });
 export function setPointTab(pointTab: PointTab) {
   setState({ pointTab });
 }
@@ -468,10 +544,30 @@ export function setTab(tab: string) {
 export function openIncident(id: string) {
   const inc = state.incidents.get(id);
   const role = state.me?.role;
-  if (inc && (role === 'coordinator' || role === 'commander')) {
-    const tab = inc.status === 'resolved' ? 'done' : inc.status === 'coordinators' ? (role === 'commander' && !inc.coordinatorId ? 'distribute' : 'inbox') : 'teams';
-    setTab(role === 'commander' && tab === 'inbox' ? 'teams' : tab);
-  } else if (inc) setTab('work');
+  if (inc && role === 'coordinator') setTab(inc.status === 'resolved' ? 'done' : inc.status === 'coordinators' ? 'inbox' : 'teams'); else if (inc) setTab('work');
   select(id);
 }
 export const savedTab = (role: string) => readPref<string>(`radar.tab.${role}`, '');
+
+export function openTeamInDirectory(name: string) {
+  setState({ dirQuery: name, palette: false });
+  setTab(state.me?.role === 'coordinator' ? 'directory' : 'directory');
+}
+export const setPalette = (palette: boolean) => setState({ palette });
+export const setReplay = (replayAt: number | null) => setState({ replayAt });
+/** Назначить клавишу действию. Если клавиша уже занята — у прежнего действия она снимается. */
+export function setHotkey(action: HotAction, code: string) {
+  const hotkeys = { ...state.hotkeys };
+  for (const k of Object.keys(hotkeys) as HotAction[]) if (hotkeys[k] === code) hotkeys[k] = '';
+  hotkeys[action] = code;
+  writePref('radar.hotkeys', hotkeys);
+  setState({ hotkeys });
+}
+export function resetHotkeys() {
+  writePref('radar.hotkeys', DEFAULT_HOTKEYS);
+  setState({ hotkeys: { ...DEFAULT_HOTKEYS } });
+}
+export function setHotkeysOn(hotkeysOn: boolean) {
+  writePref('radar.hotkeysOn', hotkeysOn);
+  setState({ hotkeysOn });
+}

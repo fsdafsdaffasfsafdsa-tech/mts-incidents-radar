@@ -8,7 +8,6 @@ export const isOn = (p: Person, now: number) => !p.away && onDuty(p.schedule, p.
 
 export const ROLE_TEXT: Record<Person['role'], string> = {
   coordinator: 'дежурный пункта',
-  commander: 'командир смены',
   engineer: 'инженер',
   lead: 'руководитель',
 };
@@ -119,3 +118,23 @@ export const STATUS_TEXT: Record<Incident['status'], string> = {
   escalated: 'эскалирован',
   resolved: 'решён',
 };
+
+/** Таймеры автоэскалации — те же, что на сервере (server/ai-point.ts, TIMERS). */
+export const TIMERS = [10, 20, 30];
+const TIMER_TEXT = ['напоминание команде', 'руководителю', 'дежурной смене'];
+
+/** «Не взяли 7 мин · напоминание через 3» — для инцидентов, которые команда ещё не взяла. */
+export function EscTimer({ inc, now }: { inc: Incident; now: number }) {
+  if (inc.status !== 'assigned' || inc.assignee || !inc.routedAt) return null;
+  const w = Math.max(0, Math.floor((now - inc.routedAt) / 60_000));
+  const level = inc.escalation ?? 0;
+  const next = TIMERS[level];
+  return (
+    <span className={`esc l${level}`} title="Автоэскалация: 10 мин — напоминание, 20 — руководителю, 30 — дежурной смене">
+      <span className="esc-bar">
+        <i style={{ width: `${Math.min(100, (w / TIMERS[2]) * 100)}%` }} />
+      </span>
+      {next !== undefined ? `не взяли ${w} мин · ${TIMER_TEXT[level]} через ${Math.max(0, next - w)}` : `не взяли ${w} мин — пора передать дежурной смене`}
+    </span>
+  );
+}

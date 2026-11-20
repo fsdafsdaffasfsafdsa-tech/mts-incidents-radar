@@ -7,9 +7,11 @@ import { loadRoute, select, setAway, setTab, teamAssign, teamHelp, teamName, tea
 import { fmtClock, urgency } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, Elapsed, PRIO_COLORS, PrioDot } from './ui';
-import { Duty, PersonRow, STATUS_TEXT, ScheduleStrip, Spark, isOn, shiftHint } from './kit';
+import { Duty, EscTimer, PersonRow, STATUS_TEXT, ScheduleStrip, Spark, isOn, shiftHint } from './kit';
+import { Chat } from './Chat';
 import { TeamSearch } from './IncidentCard';
 import { Directory } from './Directory';
+import { hotNav } from '../lib/hotkeys';
 
 type Tab = 'new' | 'work' | 'mine' | 'done';
 
@@ -41,13 +43,14 @@ export function TeamScreen() {
     { id: 'directory', label: 'Справочник', hint: 'Около 900 команд: если проблема не ваша, найдите, чья она.' },
   ];
   const cur = tabs.find((t) => t.id === tab) ?? tabs[0];
+  hotNav.tabs = tabs.map((t) => t.id);
   return (
     <div className="teamapp">
       <nav className="stagebar" aria-label="Разделы">
         {tabs.map((t) => (
           <button key={t.id} className={`stab ${cur.id === t.id ? 'on' : ''} ${t.tone ?? ''}`} onClick={() => setTab(t.id)}>
             <span>{t.label}</span>
-            {t.n !== undefined && <span className="stage-n num">{t.n}</span>}
+            {t.n !== undefined && <span key={t.n} className="stage-n num pop">{t.n}</span>}
           </button>
         ))}
       </nav>
@@ -102,6 +105,7 @@ function TeamQueue({ list, selected }: { list: Incident[]; selected: string | nu
   };
   const [tab, setTab] = useState<Tab>(() => (groups.new.length ? 'new' : me.role === 'engineer' ? 'mine' : 'work'));
   const rows = groups[tab].sort((a, b) => (tab === 'done' ? (b.resolvedAt ?? 0) - (a.resolvedAt ?? 0) : urgency(b, now) - urgency(a, now)));
+  hotNav.list = rows.slice(0, 60).map((i) => i.id);
   const tabs: [Tab, string][] = me.role === 'engineer' ? [['new', 'Новые'], ['mine', 'Мои'], ['work', 'В работе'], ['done', 'Решены']] : [['new', 'Новые'], ['work', 'В работе'], ['done', 'Решены']];
   return (
     <section className="panel plist" aria-label="Инциденты команды">
@@ -244,8 +248,10 @@ function TeamIncident({ inc, self, members }: { inc: Incident; self: Person; mem
           )}
         </div>
       )}
+      <EscTimer inc={inc} now={now} />
       {form === 'transfer' && <TransferForm inc={inc} onDone={() => setForm('none')} />}
       {form === 'help' && <HelpForm inc={inc} onDone={() => setForm('none')} />}
+      <Chat inc={inc} />
       {inc.solution && inc.status === 'resolved' && (
         <p className="task-desc">
           <b>Решение:</b> {inc.solution}

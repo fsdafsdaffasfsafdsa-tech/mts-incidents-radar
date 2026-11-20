@@ -4,7 +4,7 @@ import { PRIORITY_SLA_MIN, PRIORITY_TEXT, type Cluster, type Complaint, type Fee
 import { RAW, employeeLogin, groupByName, priorityFromId, productByName, serviceName, type RawIncident } from './catalog.ts';
 import { ComplaintStream, RULES, findClusters, higher, isIncidentCluster, makeComplaint, nextAutoLevel, summarize, targetLevel } from './complaints.ts';
 import { POINT_ID, POINT_STAFF, isOn, itsmTeam, membersOf, onShift, personById, serviceDef, teamById, teamOnDuty } from './directory.ts';
-import { checkTransfer, planPoint, routeTeams, stuckReason, type PointCtx, type PointPlanItem } from './ai-point.ts';
+import { TIMERS, checkTransfer, planPoint, routeTeams, stuckReason, type PointCtx, type PointPlanItem } from './ai-point.ts';
 import { regionById } from './regions.ts';
 
 type Listener = (m: PointMessage) => void;
@@ -16,7 +16,7 @@ const KEEP_COMPLAINTS = 2 * 60 * MIN;
 interface Hidden {
   warned: boolean;
   breached: boolean;
-  pointAt: number; // попал на пункт (для автопилота командира)
+  pointAt: number; // попал на пункт (для автораспределения ИИ)
   routeAt: number | null; // когда автопилот дежурного передаст команде
   acceptAt: number | null; // когда команда возьмёт
   finishAt: number | null;
@@ -328,7 +328,10 @@ export class Point {
       this.emit({ type: 'clusters', data: this.clusters });
       this.escalate(now);
     }
-    if (this.ticks % 10 === 0) this.detectStuck(now);
+    if (this.ticks % 10 === 0) {
+      this.detectStuck(now);
+      this.timers(now);
+    }
     this.autopilot(now);
     this.sla(now);
     for (const id of this.dirty) {
@@ -483,13 +486,59 @@ export class Point {
     inc.slaMinutes = Math.round((inc.slaDeadline - inc.createdAt) / MIN);
   }
 
+  /** Автоэскалация по таймерам: команда на смене не взяла инцидент → напоминание → руководителю → дежурная смена. */
+  private timers(now: number) {
+    for (const inc of this.incidents.values()) {
+      if (inc.status !== 'assigned' || inc.assignee || !inc.teamId || inc.teamId === POINT_ID) continue;
+      const team = teamById(inc.teamId);
+      if (!team) continue;
+      // Пока команда не на смене, таймер не идёт: отсчёт начнётся с начала смены.
+      if (!teamOnDuty(team.id, now)) {
+        inc.routedAt = now;
+        continue;
+      }
+      const waited = (now - (inc.routedAt ?? inc.updatedAt)) / MIN;
+      const level = inc.escalation ?? 0;
+      if (level >= TIMERS.length || waited < TIMERS[level]) continue;
+      inc.escalation = level + 1;
+      const sig = [...this.signals.values()].find((s) => s.incidentId === inc.id && s.kind === 'timer' && s.status !== 'closed');
+      const lead = personById(team.leadId);
+      const backup = team.backupId ? teamById(team.backupId) : undefined;
+      if (level === 0) {
+        inc.history.push({ at: now, kind: 'system', text: `Автоэскалация: «${team.name}» не взяла за ${TIMERS[0]} мин — команде отправлено напоминание` });
+        this.addSignal({ kind: 'timer', incidentId: inc.id, personId: null, teamId: team.id, text: `«${team.name}» не взяла за ${TIMERS[0]} мин — напомнили команде` });
+      } else if (level === 1) {
+        inc.leadNotifiedAt = now;
+        inc.history.push({ at: now, kind: 'system', text: `Автоэскалация: ${TIMERS[1]} мин без ответа — сообщено руководителю${lead ? ` (${lead.name})` : ''}` });
+        if (sig) {
+          sig.status = 'notified';
+          sig.notifiedAt = now;
+          sig.notifiedBy = 'Автоэскалация';
+          sig.text = `«${team.name}» не взяла за ${TIMERS[1]} мин — сообщено руководителю`;
+          this.emit({ type: 'signal', data: sig });
+        }
+        const h = this.hidden.get(inc.id);
+        if (h && lead && !this.isOnline(lead.id)) h.acceptAt = now + between(40, 120) * 1000;
+      } else {
+        inc.history.push({ at: now, kind: 'system', text: `Автоэскалация: ${TIMERS[2]} мин без ответа${backup ? ` — пункту предложено передать в «${backup.name}»` : ' — нужна помощь пункта'}` });
+        if (sig) {
+          sig.status = 'open';
+          sig.text = `«${team.name}» не взяла за ${TIMERS[2]} мин${backup ? ` — передать дежурной смене «${backup.name}»?` : ''}`;
+          this.emit({ type: 'signal', data: sig });
+        } else this.addSignal({ kind: 'timer', incidentId: inc.id, personId: null, teamId: team.id, text: `«${team.name}» не взяла за ${TIMERS[2]} мин` });
+      }
+      this.touch(inc, now);
+      this.pushFeed('signal', inc, `Автоэскалация, ступень ${level + 1}`);
+    }
+  }
+
   private detectStuck(now: number) {
     for (const inc of this.incidents.values()) {
       if (inc.status === 'resolved' || inc.status === 'coordinators') continue;
       const open = [...this.signals.values()].some((s) => s.incidentId === inc.id && s.status !== 'closed');
       if (open) continue;
-      // Команда не на смене — это не «застрял», а ожидание смены: видно в карточке, сигнал не нужен.
-      if (inc.status === 'assigned' && !inc.assignee && inc.teamId && !teamOnDuty(inc.teamId, now)) continue;
+      // Команда ещё не взяла — этим занимаются таймеры автоэскалации, а не «застрял».
+      if (inc.status === 'assigned' && !inc.assignee) continue;
       const why = stuckReason(inc, now, inc.assigneeName);
       if (!why) continue;
       inc.history.push({ at: now, kind: 'ai', text: `ИИ заметил, что инцидент застрял: ${why.toLowerCase()} — сигнал пункту` });
@@ -534,11 +583,23 @@ export class Point {
 
   private autopilot(now: number) {
     const staffOn = onShift(POINT_ID, now);
-    const commanderOnline = staffOn.some((p) => p.role === 'commander' && this.isOnline(p.id));
-    // Командир распределяет новые между дежурными.
-    if (!commanderOnline && this.ticks % 5 === 0) {
-      const waiting = [...this.incidents.values()].filter((i) => i.status === 'coordinators' && !i.coordinatorId && now - (this.hidden.get(i.id)?.pointAt ?? now) > 60_000);
-      if (waiting.length) this.applyPointPlan(planPoint(waiting, POINT_STAFF, this.owned(), now), 'Командир смены (автопилот)');
+    // Распределяют люди. Для демо коллеги-дежурные, которых нет в системе, сами берут новые инциденты через 3–5 минут
+    // (как сделал бы человек). Тот, кто вошёл в систему, успевает взять раньше.
+    if (this.ticks % 5 === 0) {
+      for (const inc of this.incidents.values()) {
+        if (inc.status !== 'coordinators' || inc.coordinatorId) continue;
+        const h = this.hidden.get(inc.id);
+        if (!h) continue;
+        if (h.routeAt === null) h.routeAt = h.pointAt + between(180, 300) * 1000;
+        if (now < h.routeAt) continue;
+        const colleagues = staffOn.filter((p) => p.role === 'coordinator' && !this.isOnline(p.id));
+        const pick = planPoint([inc], colleagues, this.owned(), now)[0];
+        if (pick) {
+          const p = colleagues.find((x) => x.id === pick.personId)!;
+          this.assignCoordinator(inc.id, p.id, p.name);
+          h.routeAt = null;
+        } else h.routeAt = now + 60_000;
+      }
     }
     for (const inc of this.incidents.values()) {
       const h = this.hidden.get(inc.id);
@@ -674,6 +735,9 @@ export class Point {
     inc.assigneeName = null;
     inc.startedAt = null;
     if (was && was !== POINT_ID && was !== team.id) inc.reassignCount++;
+    inc.routedAt = now;
+    inc.escalation = 0;
+    for (const s of this.signals.values()) if (s.incidentId === id && s.kind === 'timer' && s.status !== 'closed') (s.status = 'closed'), this.emit({ type: 'signal', data: s });
     const duty = teamOnDuty(team.id, now);
     h.acceptAt = duty ? now + between(30, 120) * 1000 : null;
     h.finishAt = null;
@@ -815,6 +879,7 @@ export class Point {
     const h = this.hidden.get(id)!;
     h.finishAt = now + between(4, 14) * MIN;
     inc.history.push({ at: now, kind: 'team', actor: p.name, text: `${p.name}: взял(а) в работу${auto ? '' : ''}` });
+    for (const s of this.signals.values()) if (s.incidentId === id && s.kind === 'timer' && s.status !== 'closed') (s.status = 'closed'), this.emit({ type: 'signal', data: s });
     this.touch(inc, now);
     this.pushFeed('in_progress', inc, `${p.name} в работе`, p.name);
     return inc;
@@ -916,6 +981,20 @@ export class Point {
     this.touch(inc, Date.now());
     void auto;
     return this.addSignal({ kind: 'help', incidentId: inc.id, personId: p.id, teamId: inc.teamId, text: `${p.name}: ${text}` });
+  }
+
+  /** Переписка в карточке: пункт ↔ команда. */
+  comment(id: string, author: { name: string; personId: string | null; side: 'point' | 'team'; teamId: string | null }, text: string) {
+    const inc = this.need(id);
+    const t = text.trim().slice(0, 1000);
+    if (!t) throw new Error('Пустое сообщение');
+    if (author.side === 'team' && author.teamId !== inc.teamId && !personById(author.personId)?.teams?.includes(inc.teamId ?? '')) throw new Error('Инцидент не у вашей команды');
+    const now = Date.now();
+    const c = { id: `M${now.toString(36)}${Math.floor(Math.random() * 1e4)}`, at: now, author: author.name, personId: author.personId, side: author.side, teamId: author.teamId, text: t };
+    inc.comments = [...(inc.comments ?? []), c].slice(-200);
+    this.touch(inc, now);
+    this.pushFeed('comment', inc, `${author.name}: ${t.slice(0, 80)}`, author.name);
+    return c;
   }
 
   setAway(personId: string, away: boolean) {

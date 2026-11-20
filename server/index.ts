@@ -9,7 +9,7 @@ import { Point } from './point.ts';
 import { RULES } from './complaints.ts';
 import { POINT_ID, POINT_STAFF, PEOPLE, TEAMS, SERVICES, membersOf, teamById } from './directory.ts';
 import { REGIONS } from './regions.ts';
-import { routeTeams } from './ai-point.ts';
+import { planPoint, routeTeams } from './ai-point.ts';
 import { assessRisk, buildContext } from './ai-heuristic.ts';
 import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
@@ -153,7 +153,7 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
     const me = currentUser(db, req);
     if (p === '/api/me') return me ? json(res, 200, me) : json(res, 401, { error: 'Нужно войти' });
     if (!me) return json(res, 401, { error: 'Нужно войти' });
-    const atPoint = me.role === 'coordinator' || me.role === 'commander';
+    const atPoint = me.role === 'coordinator';
     const pointOnly = () => {
       if (!atPoint) throw new Forbidden('Только для координирующего пункта');
     };
@@ -173,16 +173,22 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       return;
     }
 
-    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve)$/);
+    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve|comment)$/);
     if (m) {
       const [, id, what] = m;
       const inc = point.incidents.get(id);
       if (!inc) return json(res, 404, { error: 'Инцидент не найден' });
       if (what === 'route' && !post) {
         const ctx = point.ctx();
-        return json(res, 200, { picks: routeTeams(inc, ctx, 6), risk: assessRisk(inc, buildContext(point.incidents, ctx.now)) });
+        // Подсказка, кому из дежурных на смене подходит инцидент (специализация и загрузка). Решает человек.
+        const coordinator = inc.status === 'coordinators' ? planPoint([inc], POINT_STAFF, point.owned(), ctx.now)[0] ?? null : null;
+        return json(res, 200, { picks: routeTeams(inc, ctx, 6), risk: assessRisk(inc, buildContext(point.incidents, ctx.now)), coordinator });
       }
       if (what === 'complaints') return json(res, 200, point.complaints.filter((c) => c.incidentId === id).slice(-150));
+      if (what === 'comment' && post) {
+        const body = await readBody(req);
+        return json(res, 200, point.comment(id, { name: me.name, personId: me.personId, side: atPoint ? 'point' : 'team', teamId: atPoint ? null : me.teamId }, str(body.text)));
+      }
       pointOnly();
       const body = await readBody(req);
       if (what === 'route') return json(res, 200, point.route(id, str(body.teamId), actor));
@@ -199,11 +205,10 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       pointOnly();
       const body = await readBody(req);
       const target = str(body.personId) || pid;
-      if (me.role === 'coordinator' && target !== pid) throw new Forbidden('Распределяет командир смены');
       return json(res, 200, point.assignCoordinator(str(body.incidentId), target, actor));
     }
     if (p === '/api/point/plan') {
-      if (me.role !== 'commander') throw new Forbidden('Только для командира смены');
+      pointOnly();
       if (!post) return json(res, 200, point.planPoint());
       const body = await readBody(req);
       return json(res, 200, { assigned: point.applyPointPlan(Array.isArray(body.items) ? body.items : [], actor) });

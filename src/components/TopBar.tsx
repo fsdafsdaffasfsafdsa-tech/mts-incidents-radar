@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileJson, FlaskConical, LogOut, Moon, Sun, Volume2, VolumeX } from 'lucide-react';
-import { demoAuto, demoOutage, doLogout, teamName, toggleSound, toggleTheme, useStore } from '../store';
+import { FileJson, FlaskConical, LogOut, Moon, Search, Settings2, Sun, Volume2, VolumeX } from 'lucide-react';
+import { demoAuto, demoOutage, doLogout, setPalette, setSettings, teamName, toggleSound, toggleTheme, useStore } from '../store';
 import { fmtClockSec } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Initials } from './ui';
@@ -23,7 +23,7 @@ export function TopBar() {
   const [demo, setDemo] = useState(false);
   const [auto, setAuto] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
-  const atPoint = me?.role === 'coordinator' || me?.role === 'commander';
+  const atPoint = me?.role === 'coordinator';
 
   useEffect(() => {
     if (!demo) return;
@@ -49,6 +49,11 @@ export function TopBar() {
 
 
       <div className="topbar-spacer" />
+      <button className="tb-btn search-btn" onClick={() => setPalette(true)} title="Быстрый поиск: Ctrl+K или /">
+        <Search size={15} />
+        <span>Поиск</span>
+        <kbd>Ctrl K</kbd>
+      </button>
 
       {atPoint && (
         <span className={`src-chip ${source.startsWith('ошибка') ? 'bad' : ''}`} title={`Выгрузка ITSM: ${source}`}>
@@ -99,6 +104,9 @@ export function TopBar() {
       )}
       <button className={`tb-icon ${sound ? '' : 'muted'}`} onClick={toggleSound} aria-label="Звук">
         {sound ? <Volume2 size={17} /> : <VolumeX size={17} />}
+      </button>
+      <button className="tb-icon" onClick={() => setSettings(true)} aria-label="Настройки" title="Настройки: тема экрана, звуки, анимации">
+        <Settings2 size={17} />
       </button>
       <button className="tb-icon" onClick={toggleTheme} aria-label="Тема">
         {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
