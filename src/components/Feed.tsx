@@ -5,13 +5,12 @@ import {
   CheckCircle2,
   CirclePlus,
   Flame,
-  Link2,
-  Navigation,
+  Microscope,
   Pause,
   Play,
   Send,
-  Siren,
   TimerOff,
+  Trash2,
   UserCheck,
   Users,
   type LucideIcon,
@@ -27,22 +26,20 @@ const META: Record<FeedKind, { icon: LucideIcon; label: string; tone: string }> 
   coordinators: { icon: Users, label: 'На координаторов', tone: 'coord' },
   assigned: { icon: Send, label: 'Назначен', tone: 'neutral' },
   in_progress: { icon: UserCheck, label: 'В работе', tone: 'neutral' },
-  escalated: { icon: Siren, label: 'Эскалация', tone: 'warn' },
+  research: { icon: Microscope, label: 'Исследование', tone: 'ai' },
   priority_up: { icon: ArrowUpCircle, label: 'Приоритет ↑', tone: 'warn' },
-  sla_warning: { icon: AlarmClock, label: 'SLA скоро', tone: 'warn' },
-  sla_breach: { icon: TimerOff, label: 'SLA нарушен', tone: 'p1' },
+  sla_warning: { icon: AlarmClock, label: 'Дедлайн скоро', tone: 'warn' },
+  sla_breach: { icon: TimerOff, label: 'Дедлайн прошёл', tone: 'p1' },
   resolved: { icon: CheckCircle2, label: 'Решён', tone: 'ok' },
-  linked: { icon: Link2, label: 'Связан', tone: 'neutral' },
-  crew: { icon: Navigation, label: 'Бригада', tone: 'ai' },
-  comment: { icon: CirclePlus, label: 'Комментарий', tone: 'neutral' },
+  removed: { icon: Trash2, label: 'Удалён', tone: 'neutral' },
 };
 
 type Mode = 'all' | 'important' | 'routing' | 'resolved';
 const MODES: { id: Mode; label: string; kinds: FeedKind[] | null }[] = [
   { id: 'all', label: 'Все', kinds: null },
-  { id: 'important', label: 'Важное', kinds: ['p1', 'priority_up', 'sla_breach', 'sla_warning', 'escalated'] },
-  { id: 'routing', label: 'Назначения', kinds: ['coordinators', 'assigned', 'in_progress', 'linked', 'crew'] },
-  { id: 'resolved', label: 'Решённые', kinds: ['resolved'] },
+  { id: 'important', label: 'Важное', kinds: ['p1', 'priority_up', 'sla_breach', 'sla_warning'] },
+  { id: 'routing', label: 'Назначения', kinds: ['coordinators', 'assigned', 'in_progress'] },
+  { id: 'resolved', label: 'Решённые', kinds: ['resolved', 'research'] },
 ];
 
 export function Feed() {

@@ -1,77 +1,115 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Sim } from './sim.ts';
-import { TEMPLATES } from './catalog.ts';
-import { assessRisk, briefOf, buildContext, findCorrelation, heuristicInsight } from './ai-heuristic.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { Incident, ServerMessage } from '../shared/types.ts';
+import { assessRisk, buildContext, findCorrelation, heuristicInsight } from './ai-heuristic.ts';
+import { FileSource, diffIncident, mapRecord, parseDate } from './source-file.ts';
 
-test('подсказка команды совпадает с эталоном генератора в большинстве случаев', () => {
-  const sim = new Sim();
-  let hits = 0;
-  let total = 0;
-  const misses = new Map<string, number>();
-  for (let round = 0; round < 6; round++) {
-    for (const template of TEMPLATES) {
-      const inc = sim.spawn({ template, quiet: true, seed: true, status: 'coordinators', createdAt: Date.now() - round * 3_600_000 });
-      const ctx = buildContext(new Map([[inc.id, inc]]), Date.now());
-      const b = briefOf(inc, ctx);
-      total++;
-      if (b.teamId === template.team) hits++;
-      else misses.set(template.title, (misses.get(template.title) ?? 0) + 1);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SAMPLE = path.join(root, 'data/incidents.sample.json');
+const records = JSON.parse(fs.readFileSync(SAMPLE, 'utf8')) as Record<string, unknown>[];
+
+function load(): Map<string, Incident> {
+  return new Map(records.map((r) => mapRecord(r)!).map((i) => [i.id, i]));
+}
+
+test('выгрузка читается целиком, группы ТЗ считаются по полям файла', () => {
+  const m = load();
+  assert.equal(m.size, records.length);
+  const all = [...m.values()];
+  assert.equal(all.filter((i) => i.status === 'research').length, 5, 'исследование ситуации');
+  assert.equal(all.filter((i) => i.onCoordinators).length, 2, 'на координаторах');
+  assert.equal(all.filter((i) => i.priority === 'P2').length, 5, 'высокий приоритет');
+  assert.equal(all.filter((i) => i.status === 'resolved').length, 15, 'завершён и закрыт');
+  assert.equal(new Set(all.map((i) => i.systemId)).size, 5, 'пять продуктов без дублей');
+});
+
+test('даты в обоих форматах: ISO и «YYYY-MM-DD HH:MM:SS»; пустые — null', () => {
+  assert.equal(parseDate('2026-11-08T12:02:29Z'), Date.UTC(2026, 10, 8, 12, 2, 29));
+  assert.equal(parseDate('2026-11-08 12:02:29'), new Date(2026, 10, 8, 12, 2, 29).getTime());
+  assert.equal(parseDate(null), null);
+  assert.equal(parseDate('0001-01-01T00:00:00'), null);
+});
+
+test('приоритет 4 «Наивысший» — критический, статус берётся по тексту', () => {
+  const inc = mapRecord({ ...records[0], priorityId: 4, priority: 'Наивысший', stateId: 20, stateEnum: 'Research', state: 'Исследование ситуации' })!;
+  assert.equal(inc.priority, 'P1');
+  assert.equal(inc.status, 'research');
+});
+
+test('изменения в файле превращаются в события для координатора', () => {
+  const base = mapRecord(records[1])!; // назначен не на координаторов, низкий приоритет
+  const crit = mapRecord({ ...records[1], priorityId: 4, priority: 'Наивысший' })!;
+  assert.deepEqual(diffIncident(base, crit).map((c) => c.kind), ['p1']);
+  const coord = mapRecord({ ...records[1], assignedGroupName: 'КЦ ИТ Координаторы Массовых Инцидентов' })!;
+  assert.deepEqual(diffIncident(base, coord).map((c) => c.kind), ['coordinators']);
+  const done = mapRecord({ ...records[1], state: 'Завершен', stateEnum: 'Resolved', stateId: 7 })!;
+  assert.deepEqual(diffIncident(base, done).map((c) => c.kind), ['resolved']);
+  assert.deepEqual(diffIncident(undefined, crit).map((c) => c.kind), ['p1']);
+});
+
+test('риск растёт по мере приближения дедлайна и после него', () => {
+  const m = load();
+  const inc = [...m.values()].find((i) => i.status === 'assigned' && i.slaDeadline)!;
+  const total = inc.slaDeadline! - inc.createdAt;
+  const at = (k: number) => assessRisk(inc, buildContext(m, inc.createdAt + total * k)).score;
+  assert.ok(at(0.1) < at(0.8), 'ближе к дедлайну риск выше');
+  assert.ok(at(0.8) < at(1.2), 'после дедлайна ещё выше');
+});
+
+test('дубль и дочерний указывают на мастер-инцидент или причину раньше себя', () => {
+  const m = load();
+  const ctx = buildContext(m, Date.now());
+  for (const inc of m.values()) {
+    if (!inc.isDouble && !inc.isReason) continue;
+    const corr = findCorrelation(inc, ctx);
+    assert.ok(corr, `${inc.id}: нет разбора связей`);
+    if (!corr!.rootId || corr!.rootId === inc.id) {
+      assert.ok(inc.isMaster || inc.isEffect, `${inc.id}: нет первопричины`); // сам мастер, причины раньше нет
+      continue;
     }
+    const root = m.get(corr!.rootId!)!;
+    assert.ok(root.createdAt <= inc.createdAt, `${inc.id}: причина позже следствия`);
+    assert.ok(inc.isDouble ? root.isMaster : root.isEffect || root.isMaster);
   }
-  const acc = hits / total;
-  assert.ok(acc >= 0.9, `точность ${Math.round(acc * 100)}%, промахи: ${[...misses.keys()].join(' | ')}`);
 });
 
-test('риск растёт по мере истечения SLA и при нарушении', () => {
-  const sim = new Sim();
-  const template = TEMPLATES[0];
-  const now = Date.now();
-  const fresh = sim.spawn({ template, quiet: true, seed: true, priority: 'P2', status: 'in_progress', trend: 'stable', users: 50_000, createdAt: now });
-  const late = sim.spawn({ template, quiet: true, seed: true, priority: 'P2', status: 'in_progress', trend: 'stable', users: 50_000, createdAt: now - 230 * 60_000 });
-  const broken = sim.spawn({ template, quiet: true, seed: true, priority: 'P2', status: 'in_progress', trend: 'stable', users: 50_000, createdAt: now - 260 * 60_000 });
-  const ctx = (i: typeof fresh) => buildContext(new Map([[i.id, i]]), now);
-  const r1 = assessRisk(fresh, ctx(fresh)).score;
-  const r2 = assessRisk(late, ctx(late)).score;
-  const r3 = assessRisk(broken, ctx(broken)).score;
-  assert.ok(r1 < r2 && r2 < r3, `${r1} < ${r2} < ${r3}`);
-  assert.ok(r1 < 50 && r3 >= 50);
+test('для инцидента на координаторах ИИ советует реальную группу из выгрузки', () => {
+  const m = load();
+  const ctx = buildContext(m, Date.now());
+  const groups = new Set([...m.values()].map((i) => i.teamId));
+  for (const inc of m.values()) {
+    if (!inc.onCoordinators) continue;
+    const top = heuristicInsight(inc, ctx).teams[0];
+    assert.ok(top, `${inc.id}: нет подсказки`);
+    assert.ok(groups.has(top.teamId) && !/координатор/i.test(top.teamId));
+  }
 });
 
-test('каскад биллинга: последствие указывает на первопричину', () => {
-  const sim = new Sim();
-  const root = sim.spawn({ template: TEMPLATES[0], quiet: true, seed: true, priority: 'P1', status: 'coordinators', region: 'Москва' });
-  const appTemplate = TEMPLATES.find((t) => t.system === 'app' && t.team === 'platform_sre')!;
-  const child = sim.spawn({ template: appTemplate, quiet: true, seed: true, priority: 'P2', status: 'coordinators', region: 'Москва' });
-  const ctx = buildContext(new Map([[root.id, root], [child.id, child]]), Date.now());
-  const corr = findCorrelation(child, ctx);
-  assert.equal(corr?.rootId, root.id);
-  const insight = heuristicInsight(child, ctx);
-  assert.match(insight.summary, /Мой МТС/);
-  assert.ok(insight.nextSteps.some((s) => s.includes(root.id)));
-});
+test('правка файла доходит до потока: новый критический, ошибка JSON не роняет данные', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'radar-'));
+  const file = path.join(dir, 'incidents.json');
+  fs.writeFileSync(file, JSON.stringify(records));
+  const src = new FileSource(file);
+  const got: ServerMessage[] = [];
+  src.onMessage((m) => got.push(m));
+  src.reload(true);
+  assert.equal(src.incidents.size, records.length);
 
-test('причина не может появиться позже следствия и быть слабее его', () => {
-  const sim = new Sim();
-  const now = Date.now();
-  const billing = sim.spawn({ template: TEMPLATES[0], quiet: true, seed: true, priority: 'P1', status: 'coordinators', createdAt: now - 60_000 });
-  const dcTemplate = TEMPLATES.find((t) => t.system === 'dc')!;
-  const laterDc = sim.spawn({ template: dcTemplate, quiet: true, seed: true, priority: 'P1', status: 'coordinators', createdAt: now });
-  const weakerDc = sim.spawn({ template: dcTemplate, quiet: true, seed: true, priority: 'P2', status: 'coordinators', createdAt: now - 120_000 });
-  const ctx = buildContext(new Map([[billing.id, billing], [laterDc.id, laterDc], [weakerDc.id, weakerDc]]), now);
-  const corr = findCorrelation(billing, ctx);
-  assert.notEqual(corr?.rootId, laterDc.id);
-  assert.notEqual(corr?.rootId, weakerDc.id);
-});
+  fs.writeFileSync(file, '[{ сломано');
+  src.reload();
+  assert.ok(src.status.error, 'ошибка показана');
+  assert.equal(src.incidents.size, records.length, 'данные остались');
 
-test('атака — сама себе первопричина, даже если выше по зависимости уже есть P1', () => {
-  const sim = new Sim();
-  const now = Date.now();
-  const apiTemplate = TEMPLATES.find((t) => t.system === 'api' && t.title.includes('5xx'))!;
-  const ddosTemplate = TEMPLATES.find((t) => t.team === 'soc')!;
-  const api = sim.spawn({ template: apiTemplate, quiet: true, seed: true, priority: 'P1', status: 'in_progress', createdAt: now - 3 * 60_000 });
-  const ddos = sim.spawn({ template: ddosTemplate, quiet: true, seed: true, priority: 'P1', status: 'coordinators', createdAt: now });
-  const ctx = buildContext(new Map([[api.id, api], [ddos.id, ddos]]), now);
-  assert.equal(findCorrelation(ddos, ctx)?.rootId, ddos.id);
-  assert.equal(briefOf(ddos, ctx).teamId, 'soc');
+  const fresh = { ...records[0], id: 'INC999', priorityId: 4, priority: 'Наивысший', submitDate: new Date().toISOString() };
+  fs.writeFileSync(file, JSON.stringify([...records, fresh]));
+  src.reload();
+  assert.equal(src.status.error, null);
+  assert.ok(src.incidents.has('INC999'));
+  assert.ok(got.some((m) => m.type === 'feed' && m.data.kind === 'p1' && m.data.incidentId === 'INC999'));
+  src.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

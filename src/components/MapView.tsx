@@ -11,7 +11,7 @@ import { IncidentSheet } from './IncidentSheet';
 import { Prio, SlaTimer } from './bits';
 import { SysIcon } from './SysIcon';
 
-export function MapView({ onRouting }: { onRouting: () => void }) {
+export function MapView({ onRouting }: { onRouting?: () => void }) {
   const selectedId = useStore((s) => s.selectedId);
   return (
     <div className={`map-view ${selectedId ? 'has-sheet' : ''}`}>
@@ -68,12 +68,12 @@ function Pill({ label, tone, value, on, onClick }: { label: string; tone: string
   );
 }
 
-function UrgentPanel({ onRouting }: { onRouting: () => void }) {
+function UrgentPanel({ onRouting }: { onRouting?: () => void }) {
   const queue = useQueue();
   const selectedId = useStore((s) => s.selectedId);
   const hoverId = useStore((s) => s.hoverId);
   const attention = useStore((s) => s.attention);
-  const coordCount = useStore((s) => [...s.incidents.values()].filter((i) => i.status === 'coordinators').length);
+  const coordCount = useStore((s) => [...s.incidents.values()].filter((i) => i.onCoordinators && i.status !== 'resolved').length);
   const open = queue.filter((i) => i.status !== 'resolved');
   const top = open.slice(0, 7);
   const att = new Set(attention);
@@ -104,7 +104,7 @@ function UrgentPanel({ onRouting }: { onRouting: () => void }) {
             </span>
             <span className="u-title">{inc.title}</span>
             <span className="u-who">
-              {inc.status === 'coordinators' ? (
+              {inc.onCoordinators ? (
                 inc.ai.teamId && (
                   <span className="ai-suggest">
                     <Sparkles size={11} /> ИИ советует: {teamName(inc.ai.teamId)} · <span className="num">{Math.round(inc.ai.confidence * 100)}%</span>
@@ -129,7 +129,7 @@ function UrgentPanel({ onRouting }: { onRouting: () => void }) {
         <button className="btn btn-sm" onClick={() => setView('queue')}>
           Вся очередь <span className="num">{open.length}</span> <ArrowRight size={14} />
         </button>
-        {coordCount > 0 && (
+        {onRouting && coordCount > 0 && (
           <button className="btn btn-sm btn-ai" onClick={onRouting}>
             <Sparkles size={14} /> Разобрать с ИИ <span className="num">{coordCount}</span>
           </button>

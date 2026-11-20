@@ -3,29 +3,31 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import * as z from 'zod/v4';
 import type { AiStatus, Incident, Insight } from '../shared/types.ts';
-import { COORDINATORS_ID, TEAMS, systemById, teamById } from './catalog.ts';
 import { riskLevel } from './ai-heuristic.ts';
 
 const MODEL = process.env.AI_MODEL || 'claude-opus-5-5';
-const TEAM_IDS = TEAMS.filter((t) => t.id !== COORDINATORS_ID).map((t) => t.id) as [string, ...string[]];
 
-const OutputSchema = z.object({
-  summary: z.string().describe('2–3 предложения: что случилось, где, кого затронуло, что сейчас происходит'),
-  cause: z.string().describe('Наиболее вероятная причина одной фразой'),
-  next_steps: z.array(z.string()).describe('2–4 конкретных действия координатора, коротко, в повелительном наклонении'),
-  team_id: z.enum(TEAM_IDS).describe('Команда, которой нужно передать инцидент'),
-  team_reason: z.string().describe('Почему именно эта команда, одной фразой'),
-  risk_score: z.number().describe('Риск, что инцидент станет критическим или нарушит SLA, 0–100'),
-  risk_note: z.string().describe('Пояснение к риску одной фразой'),
-});
+const PRIO_TEXT = { P1: 'Наивысший', P2: 'Высокий', P3: 'Средний', P4: 'Низкий' } as const;
 
-const SYSTEM_PROMPT = `Ты — ассистент дежурного координатора IT-инцидентов крупного телеком-оператора.
-Координатор следит за сотнями инцидентов и решает, какой команде отдать каждый. Ему некогда читать длинные тексты.
-По данным инцидента:
-1) кратко объясни, что произошло, простым языком без жаргона мониторинга;
-2) выбери одну команду из списка, которой нужно передать инцидент; учитывай не только систему, но и суть проблемы (например, SMS-коды в приложении — это SMS-платформа, а аномальный трафик — ИБ);
-3) оцени риск, что ситуация станет критической или нарушит SLA, учитывая приоритет, остаток SLA, число абонентов, тренд и связанные инциденты.
-Если в данных есть вероятная первопричина (связанный инцидент в системе, от которой зависит эта), скажи об этом.
+function outputSchema(teams: [string, ...string[]]) {
+  return z.object({
+    summary: z.string().describe('2–3 предложения: что случилось, в каком продукте и сервисе, кого затронуло, что сейчас происходит'),
+    cause: z.string().describe('Наиболее вероятная причина или связь с другим инцидентом одной фразой'),
+    next_steps: z.array(z.string()).describe('2–4 конкретных действия координатора, коротко, в повелительном наклонении'),
+    team_id: z.enum(teams).describe('Группа назначения, которой нужно передать инцидент'),
+    team_reason: z.string().describe('Почему именно эта группа, одной фразой'),
+    risk_score: z.number().describe('Риск, что инцидент станет критическим или сорвёт дедлайн, 0–100'),
+    risk_note: z.string().describe('Пояснение к риску одной фразой'),
+  });
+}
+
+const SYSTEM_PROMPT = `Ты — ассистент дежурного координатора массовых инцидентов (МИ) крупного телеком-оператора.
+Координатор следит за сотнями инцидентов, передаёт их в нужные группы и эскалирует, если сроки срываются. Ему некогда читать длинные тексты.
+По данным инцидента из выгрузки ITSM:
+1) кратко объясни, что произошло, простым языком;
+2) выбери одну группу назначения из списка; опирайся на то, какие группы решали инциденты того же продукта, сервиса и сценария;
+3) оцени риск, что инцидент станет критическим или сорвёт дедлайн: приоритет, срочность, влияние, тип сервиса, остаток времени до дедлайна, связанные инциденты.
+Если инцидент — дубль или дочерний и в данных есть мастер-инцидент или причина, скажи об этом.
 Пиши по-русски, коротко и по делу. Не выдумывай факты, которых нет в данных.`;
 
 let client: Anthropic | null = null;
@@ -47,60 +49,71 @@ function getClient(): Anthropic {
   return client;
 }
 
-function describe(inc: Incident, related: Incident[], now: number) {
-  const sys = systemById(inc.systemId);
+const minutes = (a: number | null, b: number) => (a === null ? null : Math.round((a - b) / 60_000));
+
+function describe(inc: Incident, related: Incident[], teams: string[], now: number) {
   const brief = (i: Incident) => ({
     id: i.id,
-    priority: i.priority,
-    system: systemById(i.systemId).name,
-    title: i.title,
-    team: teamById(i.teamId)?.name ?? null,
+    priority: PRIO_TEXT[i.priority],
+    state: i.state,
+    product: i.product,
+    service: i.service,
+    scenario: i.scenario,
+    header: i.title,
+    group: i.teamId,
+    is_master: i.isMaster,
+    is_double: i.isDouble,
     created_minutes_ago: Math.round((now - i.createdAt) / 60_000),
   });
   return {
     incident: {
       id: inc.id,
-      priority: inc.priority,
-      status: inc.status,
-      system: sys.name,
-      system_depends_on: sys.dependsOn.map((d) => systemById(d).name),
+      priority: PRIO_TEXT[inc.priority],
+      urgency: inc.urgency,
+      impact: inc.impact,
+      state: inc.state,
+      product: inc.product,
       service: inc.service,
-      component: inc.component,
-      region: inc.region,
-      title: inc.title,
+      scenario: inc.scenario,
+      service_type: inc.serviceType,
+      header: inc.title,
       description: inc.description,
-      monitoring_signals: inc.signals,
-      affected_subscribers: inc.affectedUsers,
-      trend: inc.trend,
-      current_team: teamById(inc.teamId)?.name ?? null,
+      short_description: inc.shortDescription,
+      channel: inc.channel,
+      current_group: inc.teamId,
+      on_coordinators: inc.onCoordinators,
       assignee: inc.assignee,
-      reassign_count: inc.reassignCount,
+      is_master: inc.isMaster,
+      is_double: inc.isDouble,
+      is_cause_of_children: inc.isEffect,
+      is_child: inc.isReason,
       minutes_since_created: Math.round((now - inc.createdAt) / 60_000),
-      minutes_to_sla_breach: Math.round((inc.slaDeadline - now) / 60_000),
-      sla_total_minutes: inc.slaMinutes,
+      minutes_to_deadline: minutes(inc.slaDeadline, now),
+      solution: inc.solution,
     },
     related_incidents: related.map(brief),
-    teams: TEAMS.filter((t) => t.id !== COORDINATORS_ID).map((t) => ({ id: t.id, name: t.name, profile: t.keywords.slice(0, 8).join(', ') })),
+    groups: teams,
   };
 }
 
 /** Уточняет эвристический разбор ответом Claude. Бросает исключение при любой ошибке — вызывающий оставит эвристику. */
-export async function refineWithClaude(inc: Incident, base: Insight, related: Incident[]): Promise<Insight> {
+export async function refineWithClaude(inc: Incident, base: Insight, related: Incident[], teams: string[]): Promise<Insight> {
+  if (!teams.length) throw new Error('Нет групп для подсказки');
   const started = Date.now();
-  const payload = describe(inc, related, started);
+  const payload = describe(inc, related, teams, started);
   const response = await getClient().beta.messages.parse({
     model: MODEL,
     max_tokens: 4000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: 'low', format: betaZodOutputFormat(OutputSchema) },
+    output_config: { effort: 'low', format: betaZodOutputFormat(outputSchema(teams as [string, ...string[]])) },
     system: SYSTEM_PROMPT,
     messages: [
       {
         role: 'user',
         content: `Эвристика уже оценила риск в ${base.risk.score}/100 (факторы: ${base.risk.factors
           .map((f) => `${f.label} ${f.weight > 0 ? '+' : ''}${f.weight}`)
-          .join('; ')}). Данные:\n${JSON.stringify(payload, null, 1)}`,
+          .join('; ')}) и предложила группы: ${base.teams.map((t) => `${t.teamId} (${Math.round(t.confidence * 100)}%)`).join(', ') || '—'}. Данные:\n${JSON.stringify(payload, null, 1)}`,
       },
     ],
   });
@@ -109,17 +122,17 @@ export async function refineWithClaude(inc: Incident, base: Insight, related: In
   const out = response.parsed_output;
   if (!out) throw new Error('Пустой ответ модели');
 
-  // Команда от Claude идёт первой, альтернативы эвристики остаются ниже.
-  const teams = [...base.teams];
-  const idx = teams.findIndex((t) => t.teamId === out.team_id);
-  const topConf = Math.max(...teams.map((t) => t.confidence), 0.5);
+  // Группа от Claude идёт первой, альтернативы эвристики остаются ниже.
+  const list = [...base.teams];
+  const idx = list.findIndex((t) => t.teamId === out.team_id);
+  const topConf = Math.max(...list.map((t) => t.confidence), 0.5);
   const llmTeam = {
     teamId: out.team_id,
-    confidence: Math.max(idx >= 0 ? teams[idx].confidence : 0, Math.min(0.95, topConf + 0.05)),
-    reasons: [`Claude: ${out.team_reason}`, ...(idx >= 0 ? teams[idx].reasons : [])],
+    confidence: Math.max(idx >= 0 ? list[idx].confidence : 0, Math.min(0.95, topConf + 0.05)),
+    reasons: [`Claude: ${out.team_reason}`, ...(idx >= 0 ? list[idx].reasons : [])],
   };
-  if (idx >= 0) teams.splice(idx, 1);
-  teams.unshift(llmTeam);
+  if (idx >= 0) list.splice(idx, 1);
+  list.unshift(llmTeam);
 
   const score = Math.round(0.5 * Math.max(0, Math.min(100, out.risk_score)) + 0.5 * base.risk.score);
   return {
@@ -129,7 +142,7 @@ export async function refineWithClaude(inc: Incident, base: Insight, related: In
     summary: out.summary,
     cause: out.cause,
     nextSteps: out.next_steps.slice(0, 4),
-    teams: teams.slice(0, 3),
+    teams: list.slice(0, 3),
     risk: { ...base.risk, score, level: riskLevel(score), note: out.risk_note },
     generatedAt: Date.now(),
     latencyMs: Date.now() - started,

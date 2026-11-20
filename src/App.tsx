@@ -1,28 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { WifiOff } from 'lucide-react';
-import { act, connect, getState, select, setView, toggleSound, useStore } from './store';
+import { ack, connect, getState, openItsm, select, setView, toggleSound, useStore } from './store';
 import { useQueue } from './lib/queue';
 import { unlockAudio } from './lib/sound';
 import { TopBar } from './components/TopBar';
+import { Board } from './components/Board';
 import { MapView } from './components/MapView';
 import { FeedView, QueueView, SystemsView } from './components/Views';
 import { CriticalBanner, Toasts } from './components/Alerts';
-import { HelpOverlay, RoutingModal } from './components/RoutingModal';
+import { HelpOverlay } from './components/HelpOverlay';
 
 export function App() {
   const theme = useStore((s) => s.theme);
   const view = useStore((s) => s.view);
   const connected = useStore((s) => s.connected);
   const everConnected = useStore((s) => s.everConnected);
-  const loaded = useStore((s) => s.systems.length > 0);
+  const loaded = useStore((s) => s.source !== null);
   const queue = useQueue();
-  const [routing, setRouting] = useState(false);
   const [help, setHelp] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const modalRef = useRef(false);
-  modalRef.current = routing || help;
+  modalRef.current = help;
 
   useEffect(() => {
     connect();
@@ -42,7 +42,7 @@ export function App() {
       if (target?.closest('input, textarea, select')) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const s = getState();
-      const list = queueRef.current.filter((i) => i.status !== 'resolved');
+      const list = queueRef.current;
       const idx = list.findIndex((i) => i.id === s.selectedId);
       const sel = s.selectedId ? s.incidents.get(s.selectedId) : undefined;
       const k = e.key.toLowerCase();
@@ -58,13 +58,11 @@ export function App() {
         const next = s.attention.find((id) => s.incidents.get(id)?.status !== 'resolved');
         if (next) select(next);
       } else if ((k === 'a' || k === 'ф') && sel && !sel.acknowledged) {
-        void act(sel.id, 'ack');
-      } else if (k === '1' && sel && sel.ai.teamId && sel.status !== 'resolved' && sel.ai.teamId !== sel.teamId) {
-        void act(sel.id, 'assign', { teamId: sel.ai.teamId, byAi: true });
-      } else if ((k === 'e' || k === 'у') && sel && sel.status !== 'escalated' && sel.status !== 'resolved') {
-        void act(sel.id, 'escalate');
-      } else if ((e.key === 'R' || e.key === 'К') && e.shiftKey && sel && sel.status !== 'resolved') {
-        void act(sel.id, 'resolve');
+        void ack(sel.id);
+      } else if ((k === 'o' || k === 'щ') && sel) {
+        openItsm(sel.id);
+      } else if (k === 'g' || k === 'п') {
+        setView(s.view === 'map' ? 'board' : 'map');
       } else if (e.key === '/') {
         e.preventDefault();
         if (s.view !== 'queue') setView('queue');
@@ -74,10 +72,8 @@ export function App() {
       } else if (e.key === '?' || e.key === ',') {
         setHelp((v) => !v);
       } else if (e.key === 'Escape') {
-        if (modalRef.current) {
-          setHelp(false);
-          setRouting(false);
-        } else if (s.selectedId) select(null);
+        if (modalRef.current) setHelp(false);
+        else if (s.selectedId) select(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -97,12 +93,14 @@ export function App() {
         {!loaded ? (
           <div className="boot">
             <span className="boot-ring" />
-            Подключаемся к потоку инцидентов…
+            Загружаем выгрузку инцидентов…
           </div>
+        ) : view === 'board' ? (
+          <Board />
         ) : view === 'map' ? (
-          <MapView onRouting={() => setRouting(true)} />
+          <MapView />
         ) : view === 'queue' ? (
-          <QueueView onRouting={() => setRouting(true)} searchRef={searchRef} />
+          <QueueView searchRef={searchRef} />
         ) : view === 'systems' ? (
           <SystemsView />
         ) : (
@@ -110,7 +108,6 @@ export function App() {
         )}
       </div>
       <Toasts />
-      {routing && <RoutingModal onClose={() => setRouting(false)} />}
       {help && <HelpOverlay onClose={() => setHelp(false)} />}
     </div>
   );

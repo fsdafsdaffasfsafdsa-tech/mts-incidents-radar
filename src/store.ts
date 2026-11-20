@@ -1,17 +1,7 @@
 // Клиентское состояние: снимок + поток SSE, внимание координатора, тосты, звук.
 import { useSyncExternalStore } from 'react';
-import type {
-  AiStatus,
-  FeedEvent,
-  Incident,
-  Insight,
-  Intensity,
-  ScenarioKind,
-  ServerMessage,
-  Stats,
-  SystemInfo,
-  TeamInfo,
-} from '../shared/types';
+import type { AiStatus, FeedEvent, Incident, Insight, ServerMessage, SourceStatus, SystemInfo, TeamInfo } from '../shared/types';
+import { isOpen } from '../shared/types';
 import { play, unlockAudio, type Cue } from './lib/sound';
 
 export const ME = 'А. Корнеева';
@@ -28,8 +18,9 @@ export interface Toast {
   ttl: number;
 }
 
-export type QueueFilter = 'open' | 'attention' | 'coordinators' | 'critical' | 'risk' | 'breach' | 'resolved';
-export type View = 'map' | 'queue' | 'systems' | 'feed';
+/** Четыре группы из ТЗ (critical, coordinators, high, research) и служебные фильтры. Инцидент может попасть в несколько групп. */
+export type QueueFilter = 'open' | 'attention' | 'critical' | 'coordinators' | 'high' | 'research' | 'risk' | 'breach' | 'resolved';
+export type View = 'board' | 'map' | 'queue' | 'systems' | 'feed';
 
 export interface State {
   connected: boolean;
@@ -39,8 +30,8 @@ export interface State {
   feed: FeedEvent[];
   systems: SystemInfo[];
   teams: TeamInfo[];
-  stats: Stats | null;
-  intensity: Intensity;
+  source: SourceStatus | null;
+  itsmUrl: string | null;
   ai: AiStatus | null;
   insights: Map<string, Insight>;
   attention: string[];
@@ -81,8 +72,8 @@ let state: State = {
   feed: [],
   systems: [],
   teams: [],
-  stats: null,
-  intensity: 'normal',
+  source: null,
+  itsmUrl: null,
   ai: null,
   insights: new Map(),
   attention: [],
@@ -90,7 +81,7 @@ let state: State = {
   toasts: [],
   selectedId: null,
   hoverId: null,
-  view: 'map',
+  view: 'board',
   filter: 'open',
   systemFilter: null,
   search: '',
@@ -149,7 +140,7 @@ function handle(msg: ServerMessage) {
       const attention = state.everConnected && state.attention.length
         ? state.attention.filter((id) => incidents.has(id))
         : d.incidents
-            .filter((i) => i.status !== 'resolved' && !i.acknowledged && (i.priority <= 'P2' || i.status === 'coordinators'))
+            .filter((i) => isOpen(i) && !i.acknowledged && (i.priority <= 'P2' || i.onCoordinators))
             .sort((a, b) => b.createdAt - a.createdAt)
             .map((i) => i.id);
       setState({
@@ -160,8 +151,8 @@ function handle(msg: ServerMessage) {
         feed: d.feed,
         systems: d.systems,
         teams: d.teams,
-        stats: d.stats,
-        intensity: d.intensity,
+        source: d.source,
+        itsmUrl: d.itsmUrl,
         ai: d.ai,
         attention,
       });
@@ -209,12 +200,15 @@ function handle(msg: ServerMessage) {
       setState({ insights });
       break;
     }
-    case 'stats':
-      setState({ stats: msg.data });
+    case 'catalog':
+      setState({ systems: msg.data.systems, teams: msg.data.teams });
       break;
-    case 'intensity':
-      setState({ intensity: msg.data });
+    case 'source': {
+      const prev = state.source;
+      setState({ source: msg.data });
+      if (msg.data.error && msg.data.error !== prev?.error) toast({ kind: 'warn', title: 'Файл с инцидентами не прочитан', body: msg.data.error, ttl: 9_000 });
       break;
+    }
     case 'tick':
       setState({ offset: msg.data.serverTime - Date.now() });
       break;
@@ -266,17 +260,15 @@ function onFeed(ev: FeedEvent) {
   switch (ev.kind) {
     case 'p1':
       addAttention(ev.incidentId);
-      toast({ kind: 'p1', title: `Критический P1 · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 20_000 });
+      toast({ kind: 'p1', title: `Критический инцидент · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 20_000 });
       cue('p1');
-      notifyBrowser(`P1 · ${sys}`, title);
+      notifyBrowser(`Критический · ${sys}`, title);
       break;
     case 'coordinators':
       addAttention(ev.incidentId);
-      if (ev.priority <= 'P3') {
-        toast({ kind: 'coord', title: `На координаторов · ${ev.priority} · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 8_000 });
-        cue('coord');
-        notifyBrowser(`Назначен на координаторов · ${sys}`, title);
-      }
+      toast({ kind: 'coord', title: `Назначен на координаторов · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 10_000 });
+      cue('coord');
+      notifyBrowser(`Назначен на координаторов · ${sys}`, title);
       break;
     case 'priority_up':
       addAttention(ev.incidentId);
@@ -286,7 +278,7 @@ function onFeed(ev: FeedEvent) {
     case 'sla_breach':
       if (ev.priority <= 'P2') {
         addAttention(ev.incidentId);
-        toast({ kind: 'warn', title: `SLA нарушен · ${ev.priority} · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 9_000 });
+        toast({ kind: 'warn', title: `Дедлайн прошёл · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 9_000 });
         cue('warn');
       }
       break;
@@ -300,11 +292,15 @@ function onFeed(ev: FeedEvent) {
       const watched = state.selectedId === ev.incidentId;
       setState({ attention: state.attention.filter((x) => x !== ev.incidentId) });
       if (ev.priority === 'P1' || watched) {
-        toast({ kind: 'resolved', title: `Решён · ${ev.priority} · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 6_000 });
+        toast({ kind: 'resolved', title: `${ev.priority === 'P1' ? 'Критический решён' : 'Решён'} · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 8_000 });
         cue('resolved');
       }
       break;
     }
+    case 'research':
+      if (ev.priority <= 'P2' || state.selectedId === ev.incidentId)
+        toast({ kind: 'info', title: `Исследование ситуации · ${sys}`, body: title, incidentId: ev.incidentId, ttl: 6_000 });
+      break;
   }
 }
 
@@ -341,25 +337,27 @@ async function post(url: string, body: unknown) {
   return data;
 }
 
-export async function act(id: string, type: 'ack' | 'assign' | 'raise' | 'escalate' | 'resolve' | 'link', extra: Record<string, unknown> = {}) {
+/** «Взять на контроль» — единственное действие на дашборде; изменения инцидента вносятся в ITSM. */
+export async function ack(id: string) {
   setState({ attention: state.attention.filter((x) => x !== id) });
-  await post(`/api/incidents/${id}/action`, { type, actor: ME, ...extra });
-  void loadInsight(id);
+  await post(`/api/incidents/${id}/ack`, {});
 }
 
-export async function bulkAssign(items: { id: string; teamId: string }[]) {
-  const r = await post('/api/bulk-assign', { items, actor: ME });
-  toast({ kind: 'info', title: 'ИИ-маршрутизация', body: `Передано команд: ${r.assigned}`, ttl: 5000 });
-  setState({ attention: state.attention.filter((x) => !items.some((i) => i.id === x)) });
+/** Ссылка на инцидент в ITSM по шаблону ITSM_URL (с подстановкой {id}). */
+export function itsmLink(id: string): string | null {
+  const t = state.itsmUrl;
+  if (!t) return null;
+  return t.includes('{id}') ? t.replaceAll('{id}', encodeURIComponent(id)) : `${t.replace(/\/$/, '')}/${encodeURIComponent(id)}`;
 }
 
-export async function runScenario(kind: ScenarioKind) {
-  unlockAudio();
-  await post('/api/demo/scenario', { kind });
-}
-
-export async function setIntensity(level: Intensity) {
-  await post('/api/demo/intensity', { level });
+export function openItsm(id: string) {
+  const url = itsmLink(id);
+  if (url) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+  void navigator.clipboard?.writeText(id).catch(() => undefined);
+  toast({ kind: 'info', title: `Номер ${id} скопирован`, body: 'Адрес ITSM не настроен: задайте ITSM_URL в .env, и кнопка будет открывать инцидент.', ttl: 6_000 });
 }
 
 export function toggleSound() {

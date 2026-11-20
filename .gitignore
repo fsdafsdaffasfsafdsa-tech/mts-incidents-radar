@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+# Рабочая копия выгрузки: её правят на демо, исходник — data/incidents.sample.json
+data/incidents.json

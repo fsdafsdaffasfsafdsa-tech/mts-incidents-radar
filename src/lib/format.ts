@@ -1,5 +1,5 @@
 import type { Incident, Priority, RiskLevel, Status } from '../../shared/types';
-import { AT_RISK_MIN } from '../../shared/types';
+import { AT_RISK_MIN, slaRunning } from '../../shared/types';
 
 export function plural(n: number, one: string, few: string, many: string): string {
   const a = Math.abs(n) % 100;
@@ -26,7 +26,8 @@ export function fmtSla(ms: number): string {
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
   let out: string;
-  if (h >= 1) out = `${h} ч ${two(m)} м`;
+  if (h >= 48) out = `${Math.floor(h / 24)} д ${h % 24} ч`;
+  else if (h >= 1) out = `${h} ч ${two(m)} м`;
   else out = `${two(m)}:${two(sec)}`;
   return neg ? `−${out}` : out;
 }
@@ -53,12 +54,16 @@ export function fmtClockSec(t: number): string {
 }
 
 export const STATUS_LABEL: Record<Status, string> = {
-  coordinators: 'На координаторах',
-  assigned: 'Ждёт исполнителя',
-  in_progress: 'В работе',
-  escalated: 'Эскалирован',
+  assigned: 'Назначен',
+  in_progress: 'Выполняется',
+  research: 'Исследование ситуации',
   resolved: 'Решён',
 };
+
+export function fmtDateTime(t: number): string {
+  const d = new Date(t);
+  return `${two(d.getDate())}.${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
 
 export const RISK_LABEL: Record<RiskLevel, string> = {
   low: 'низкий',
@@ -67,17 +72,19 @@ export const RISK_LABEL: Record<RiskLevel, string> = {
   critical: 'критический',
 };
 
+/** Подписи приоритета как в выгрузке ITSM. Наивысший = критический. */
 export const PRIO_LABEL: Record<Priority, string> = {
-  P1: 'Критический',
+  P1: 'Наивысший',
   P2: 'Высокий',
   P3: 'Средний',
   P4: 'Низкий',
 };
 
-export type SlaState = 'ok' | 'soon' | 'risk' | 'breach' | 'done';
+export type SlaState = 'ok' | 'soon' | 'risk' | 'breach' | 'done' | 'none';
 
 export function slaState(inc: Incident, now: number): SlaState {
-  if (inc.status === 'resolved') return 'done';
+  if (!slaRunning(inc)) return 'done';
+  if (inc.slaDeadline === null) return 'none';
   const rem = inc.slaDeadline - now;
   if (rem <= 0) return 'breach';
   if (rem <= 10 * 60_000) return 'risk';
@@ -88,10 +95,11 @@ export function slaState(inc: Incident, now: number): SlaState {
 const PRIO_BASE: Record<Priority, number> = { P1: 400, P2: 250, P3: 120, P4: 40 };
 const SLA_WEIGHT: Record<Priority, number> = { P1: 1, P2: 0.85, P3: 0.45, P4: 0.3 };
 
-/** Срочность для сортировки очереди: приоритет + близость SLA + ИИ-риск + «никто не взял». */
+/** Срочность для сортировки очереди: приоритет + близость дедлайна + ИИ-риск + «на координаторах». */
 export function urgency(inc: Incident, now: number): number {
   if (inc.status === 'resolved') return -1000 + (inc.resolvedAt ?? 0) / 1e13;
-  const rem = (inc.slaDeadline - now) / 60_000;
+  if (inc.status === 'research') return -400 + PRIO_BASE[inc.priority] / 4 + inc.ai.risk;
+  const rem = inc.slaDeadline === null ? Infinity : (inc.slaDeadline - now) / 60_000;
   // Вес срыва SLA зависит от приоритета: горящий P1 важнее давно нарушенного P3.
   const k = SLA_WEIGHT[inc.priority];
   let sla = 0;
@@ -100,5 +108,5 @@ export function urgency(inc: Incident, now: number): number {
   else if (rem <= 120) sla = 40 * (1 - (rem - 30) / 90) * k;
   // Непросмотренный P1 всегда наверху: его ещё никто не видел.
   const unack = inc.acknowledged ? 0 : inc.priority === 'P1' ? 150 : inc.priority === 'P2' ? 50 : 20;
-  return PRIO_BASE[inc.priority] + sla + inc.ai.risk * 1.2 + (inc.status === 'coordinators' ? 60 : 0) + unack;
+  return PRIO_BASE[inc.priority] + sla + inc.ai.risk * 1.2 + (inc.onCoordinators ? 60 : 0) + unack;
 }

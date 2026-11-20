@@ -145,7 +145,7 @@ export function MapCanvas() {
       popup
         .setLngLat([inc.geo.lon, inc.geo.lat])
         .setHTML(
-          `<div class="mp-top"><span class="prio prio-${inc.priority}">${inc.priority}</span><span class="mp-city">${inc.region}</span><span class="mp-sla">${fmtSla(inc.slaDeadline - Date.now())}</span></div><div class="mp-title"></div>`,
+          `<div class="mp-top"><span class="prio prio-${inc.priority}">${inc.priority}</span><span class="mp-city">${inc.region}</span><span class="mp-sla">${inc.slaDeadline === null ? '' : fmtSla(inc.slaDeadline - Date.now())}</span></div><div class="mp-title"></div>`,
         )
         .addTo(map);
       const t = popup.getElement()?.querySelector('.mp-title');
@@ -452,7 +452,7 @@ function pushData(map: MlMap) {
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [inc.geo.lon, inc.geo.lat] },
-      properties: { id: inc.id, priority: inc.priority, coord: inc.status === 'coordinators' },
+      properties: { id: inc.id, priority: inc.priority, coord: inc.onCoordinators },
     });
     if (inc.path) paths.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: inc.path }, properties: { id: inc.id } });
   }

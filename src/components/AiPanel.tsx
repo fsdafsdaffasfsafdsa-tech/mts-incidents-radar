@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CircleCheck, GitMerge, Lightbulb, Send, Sparkles } from 'lucide-react';
+import { AlertTriangle, CircleCheck, GitMerge, Lightbulb, Sparkles } from 'lucide-react';
 import type { Incident, Insight } from '../../shared/types';
-import { act, loadInsight, select, teamName, useStore } from '../store';
+import { loadInsight, select, teamName, useStore } from '../store';
 import { RISK_LABEL } from '../lib/format';
 
 type Tab = 'summary' | 'team' | 'risk';
@@ -12,7 +12,7 @@ export function AiPanel({ inc }: { inc: Incident }) {
   const [tab, setTab] = useState<Tab>('summary');
 
   // Перезапрашиваем разбор, когда инцидент заметно меняется.
-  const key = `${inc.priority}|${inc.status}|${inc.teamId}|${inc.relatedIds.length}|${inc.parentId}|${inc.trend}`;
+  const key = `${inc.priority}|${inc.status}|${inc.teamId}|${inc.assignee}|${inc.slaDeadline}`;
   useEffect(() => {
     void loadInsight(inc.id);
   }, [inc.id, key]);
@@ -34,7 +34,7 @@ export function AiPanel({ inc }: { inc: Incident }) {
         {(
           [
             ['summary', 'Что случилось'],
-            ['team', 'Кому передать'],
+            ['team', 'Какой группе'],
             ['risk', 'Риск'],
           ] as const
         ).map(([id, label]) => (
@@ -52,7 +52,7 @@ export function AiPanel({ inc }: { inc: Incident }) {
       ) : tab === 'summary' ? (
         <SummaryTab inc={inc} insight={insight} />
       ) : tab === 'team' ? (
-        <TeamTab inc={inc} insight={insight} />
+        <TeamTab insight={insight} />
       ) : (
         <RiskTab insight={insight} />
       )}
@@ -68,7 +68,7 @@ function AiVerdict({ inc, insight, onTab }: { inc: Incident; insight: Insight; o
   return (
     <div className="ai-verdict">
       <button className="v-row" onClick={() => onTab('team')}>
-        <span className="v-label">Команда</span>
+        <span className="v-label">{inc.onCoordinators && (inc.status === 'assigned' || inc.status === 'in_progress') ? 'Передать' : 'Группа'}</span>
         <span className="v-value">
           {teamName(top?.teamId, false)} <span className="num v-conf">{top ? Math.round(top.confidence * 100) : 0}%</span>
         </span>
@@ -83,11 +83,6 @@ function AiVerdict({ inc, insight, onTab }: { inc: Incident; insight: Insight; o
           <span style={{ width: `${r.score}%` }} />
         </span>
       </button>
-      {top && !already && inc.status !== 'resolved' && (
-        <button className="btn btn-ai btn-block" onClick={() => void act(inc.id, 'assign', { teamId: top.teamId, byAi: true })} title="Клавиша 1">
-          <Send size={15} /> {inc.status === 'coordinators' ? 'Передать' : 'Переназначить на'} «{teamName(top.teamId)}»
-        </button>
-      )}
     </div>
   );
 }
@@ -110,7 +105,7 @@ function SummaryTab({ inc, insight }: { inc: Incident; insight: Insight }) {
             <div className="corr-ids">
               {corr.rootId && corr.rootId !== inc.id && (
                 <button className="corr-chip root num" onClick={() => select(corr.rootId!)}>
-                  {corr.rootId} · первопричина
+                  {corr.rootId} · {inc.isDouble ? 'мастер' : 'первопричина'}
                 </button>
               )}
               {corr.ids
@@ -122,11 +117,6 @@ function SummaryTab({ inc, insight }: { inc: Incident; insight: Insight }) {
                   </button>
                 ))}
             </div>
-            {corr.rootId && corr.rootId !== inc.id && inc.parentId !== corr.rootId && inc.status !== 'resolved' && (
-              <button className="btn btn-sm corr-link" onClick={() => void act(inc.id, 'link', { parentId: corr.rootId })}>
-                Связать как дочерний
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -141,9 +131,10 @@ function SummaryTab({ inc, insight }: { inc: Incident; insight: Insight }) {
   );
 }
 
-function TeamTab({ inc, insight }: { inc: Incident; insight: Insight }) {
+function TeamTab({ insight }: { insight: Insight }) {
   return (
     <div className="ai-tab-body">
+      {insight.teams.length === 0 && <p className="muted">В выгрузке нет истории, по которой можно подсказать группу.</p>}
       {insight.teams.map((t, i) => (
         <div key={t.teamId} className={`team-opt ${i === 0 ? 'top' : ''}`}>
           <div className="team-line">
@@ -158,11 +149,6 @@ function TeamTab({ inc, insight }: { inc: Incident; insight: Insight }) {
               <li key={x}>{x}</li>
             ))}
           </ul>
-          {i > 0 && inc.status !== 'resolved' && inc.teamId !== t.teamId && (
-            <button className="link-btn" onClick={() => void act(inc.id, 'assign', { teamId: t.teamId })}>
-              Передать сюда
-            </button>
-          )}
         </div>
       ))}
     </div>

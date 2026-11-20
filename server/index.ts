@@ -1,13 +1,13 @@
 // Сервер: API, поток SSE и фронтенд на одном порту.
+// Данные — JSON-выгрузка инцидентов (data/incidents.json): сервер следит за файлом и рассылает изменения.
 // Разработка: Vite в middleware-режиме с HMR. Прод (--prod): раздаём собранный dist/.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Incident, Insight, Intensity, ScenarioKind, ServerMessage, Snapshot } from '../shared/types.ts';
-import { SYSTEMS, TEAMS } from './catalog.ts';
-import { Sim } from './sim.ts';
-import { buildContext, heuristicInsight } from './ai-heuristic.ts';
+import type { Incident, Insight, ServerMessage, Snapshot } from '../shared/types.ts';
+import { FileSource } from './source-file.ts';
+import { buildContext, heuristicInsight, routableTeams } from './ai-heuristic.ts';
 import { aiStatus, handleLlmError, llmEnabled, refineWithClaude } from './ai-llm.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,9 +19,12 @@ try {
 
 const PROD = process.argv.includes('--prod');
 const PORT = Number(process.env.PORT || 5190);
+const DATA_FILE = path.resolve(root, process.env.INCIDENTS_FILE || 'data/incidents.json');
+const SAMPLE_FILE = path.join(root, 'data/incidents.sample.json');
+const ITSM_URL = process.env.ITSM_URL?.trim() || null;
 
-const sim = new Sim();
-sim.start();
+const source = new FileSource(DATA_FILE, SAMPLE_FILE);
+source.start();
 
 // ─── SSE ───────────────────────────────────────────────────────────────────
 
@@ -31,19 +34,19 @@ function send(res: http.ServerResponse, msg: ServerMessage) {
   res.write(`data: ${JSON.stringify(msg)}\n\n`);
 }
 
-sim.onMessage((msg) => {
+source.onMessage((msg) => {
   for (const res of clients) send(res, msg);
 });
 
 function snapshot(): Snapshot {
   return {
     serverTime: Date.now(),
-    incidents: [...sim.incidents.values()],
-    feed: sim.feed.slice(0, 120),
-    systems: SYSTEMS.map(({ id, name, short, icon, dependsOn }) => ({ id, name, short, icon, dependsOn })),
-    teams: TEAMS.map(({ id, name, short, members, isCoordinators }) => ({ id, name, short, members, isCoordinators })),
-    stats: sim.stats(),
-    intensity: sim.intensity,
+    incidents: [...source.incidents.values()],
+    feed: source.feed.slice(0, 150),
+    systems: source.systems,
+    teams: source.teams,
+    source: source.status,
+    itsmUrl: ITSM_URL,
     ai: aiStatus(),
   };
 }
@@ -56,15 +59,15 @@ const llmQueue: string[] = [];
 const MAX_PARALLEL = 2;
 
 function versionKey(inc: Incident) {
-  return [inc.priority, inc.status, inc.teamId, inc.parentId, inc.relatedIds.length, inc.trend].join('|');
+  return [inc.priority, inc.status, inc.teamId, inc.assignee, inc.slaDeadline, inc.isMaster, inc.isDouble, inc.isEffect, inc.isReason].join('|');
 }
 
 function insightFor(inc: Incident): Insight {
-  const ctx = buildContext(sim.incidents, Date.now());
+  const ctx = buildContext(source.incidents, Date.now());
   const base = heuristicInsight(inc, ctx);
   const cached = llmCache.get(inc.id);
   if (cached && cached.key === versionKey(inc)) {
-    // Свежие цифры риска и SLA — из эвристики, тексты — от Claude.
+    // Свежие цифры риска и сроков — из эвристики, тексты — от Claude.
     return { ...cached.insight, risk: { ...cached.insight.risk, minutesToBreach: base.risk.minutesToBreach, factors: base.risk.factors }, correlation: base.correlation };
   }
   if (llmEnabled() && inc.status !== 'resolved') {
@@ -83,14 +86,14 @@ function enqueueLlm(id: string) {
 function pumpLlm() {
   while (inFlight.size < MAX_PARALLEL && llmQueue.length) {
     const id = llmQueue.shift()!;
-    const inc = sim.incidents.get(id);
+    const inc = source.incidents.get(id);
     if (!inc) continue;
     inFlight.add(id);
     const key = versionKey(inc);
-    const ctx = buildContext(sim.incidents, Date.now());
+    const ctx = buildContext(source.incidents, Date.now());
     const base = heuristicInsight(inc, ctx);
-    const related = (base.correlation?.ids ?? []).map((r) => sim.incidents.get(r)).filter(Boolean) as Incident[];
-    refineWithClaude(inc, base, related)
+    const related = (base.correlation?.ids ?? []).map((r) => source.incidents.get(r)).filter(Boolean) as Incident[];
+    refineWithClaude(inc, base, related, routableTeams(ctx))
       .then((insight) => {
         llmCache.set(id, { key, insight });
         for (const res of clients) send(res, { type: 'insight', data: insight });
@@ -106,8 +109,8 @@ function pumpLlm() {
   }
 }
 
-// Новые P1 разбираем через Claude сразу, не дожидаясь клика.
-sim.onMessage((msg) => {
+// Новые критические разбираем через Claude сразу, не дожидаясь клика.
+source.onMessage((msg) => {
   if (msg.type === 'feed' && msg.data.kind === 'p1' && llmEnabled()) enqueueLlm(msg.data.incidentId);
 });
 
@@ -130,9 +133,6 @@ async function readBody(req: http.IncomingMessage): Promise<any> {
   return raw ? JSON.parse(raw) : {};
 }
 
-const INTENSITIES: Intensity[] = ['calm', 'normal', 'storm'];
-const SCENARIOS: ScenarioKind[] = ['billing_outage', 'network_cut', 'coord_flood', 'ddos'];
-
 async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
   const p = url.pathname;
   try {
@@ -149,38 +149,19 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       req.on('close', () => clients.delete(res));
       return;
     }
-    if (p === '/api/health') return json(res, 200, { ok: true, incidents: sim.incidents.size, clients: clients.size, ai: aiStatus() });
+    if (p === '/api/health') return json(res, 200, { ok: true, source: source.status, clients: clients.size, ai: aiStatus() });
     if (p === '/api/snapshot') return json(res, 200, snapshot());
 
     let m = p.match(/^\/api\/incidents\/([\w-]+)\/insight$/);
     if (m && req.method === 'GET') {
-      const inc = sim.incidents.get(m[1]);
+      const inc = source.incidents.get(m[1]);
       if (!inc) return json(res, 404, { error: 'Инцидент не найден' });
       return json(res, 200, insightFor(inc));
     }
-    m = p.match(/^\/api\/incidents\/([\w-]+)\/action$/);
+    m = p.match(/^\/api\/incidents\/([\w-]+)\/ack$/);
     if (m && req.method === 'POST') {
-      const body = await readBody(req);
-      const inc = sim.act(m[1], String(body.type), body);
-      return json(res, 200, inc);
-    }
-    if (p === '/api/bulk-assign' && req.method === 'POST') {
-      const body = await readBody(req);
-      const items = Array.isArray(body.items) ? body.items : [];
-      const n = sim.bulkAssign(items, String(body.actor || 'Координатор'));
-      return json(res, 200, { assigned: n });
-    }
-    if (p === '/api/demo/intensity' && req.method === 'POST') {
-      const body = await readBody(req);
-      if (!INTENSITIES.includes(body.level)) return json(res, 400, { error: 'Неизвестный режим' });
-      sim.setIntensity(body.level);
-      return json(res, 200, { ok: true });
-    }
-    if (p === '/api/demo/scenario' && req.method === 'POST') {
-      const body = await readBody(req);
-      if (!SCENARIOS.includes(body.kind)) return json(res, 400, { error: 'Неизвестный сценарий' });
-      sim.scenario(body.kind);
-      return json(res, 200, { ok: true });
+      await readBody(req);
+      return json(res, 200, source.ack(m[1]));
     }
     return json(res, 404, { error: 'Нет такого метода' });
   } catch (err) {
@@ -235,7 +216,8 @@ if (!PROD) {
   const vite = await createServer({
     root,
     configFile: path.join(root, 'vite.config.ts'),
-    server: { middlewareMode: true, hmr: { server } },
+    // Рабочую копию выгрузки правят на демо — Vite не должен перезагружать из-за неё страницу.
+    server: { middlewareMode: true, hmr: { server }, watch: { ignored: ['**/data/**'] } },
     appType: 'spa',
   });
   viteMiddlewares = vite.middlewares;
@@ -247,11 +229,12 @@ if (!PROD) {
 server.listen(PORT, () => {
   const ai = aiStatus();
   console.log(`\n  Радар инцидентов: http://localhost:${PORT}  (${PROD ? 'прод' : 'разработка'})`);
+  console.log(`  Данные: ${path.relative(root, DATA_FILE)} — правки файла сразу попадают на дашборд`);
   console.log(`  ИИ: ${ai.mode === 'claude' ? `Claude (${ai.model})` : 'эвристика'} — ${ai.reason}\n`);
 });
 
 function shutdown() {
-  sim.stop();
+  source.stop();
   for (const res of clients) res.end();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();

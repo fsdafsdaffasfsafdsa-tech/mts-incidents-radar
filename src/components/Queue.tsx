@@ -1,27 +1,28 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Link2, Search, Sparkles, X } from 'lucide-react';
+import { Search, Sparkles, X } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { AT_RISK_MIN } from '../../shared/types';
 import { select, setState, teamName, useStore, type QueueFilter } from '../store';
 import { matches, useQueue } from '../lib/queue';
-import { fmtAgo, plural } from '../lib/format';
+import { fmtAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { Prio, RiskPill, SlaTimer } from './bits';
-import { SysIcon } from './SysIcon';
+import { Flags, Prio, RiskPill, SlaTimer } from './bits';
 
 const FILTERS: { id: QueueFilter; label: string }[] = [
-  { id: 'open', label: 'Все' },
+  { id: 'open', label: 'Все открытые' },
   { id: 'attention', label: 'Внимание' },
+  { id: 'critical', label: 'Критические' },
   { id: 'coordinators', label: 'Координаторы' },
-  { id: 'critical', label: 'P1–P2' },
-  { id: 'risk', label: `SLA < ${AT_RISK_MIN}′` },
-  { id: 'breach', label: 'Нарушен' },
+  { id: 'high', label: 'Высокий' },
+  { id: 'research', label: 'Исследование' },
+  { id: 'risk', label: `Дедлайн < ${AT_RISK_MIN}′` },
+  { id: 'breach', label: 'Дедлайн прошёл' },
   { id: 'resolved', label: 'Решённые' },
 ];
 
 const PAGE = 80;
 
-export function Queue({ onRouting, searchRef }: { onRouting: () => void; searchRef: React.RefObject<HTMLInputElement> }) {
+export function Queue({ searchRef }: { searchRef: React.RefObject<HTMLInputElement> }) {
   const list = useQueue();
   const filter = useStore((s) => s.filter);
   const search = useStore((s) => s.search);
@@ -60,14 +61,7 @@ export function Queue({ onRouting, searchRef }: { onRouting: () => void; searchR
         <h2>
           Очередь <span className="muted num">{list.length}</span>
         </h2>
-        <span className="hint">по срочности: приоритет, SLA, ИИ-риск</span>
-        <div className="grow" />
-        {counts.coordinators > 0 && (
-          <button className="btn btn-ai" onClick={onRouting} title="ИИ предложит команду для каждого инцидента на координаторах">
-            <Sparkles size={15} />
-            Разобрать с ИИ <span className="num">{counts.coordinators}</span>
-          </button>
-        )}
+        <span className="hint">по срочности: приоритет, дедлайн, ИИ-риск</span>
       </div>
 
       <div className="queue-tools">
@@ -89,7 +83,7 @@ export function Queue({ onRouting, searchRef }: { onRouting: () => void; searchR
           <input
             ref={searchRef}
             value={search}
-            placeholder="Поиск: INC, система, регион, команда  ( / )"
+            placeholder="Поиск: INC, продукт, сервис, группа, исполнитель  ( / )"
             onChange={(e) => setState({ search: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -106,7 +100,7 @@ export function Queue({ onRouting, searchRef }: { onRouting: () => void; searchR
         </div>
         {sysName && (
           <button className="chip on chip-sys" onClick={() => setState({ systemFilter: null })}>
-            Система: {sysName} <X size={12} />
+            Продукт: {sysName} <X size={12} />
           </button>
         )}
       </div>
@@ -127,11 +121,9 @@ export function Queue({ onRouting, searchRef }: { onRouting: () => void; searchR
 }
 
 const Row = memo(function Row({ inc, selected, attention }: { inc: Incident; selected: boolean; attention: boolean }) {
-  const system = useStore((s) => s.systems.find((x) => x.id === inc.systemId));
   const fresh = useStore((s) => s.fresh.get(inc.id));
   const now = useNow(30_000);
   const isFresh = fresh !== undefined && Date.now() - fresh < 6000;
-  const related = inc.relatedIds.length;
 
   return (
     <button
@@ -145,22 +137,18 @@ const Row = memo(function Row({ inc, selected, attention }: { inc: Incident; sel
         <span className="row-title">
           {attention && <span className="attn-dot" title="Требует внимания" />}
           <span className="row-title-text">{inc.title}</span>
-          {related > 0 && (
-            <span className="badge-link" title={`${related} ${plural(related, 'связанный инцидент', 'связанных инцидента', 'связанных инцидентов')}`}>
-              <Link2 size={12} />
-              {related}
-            </span>
-          )}
+          <Flags inc={inc} />
         </span>
         <span className="row-meta">
-          <span className="row-sys">
-            <SysIcon systemId={inc.systemId} size={13} />
-            {system?.short}
-          </span>
+          <span className="row-sys">{inc.product}</span>
           <span className="sep">›</span>
           <span>{inc.service}</span>
-          <span className="sep">·</span>
-          <span>{inc.region}</span>
+          {inc.scenario && (
+            <>
+              <span className="sep">·</span>
+              <span>{inc.scenario}</span>
+            </>
+          )}
           <span className="sep">·</span>
           <span className="num">{inc.id}</span>
           <span className="sep">·</span>
@@ -168,7 +156,7 @@ const Row = memo(function Row({ inc, selected, attention }: { inc: Incident; sel
         </span>
       </span>
       <span className="row-who">
-        {inc.status === 'coordinators' ? (
+        {inc.onCoordinators && inc.status !== 'resolved' ? (
           <>
             <span className="pill pill-coord">Координаторы</span>
             {inc.ai.teamId && (
@@ -177,16 +165,12 @@ const Row = memo(function Row({ inc, selected, attention }: { inc: Incident; sel
               </span>
             )}
           </>
-        ) : inc.status === 'resolved' ? (
-          <>
-            <span className="who-team">{teamName(inc.teamId)}</span>
-            <span className="who-sub ok">решён</span>
-          </>
         ) : (
           <>
             <span className="who-team">{teamName(inc.teamId)}</span>
-            <span className={`who-sub ${inc.assignee ? '' : 'warn'}`}>
-              {inc.status === 'escalated' ? `эскалирован · ${inc.assignee ?? ''}` : inc.assignee ?? 'ждёт исполнителя'}
+            <span className={`who-sub ${inc.status === 'resolved' ? 'ok' : inc.status === 'assigned' ? 'warn' : ''}`}>
+              {inc.state.toLowerCase()}
+              {inc.assignee && inc.status !== 'resolved' ? ` · ${inc.assignee}` : ''}
             </span>
           </>
         )}

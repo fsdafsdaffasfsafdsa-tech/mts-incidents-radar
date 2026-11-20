@@ -1,40 +1,41 @@
 // Общие типы сервера и дашборда.
 
+/**
+ * Приоритет в терминах выгрузки ITSM: priorityId 4 «Наивысший» → P1, 3 «Высокий» → P2, 2 «Средний» → P3, 1 «Низкий» → P4.
+ * Критический инцидент — P1 (Наивысший).
+ */
 export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
 
 /**
- * coordinators — инцидент висит на группе координаторов: нужно решить, какой команде его отдать.
- * assigned     — передан команде, исполнитель ещё не взял.
- * in_progress  — исполнитель работает.
- * escalated    — эскалирован дежурному руководителю.
- * resolved     — решён.
+ * assigned    — «Назначен» (stateId 0): ждёт, когда группа возьмёт в работу.
+ * in_progress — «Выполняется» (stateId 2).
+ * research    — «Исследование ситуации» (stateId 20): сбой устранён, идёт разбор причин.
+ * resolved    — «Завершен» / «Закрыт».
  */
-export type Status = 'coordinators' | 'assigned' | 'in_progress' | 'escalated' | 'resolved';
+export type Status = 'assigned' | 'in_progress' | 'research' | 'resolved';
 
-export type Trend = 'growing' | 'stable' | 'declining';
-export type Source = 'monitoring' | 'support' | 'partner' | 'user';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
+/** Продукт из выгрузки (productName / productMasterId). */
 export interface SystemInfo {
   id: string;
   name: string;
   short: string;
-  icon: string; // имя иконки lucide
-  dependsOn: string[];
 }
 
+/** Группа назначения из выгрузки (assignedGroupName). id совпадает с названием. */
 export interface TeamInfo {
   id: string;
   name: string;
   short: string;
-  members: string[];
   isCoordinators?: boolean;
 }
+
+export const COORDINATORS_GROUP = 'КЦ ИТ Координаторы Массовых Инцидентов';
 
 export interface HistoryItem {
   at: number;
   text: string;
-  actor?: string;
   kind: 'system' | 'coordinator' | 'team' | 'ai';
 }
 
@@ -42,7 +43,7 @@ export interface HistoryItem {
 export interface AiBrief {
   risk: number; // 0–100
   level: RiskLevel;
-  teamId: string | null; // рекомендованная команда
+  teamId: string | null; // рекомендованная группа
   confidence: number; // 0–1
 }
 
@@ -51,7 +52,7 @@ export interface GeoPoint {
   lon: number;
 }
 
-/** Выездная бригада: едет к месту аварии, как машина в такси-агрегаторе. */
+/** Выездная бригада — осталась от карты-прототипа; в выгрузке ITSM её нет, всегда null. См. docs/map-removal.md. */
 export interface Crew {
   name: string;
   from: GeoPoint;
@@ -62,36 +63,55 @@ export interface Crew {
 
 export interface Incident {
   id: string;
-  title: string;
+  /** Поля карты-прототипа: в выгрузке их нет, всегда null. См. docs/map-removal.md. */
+  crew: Crew | null;
+  path: [number, number][] | null;
+  /**
+   * Точка на карте. В выгрузке координат нет, поэтому сервер ставит инцидент условно:
+   * продукт → город, внутри города — разброс по id. На карте это подписано.
+   */
+  geo: GeoPoint;
+  region: string;
+  title: string; // header
   description: string;
+  shortDescription: string;
   priority: Priority;
   status: Status;
-  systemId: string;
+  state: string; // текстовый статус из выгрузки
+  stateReason: string | null;
+  systemId: string; // название продукта (productMasterId у одного продукта бывает разным)
+  product: string;
   service: string;
-  component: string;
-  region: string;
-  geo: GeoPoint;
-  /** Линия на карте: например, оборванная магистраль между двумя городами. [lon, lat] */
-  path: [number, number][] | null;
-  crew: Crew | null;
-  teamId: string | null;
+  scenario: string;
+  teamId: string | null; // assignedGroupName
+  onCoordinators: boolean;
   assignee: string | null;
+  initiator: string | null;
+  channel: string | null; // receivingChannel
+  serviceType: string | null; // Клиентский / Пользовательский / Технологический
+  urgency: string | null;
+  impact: string | null;
+  urgencyId: number | null;
+  impactId: number | null;
   createdAt: number;
   updatedAt: number;
-  slaMinutes: number;
-  slaDeadline: number;
-  affectedUsers: number;
-  signals: string[];
-  source: Source;
-  trend: Trend;
-  reassignCount: number;
-  relatedIds: string[];
-  parentId: string | null; // первопричина, если инцидент связан как дочерний
-  acknowledged: boolean;
-  resolvedAt: number | null;
+  slaDeadline: number | null;
+  resolvedAt: number | null; // completionDate
+  isMaster: boolean;
+  isDouble: boolean;
+  isEffect: boolean; // является причиной дочерних инцидентов
+  isReason: boolean; // является дочерним инцидентом
+  isNeedUp: boolean | null;
+  solution: string | null;
+  acknowledged: boolean; // «на контроле» у координатора — локальная отметка дашборда
   history: HistoryItem[];
   ai: AiBrief;
 }
+
+/** Инцидент не закрыт: висит в работе или в исследовании. */
+export const isOpen = (i: Incident) => i.status !== 'resolved';
+/** Срок решения ещё идёт: инцидент не устранён. */
+export const slaRunning = (i: Incident) => i.status === 'assigned' || i.status === 'in_progress';
 
 export type FeedKind =
   | 'created'
@@ -99,14 +119,12 @@ export type FeedKind =
   | 'coordinators'
   | 'assigned'
   | 'in_progress'
-  | 'escalated'
+  | 'research'
   | 'priority_up'
   | 'sla_warning'
   | 'sla_breach'
   | 'resolved'
-  | 'linked'
-  | 'crew'
-  | 'comment';
+  | 'removed';
 
 export interface FeedEvent {
   id: string;
@@ -155,22 +173,19 @@ export interface Insight {
   pendingLlm?: boolean;
 }
 
-export interface Stats {
-  resolvedLastHour: number;
-  createdLastHour: number;
-  breachedLastHour: number;
-  mttrMinutes: number | null;
-  flowPerMin: number;
-  aiAccuracy: number | null; // доля совпадений подсказки команды с «правдой» генератора
-  series: { at: number; open: number; critical: number; atRisk: number }[];
-}
-
-export type Intensity = 'calm' | 'normal' | 'storm';
-
 export interface AiStatus {
   mode: 'claude' | 'heuristic';
   model: string | null;
   reason: string;
+}
+
+/** Состояние файла с выгрузкой: откуда читаем, когда обновили, есть ли ошибка. */
+export interface SourceStatus {
+  file: string;
+  loadedAt: number | null;
+  count: number;
+  skipped: number;
+  error: string | null;
 }
 
 export interface Snapshot {
@@ -179,8 +194,8 @@ export interface Snapshot {
   feed: FeedEvent[];
   systems: SystemInfo[];
   teams: TeamInfo[];
-  stats: Stats;
-  intensity: Intensity;
+  source: SourceStatus;
+  itsmUrl: string | null;
   ai: AiStatus;
 }
 
@@ -191,11 +206,8 @@ export type ServerMessage =
   | { type: 'feed'; data: FeedEvent }
   | { type: 'brief'; data: Record<string, AiBrief> }
   | { type: 'insight'; data: Insight }
-  | { type: 'stats'; data: Stats }
-  | { type: 'intensity'; data: Intensity }
+  | { type: 'catalog'; data: { systems: SystemInfo[]; teams: TeamInfo[] } }
+  | { type: 'source'; data: SourceStatus }
   | { type: 'tick'; data: { serverTime: number } };
 
-export type ScenarioKind = 'billing_outage' | 'network_cut' | 'coord_flood' | 'ddos';
-
-export const PRIORITY_SLA_MIN: Record<Priority, number> = { P1: 60, P2: 240, P3: 480, P4: 1440 };
 export const AT_RISK_MIN = 30;

@@ -2,6 +2,7 @@
 import { useMemo } from 'react';
 import { ArrowRight } from 'lucide-react';
 import type { Priority } from '../../shared/types';
+import { isOpen, slaRunning } from '../../shared/types';
 import { setState, setView, useStore } from '../store';
 import { plural } from '../lib/format';
 import { useNow } from '../lib/hooks';
@@ -25,10 +26,10 @@ function WithSheet({ children, className }: { children: React.ReactNode; classNa
   );
 }
 
-export function QueueView({ onRouting, searchRef }: { onRouting: () => void; searchRef: React.RefObject<HTMLInputElement> }) {
+export function QueueView({ searchRef }: { searchRef: React.RefObject<HTMLInputElement> }) {
   return (
     <WithSheet className="queue-page">
-      <Queue onRouting={onRouting} searchRef={searchRef} />
+      <Queue searchRef={searchRef} />
     </WithSheet>
   );
 }
@@ -52,14 +53,14 @@ export function SystemsView() {
   const bySystem = useMemo(() => {
     const m = new Map<string, { P1: number; P2: number; P3: number; P4: number; total: number; coord: number; breach: number; worst: string | null }>();
     for (const s of systems) m.set(s.id, { P1: 0, P2: 0, P3: 0, P4: 0, total: 0, coord: 0, breach: 0, worst: null });
-    const sorted = [...incidents.values()].filter((i) => i.status !== 'resolved').sort((a, b) => a.priority.localeCompare(b.priority) || a.slaDeadline - b.slaDeadline);
+    const sorted = [...incidents.values()].filter(isOpen).sort((a, b) => a.priority.localeCompare(b.priority) || (a.slaDeadline ?? Infinity) - (b.slaDeadline ?? Infinity));
     for (const i of sorted) {
       const r = m.get(i.systemId);
       if (!r) continue;
       r[i.priority]++;
       r.total++;
-      if (i.status === 'coordinators') r.coord++;
-      if (i.slaDeadline <= now) r.breach++;
+      if (i.onCoordinators) r.coord++;
+      if (slaRunning(i) && i.slaDeadline !== null && i.slaDeadline <= now) r.breach++;
       if (!r.worst) r.worst = i.title;
     }
     return m;
@@ -68,7 +69,7 @@ export function SystemsView() {
   const teamLoad = useMemo(() => {
     const load = new Map<string, { open: number; p12: number }>();
     for (const i of incidents.values()) {
-      if (i.status === 'resolved' || !i.teamId) continue;
+      if (!slaRunning(i) || !i.teamId) continue;
       const r = load.get(i.teamId) ?? { open: 0, p12: 0 };
       r.open++;
       if (i.priority <= 'P2') r.p12++;
@@ -94,7 +95,7 @@ export function SystemsView() {
       </section>
       <div className="sp-grid">
         <section className="sp-section">
-          <h2 className="sp-title">Системы</h2>
+          <h2 className="sp-title">Продукты</h2>
           <div className="sys-grid">
             {systems.map((s) => {
               const r = bySystem.get(s.id)!;
@@ -103,7 +104,7 @@ export function SystemsView() {
                 <button key={s.id} className={`sys-card worst-${worst}`} onClick={() => openQueue(s.id)}>
                   <span className="sc-head">
                     <span className="sc-icon">
-                      <SysIcon systemId={s.id} size={18} />
+                      <SysIcon size={18} />
                     </span>
                     <span className="sc-name">{s.name}</span>
                     <ArrowRight size={14} className="sc-go" />
@@ -111,9 +112,10 @@ export function SystemsView() {
                   <span className="sc-nums">
                     <span className="sc-total num">{r.total}</span>
                     <span className="sc-sub">{plural(r.total, 'открытый', 'открытых', 'открытых')}</span>
-                    {r.P1 > 0 && <span className="sc-tag t-p1 num">P1 · {r.P1}</span>}
-                    {r.P2 > 0 && <span className="sc-tag t-p2 num">P2 · {r.P2}</span>}
-                    {r.breach > 0 && <span className="sc-tag t-breach num">SLA · {r.breach}</span>}
+                    {r.P1 > 0 && <span className="sc-tag t-p1 num">крит. · {r.P1}</span>}
+                    {r.P2 > 0 && <span className="sc-tag t-p2 num">выс. · {r.P2}</span>}
+                    {r.coord > 0 && <span className="sc-tag t-coord num">коорд. · {r.coord}</span>}
+                    {r.breach > 0 && <span className="sc-tag t-breach num">дедлайн · {r.breach}</span>}
                   </span>
                   <span className="sys-bar" aria-hidden>
                     {PRIOS.map((p) => (r[p] ? <span key={p} className={`seg-${p}`} style={{ flexGrow: r[p] }} /> : null))}
@@ -125,7 +127,7 @@ export function SystemsView() {
           </div>
         </section>
         <section className="sp-section">
-          <h2 className="sp-title">Загрузка команд</h2>
+          <h2 className="sp-title">Загрузка групп (в работе)</h2>
           <div className="team-load">
             {teamLoad.map(({ team, open, p12 }) => (
               <div key={team.id} className="tl-row">
@@ -138,7 +140,7 @@ export function SystemsView() {
               </div>
             ))}
             <p className="tl-legend">
-              <i className="tl-crit-dot" /> из них P1–P2
+              <i className="tl-crit-dot" /> из них наивысший и высокий приоритет
             </p>
           </div>
         </section>

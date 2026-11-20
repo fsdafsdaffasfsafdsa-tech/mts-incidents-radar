@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { CheckCircle2, Flame, Info, TriangleAlert, Users, X } from 'lucide-react';
-import { act, dismissToast, select, useStore, type ToastKind } from '../store';
+import { ack, dismissToast, select, useStore, type ToastKind } from '../store';
 import { fmtAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
 
@@ -33,7 +33,7 @@ export function Toasts() {
                   {t.kind === 'p1' && (
                     <button
                       onClick={() => {
-                        void act(t.incidentId!, 'ack');
+                        void ack(t.incidentId!);
                         dismissToast(t.id);
                       }}
                     >
@@ -54,7 +54,7 @@ export function Toasts() {
   );
 }
 
-/** Полоса под шапкой: непросмотренные P1. Не мигает, но не даёт забыть. */
+/** Полоса под шапкой: непросмотренные критические инциденты. Не мигает, но не даёт забыть. */
 export function CriticalBanner() {
   const incidents = useStore((s) => s.incidents);
   const systems = useStore((s) => s.systems);
@@ -69,16 +69,16 @@ export function CriticalBanner() {
 
   useEffect(() => {
     const base = 'Радар инцидентов';
-    document.title = unack.length ? `(${unack.length}) P1 без внимания · ${base}` : base;
+    document.title = unack.length ? `(${unack.length}) критический без внимания · ${base}` : base;
   }, [unack.length]);
 
   if (!unack.length) return null;
   const first = unack[0];
-  const sys = systems.find((s) => s.id === first.systemId)?.short;
+  const sys = systems.find((s) => s.id === first.systemId)?.short ?? first.product;
   return (
     <div className="crit-banner" role="alert">
       <span className="crit-pulse" aria-hidden />
-      <b>P1 без внимания</b>
+      <b>Критический без внимания</b>
       <span className="crit-sys">{sys}</span>
       <button className="crit-title" onClick={() => select(first.id)}>
         {first.title}
@@ -89,7 +89,7 @@ export function CriticalBanner() {
       <button className="crit-btn" onClick={() => select(first.id)}>
         Открыть
       </button>
-      <button className="crit-btn solid" onClick={() => void act(first.id, 'ack')}>
+      <button className="crit-btn solid" onClick={() => void ack(first.id)}>
         Взять на контроль
       </button>
     </div>

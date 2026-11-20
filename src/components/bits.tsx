@@ -1,24 +1,73 @@
+import { Copy, GitMerge, Link2, Repeat2, Wrench } from 'lucide-react';
 import type { Incident, Priority, RiskLevel } from '../../shared/types';
-import { fmtSla, slaState } from '../lib/format';
+import { PRIO_LABEL, fmtSla, slaState } from '../lib/format';
 import { useNow } from '../lib/hooks';
 
 export function Prio({ p, size = 'sm' }: { p: Priority; size?: 'sm' | 'lg' }) {
-  return <span className={`prio prio-${p} prio-${size}`}>{p}</span>;
+  return (
+    <span className={`prio prio-${p} prio-${size}`} title={`Приоритет: ${PRIO_LABEL[p]}`}>
+      {p}
+    </span>
+  );
 }
 
 export function SlaTimer({ inc, big = false }: { inc: Incident; big?: boolean }) {
   const now = useNow(1000);
   const st = slaState(inc, now);
-  const total = inc.slaDeadline - inc.createdAt;
-  const left = inc.slaDeadline - now;
-  const frac = inc.status === 'resolved' ? 1 : Math.min(1, Math.max(0, 1 - left / total));
+  if (st === 'done' || st === 'none') {
+    const text = st === 'none' ? 'без срока' : inc.status === 'research' ? 'разбор' : 'решён';
+    return (
+      <div className={`sla sla-${st === 'none' ? 'ok' : 'done'} ${inc.status === 'research' ? 'sla-research' : ''} ${big ? 'sla-big' : ''}`}>
+        <span className="sla-time">{text}</span>
+        <span className="sla-bar" aria-hidden>
+          <span style={{ width: st === 'none' ? '0%' : '100%' }} />
+        </span>
+      </div>
+    );
+  }
+  const total = Math.max(1, inc.slaDeadline! - inc.createdAt);
+  const left = inc.slaDeadline! - now;
+  const frac = Math.min(1, Math.max(0, 1 - left / total));
   return (
-    <div className={`sla sla-${st} ${big ? 'sla-big' : ''}`}>
-      <span className="sla-time num">{st === 'done' ? 'решён' : fmtSla(left)}</span>
+    <div className={`sla sla-${st} ${big ? 'sla-big' : ''}`} title="До дедлайна">
+      <span className="sla-time num">{fmtSla(left)}</span>
       <span className="sla-bar" aria-hidden>
         <span style={{ width: `${frac * 100}%` }} />
       </span>
     </div>
+  );
+}
+
+/** Признаки связей из выгрузки: мастер, дубль, причина, дочерний, нужно устранить последствия. */
+export function Flags({ inc }: { inc: Incident }) {
+  return (
+    <>
+      {inc.isMaster && (
+        <span className="flag" title="Мастер-инцидент: к нему привязаны дубли">
+          <GitMerge size={11} /> мастер
+        </span>
+      )}
+      {inc.isDouble && (
+        <span className="flag" title="Дубль: инцидент с такой причиной уже зарегистрирован">
+          <Copy size={11} /> дубль
+        </span>
+      )}
+      {inc.isEffect && (
+        <span className="flag" title="Является причиной дочерних инцидентов">
+          <Link2 size={11} /> причина
+        </span>
+      )}
+      {inc.isReason && (
+        <span className="flag" title="Дочерний инцидент">
+          <Repeat2 size={11} /> дочерний
+        </span>
+      )}
+      {inc.isNeedUp && (
+        <span className="flag warn" title="После решения нужно устранить последствия">
+          <Wrench size={11} /> последствия
+        </span>
+      )}
+    </>
   );
 }
 
@@ -59,7 +108,7 @@ export function Sparkline({ values, className = '' }: { values: number[]; classN
 }
 
 export function Avatar({ name }: { name: string }) {
-  const parts = name.replace('.', '').split(' ').filter(Boolean);
+  const parts = name.replace(/\(.*?\)/g, '').replace('.', '').split(' ').filter(Boolean);
   const initials = (parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '');
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;

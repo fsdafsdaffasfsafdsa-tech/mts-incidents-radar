@@ -9,6 +9,7 @@
     "build": "tsc --noEmit -p . && vite build",
     "start": "vite build && tsx server/index.ts --prod",
     "test": "tsx --test server/*.test.ts",
+    "demo": "tsx scripts/demo.ts",
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
