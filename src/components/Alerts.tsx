@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { CheckCircle2, Flame, Info, TriangleAlert, Users, X } from 'lucide-react';
-import { dismissToast, select, useStore, type ToastKind } from '../store';
+import { dismissToast, openIncident, useStore, type ToastKind } from '../store';
 import { fmtAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
 
@@ -24,7 +24,7 @@ export function Toasts() {
                 <div className="toast-actions">
                   <button
                     onClick={() => {
-                      select(t.incidentId!);
+                      openIncident(t.incidentId!);
                       dismissToast(t.id);
                     }}
                   >
@@ -67,13 +67,13 @@ export function CriticalBanner() {
     <div className="crit-banner" role="alert">
       <span className="crit-pulse" aria-hidden />
       <b>{first.p1Proposal ? 'ИИ предлагает «Наивысший»' : 'Критический без дежурного'}</b>
-      <button className="crit-title" onClick={() => select(first.id)}>
+      <button className="crit-title" onClick={() => openIncident(first.id)}>
         {first.title}
       </button>
       <span className="crit-age">{fmtAgo(now - first.createdAt)}</span>
       {urgent.length > 1 && <span className="crit-more">+{urgent.length - 1} ещё</span>}
       <span className="grow" />
-      <button className="crit-btn solid" onClick={() => select(first.id)}>
+      <button className="crit-btn solid" onClick={() => openIncident(first.id)}>
         Открыть
       </button>
     </div>

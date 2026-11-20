@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { BookUser, FileJson, FlaskConical, LayoutDashboard, LogOut, Moon, Sun, Volume2, VolumeX } from 'lucide-react';
-import { demoAuto, demoOutage, doLogout, setView, teamName, toggleSound, toggleTheme, useStore } from '../store';
+import { FileJson, FlaskConical, LogOut, Moon, Sun, Volume2, VolumeX } from 'lucide-react';
+import { demoAuto, demoOutage, doLogout, teamName, toggleSound, toggleTheme, useStore } from '../store';
 import { fmtClockSec } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Initials } from './ui';
@@ -17,17 +17,13 @@ export function TopBar() {
   const connected = useStore((s) => s.connected);
   const sound = useStore((s) => s.sound);
   const theme = useStore((s) => s.theme);
-  const view = useStore((s) => s.view);
   const me = useStore((s) => s.me);
   const source = useStore((s) => s.config?.source ?? '');
-  const requests = useStore((s) => s.requests);
-  const signals = useStore((s) => s.signals);
   const now = useNow(1000);
   const [demo, setDemo] = useState(false);
   const [auto, setAuto] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
   const atPoint = me?.role === 'coordinator' || me?.role === 'commander';
-  const pending = [...requests.values()].filter((r) => r.status === 'pending').length + [...signals.values()].filter((s) => s.status === 'open').length;
 
   useEffect(() => {
     if (!demo) return;
@@ -36,7 +32,6 @@ export function TopBar() {
     return () => window.removeEventListener('mousedown', close);
   }, [demo]);
 
-  const main = me?.role === 'commander' ? 'Смена' : atPoint ? 'Пункт' : 'Моя команда';
   return (
     <header className="topbar">
       <div className="brand">
@@ -51,17 +46,7 @@ export function TopBar() {
         <div className="brand-name">{atPoint ? 'Координирующий пункт' : teamName(me?.teamId)}</div>
       </div>
 
-      <nav className="nav" aria-label="Экраны">
-        <button className={view === 'main' ? 'on' : ''} onClick={() => setView('main')}>
-          <LayoutDashboard size={16} />
-          <span>{main}</span>
-          {atPoint && pending > 0 && <span className="nav-badge num">{pending}</span>}
-        </button>
-        <button className={view === 'directory' ? 'on' : ''} onClick={() => setView('directory')}>
-          <BookUser size={16} />
-          <span>Справочник команд</span>
-        </button>
-      </nav>
+
 
       <div className="topbar-spacer" />
 

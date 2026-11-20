@@ -2,8 +2,7 @@
 import { useMemo, useState } from 'react';
 import { Activity, BellRing, Inbox, Sparkles, X } from 'lucide-react';
 import type { Incident, Signal, TeamRequest } from '../../shared/types';
-import { PRIORITY_TEXT } from '../../shared/types';
-import { answerRequest, closeSignal, createFromCluster, notifyLead, regionName, select, setPointTab, teamName, useStore } from '../store';
+import { answerRequest, closeSignal, createFromCluster, notifyLead, openIncident, regionName, select, setPointTab, teamName, useStore } from '../store';
 import { urgency, fmtAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, Initials, PrioDot } from './ui';
@@ -167,7 +166,7 @@ export function Requests({ list }: { list: TeamRequest[] }) {
   );
 }
 
-function RequestCard({ r }: { r: TeamRequest }) {
+export function RequestCard({ r }: { r: TeamRequest }) {
   const incidents = useStore((s) => s.incidents);
   const now = useNow(10_000);
   const [other, setOther] = useState<string | null>(null);
@@ -181,7 +180,7 @@ function RequestCard({ r }: { r: TeamRequest }) {
       </div>
       <b>{teamName(r.fromTeamId)}</b>
       {inc && (
-        <button className="link" onClick={() => select(inc.id)}>
+        <button className="link" onClick={() => openIncident(inc.id)}>
           {inc.title}
         </button>
       )}
@@ -219,7 +218,7 @@ export function Signals({ list }: { list: Signal[] }) {
             </div>
             <b>{teamName(s.teamId)}</b>
             {inc && (
-              <button className="link" onClick={() => select(inc.id)}>
+              <button className="link" onClick={() => openIncident(inc.id)}>
                 {inc.title}
               </button>
             )}
@@ -244,7 +243,7 @@ export function Signals({ list }: { list: Signal[] }) {
 }
 
 /** Когда инцидент не выбран: что видит детектор жалоб прямо сейчас. */
-function Detector() {
+export function Detector() {
   const clusters = useStore((s) => s.clusters);
   const stats = useStore((s) => s.stats);
   const rules = useStore((s) => s.config?.rules);
@@ -288,20 +287,10 @@ function Detector() {
           </button>
         </div>
       ))}
-      {rules && (
-        <>
-          <h3 className="cm-h">Как ИИ повышает уровень</h3>
-          <ul className="rules">
-            <li>Инцидент создаётся сам, когда жалоб за 10 минут ≥ 6 и это почти невозможно случайно (Пуассон, p &lt; 0,001).</li>
-            <li>
-              {PRIORITY_TEXT.P3}: {rules.p3}+ жалоб за {rules.windowMin} мин; {PRIORITY_TEXT.P2}: {rules.p2}+ или {rules.p2multi}+ в двух регионах.
-            </li>
-            <li>Не чаще раза в {rules.gapMin} мин, только вверх, сам — не выше «{PRIORITY_TEXT[rules.ceiling]}».</li>
-            <li>«{PRIORITY_TEXT.P1}» ИИ только предлагает ({rules.p1}+ жалоб или {rules.p1regions}+ региона) — решает дежурный.</li>
-          </ul>
-        </>
-      )}
-      <p className="rp-note">Обновлено {new Date(now).toLocaleTimeString('ru-RU')}</p>
+      <p className="rp-note">
+        {rules ? `ИИ создаёт инцидент сам при 6+ жалобах за 10 минут сверх нормы. Подозрительные всплески ниже порога — здесь, решаете вы.` : ''} Обновлено{' '}
+        {new Date(now).toLocaleTimeString('ru-RU')}
+      </p>
     </aside>
   );
 }

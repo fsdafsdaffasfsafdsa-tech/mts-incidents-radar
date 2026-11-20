@@ -3,8 +3,7 @@ import { WifiOff } from 'lucide-react';
 import { checkAuth, select, useStore } from './store';
 import { unlockAudio } from './lib/sound';
 import { TopBar } from './components/TopBar';
-import { PointScreen } from './components/PointScreen';
-import { CommanderScreen } from './components/CommanderScreen';
+import { PointApp } from './components/PointApp';
 import { TeamScreen } from './components/TeamScreen';
 import { Directory } from './components/Directory';
 import { CriticalBanner, Toasts } from './components/Alerts';
@@ -54,12 +53,10 @@ export function App() {
             <span className="boot-ring" />
             Подключаемся…
           </div>
+        ) : atPoint ? (
+          <PointApp />
         ) : view === 'directory' ? (
           <Directory />
-        ) : me.role === 'commander' ? (
-          <CommanderScreen />
-        ) : me.role === 'coordinator' ? (
-          <PointScreen />
         ) : (
           <TeamScreen />
         )}

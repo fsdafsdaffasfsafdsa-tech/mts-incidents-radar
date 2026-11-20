@@ -467,6 +467,7 @@ export class Point {
       }
       if (t.p1 && inc.priority !== 'P1' && !inc.p1Proposal) {
         inc.p1Proposal = `ИИ предлагает «Наивысший»: ${t.reason}. Сервис критичный — нужно подтверждение дежурного.`;
+        inc.history.push({ at: now, kind: 'ai', text: `ИИ предложил «Наивысший» (${t.reason}) — ждёт решения дежурного` });
         this.pushFeed('p1', inc, 'ИИ предлагает «Наивысший» — подтвердите');
       }
       this.dirty.add(inc.id);
@@ -491,6 +492,8 @@ export class Point {
       if (inc.status === 'assigned' && !inc.assignee && inc.teamId && !teamOnDuty(inc.teamId, now)) continue;
       const why = stuckReason(inc, now, inc.assigneeName);
       if (!why) continue;
+      inc.history.push({ at: now, kind: 'ai', text: `ИИ заметил, что инцидент застрял: ${why.toLowerCase()} — сигнал пункту` });
+      this.dirty.add(inc.id);
       this.addSignal({ kind: 'stuck', incidentId: inc.id, personId: inc.assignee, teamId: inc.teamId, text: `ИИ: ${why}` });
     }
   }
@@ -614,7 +617,7 @@ export class Point {
     return inc;
   }
 
-  assignCoordinator(id: string, personId: string, actor: string) {
+  assignCoordinator(id: string, personId: string, actor: string, aiWhy?: string) {
     const inc = this.need(id);
     const p = personById(personId);
     if (!p || p.teamId !== POINT_ID || p.role !== 'coordinator') throw new Error('Это не дежурный пункта');
@@ -626,6 +629,7 @@ export class Point {
     const h = this.hidden.get(id);
     if (h) h.routeAt = null;
     inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: ведёт ${p.name}` });
+    if (aiWhy) inc.history.push({ at: now, kind: 'ai', text: `ИИ распределил на ${p.name}: ${aiWhy}` });
     this.touch(inc, now);
     this.pushFeed('assigned', inc, `Ведёт ${p.name}`, actor);
     return inc;
@@ -640,7 +644,7 @@ export class Point {
     let n = 0;
     for (const it of items) {
       try {
-        this.assignCoordinator(it.incidentId, it.personId, actor);
+        this.assignCoordinator(it.incidentId, it.personId, actor, it.why);
         n++;
       } catch {
         /* пропускаем устаревшие пункты плана */
@@ -677,6 +681,7 @@ export class Point {
     h.roll = r < 0.1 ? 'wrong' : r < 0.18 ? 'help' : r < 0.27 ? 'stuck' : 'ok';
     h.rollDone = h.roll === 'ok' || h.roll === 'stuck';
     inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: передано команде «${team.name}»${duty ? '' : ' — команда сейчас не на смене, возьмёт с началом смены'}` });
+    if (top) inc.history.push({ at: now, kind: 'ai', text: top.teamId === teamId ? `Совпало с советом ИИ (балл ${top.score})` : `ИИ советовал «${teamById(top.teamId)?.name}» (балл ${top.score}), дежурный выбрал другую команду` });
     this.touch(inc, now);
     this.pushFeed('routed', inc, `→ ${team.name}`, actor);
     return inc;
@@ -887,6 +892,7 @@ export class Point {
     };
     this.requests.set(r.id, r);
     inc.history.push({ at: r.at, kind: 'team', actor: p.name, text: `${p.name}: просит передать${toTeamId ? ` в «${teamById(toTeamId)?.name}»` : ''} — ${r.reason}` });
+    inc.history.push({ at: r.at, kind: 'ai', text: `ИИ проверил запрос по справочнику: ${check.note}` });
     this.touch(inc, r.at);
     this.emit({ type: 'request', data: r });
     this.pushFeed('request', inc, `Запрос на передачу от «${teamById(r.fromTeamId)?.name}»${auto ? '' : ''}`, p.name);

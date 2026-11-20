@@ -3,12 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { BellRing, CheckCircle2, Coffee, Hand, LifeBuoy, Megaphone, Send, Sparkles, Undo2, X } from 'lucide-react';
 import type { Incident, Person } from '../../shared/types';
 import { SCHEDULE_TEXT, fmtTz } from '../../shared/schedule';
-import { loadRoute, select, setAway, teamAssign, teamHelp, teamName, teamRelease, teamReport, teamResolve, teamTake, teamTransfer, useStore } from '../store';
+import { loadRoute, select, setAway, setTab, teamAssign, teamHelp, teamName, teamRelease, teamReport, teamResolve, teamTake, teamTransfer, useStore } from '../store';
 import { fmtClock, urgency } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, Elapsed, PRIO_COLORS, PrioDot } from './ui';
 import { Duty, PersonRow, STATUS_TEXT, ScheduleStrip, Spark, isOn, shiftHint } from './kit';
 import { TeamSearch } from './IncidentCard';
+import { Directory } from './Directory';
 
 type Tab = 'new' | 'work' | 'mine' | 'done';
 
@@ -18,6 +19,8 @@ export function TeamScreen() {
   const people = useStore((s) => s.people);
   const incidents = useStore((s) => s.incidents);
   const selectedId = useStore((s) => s.selectedId);
+  const signals = useStore((s) => s.signals);
+  const tab = useStore((s) => s.tab);
   const now = useNow(15_000);
   const self = people.get(me.personId ?? '');
   const members = useMemo(() => [...people.values()].filter((p) => p.teamId === me.teamId || p.teams?.includes(me.teamId ?? '')), [people, me.teamId]);
@@ -29,8 +32,31 @@ export function TeamScreen() {
   if (!team || !self) return <div className="boot">Команда не найдена</div>;
   const on = isOn(self, now);
   const duty = members.filter((p) => p.role === 'engineer' && isOn(p, now));
+  const waiting = list.filter((i) => i.status === 'assigned' && !i.assignee).length;
+  const mineN = list.filter((i) => i.assignee === me.personId && i.status !== 'resolved').length;
+  const flags = [...signals.values()].filter((s) => s.teamId === me.teamId && s.status === 'notified').length;
+  const tabs: { id: string; label: string; n?: number; tone?: string; hint: string }[] = [
+    { id: 'work', label: 'Работа', n: waiting + mineN, tone: waiting ? 'warn' : undefined, hint: me.role === 'lead' ? 'Инциденты, которые пункт передал команде. Назначьте на инженера, который сейчас на смене.' : 'Инциденты, которые пункт передал команде: возьмите, решите или попросите передать другой команде.' },
+    { id: 'team', label: me.role === 'lead' ? 'Команда и сигналы пункта' : 'Команда и смены', n: me.role === 'lead' ? flags : duty.length, tone: flags && me.role === 'lead' ? 'hot' : undefined, hint: me.role === 'lead' ? 'Кто на смене, у кого сколько в работе и на что обратил внимание пункт.' : 'Ваш график и кто из команды сейчас на смене.' },
+    { id: 'directory', label: 'Справочник', hint: 'Около 900 команд: если проблема не ваша, найдите, чья она.' },
+  ];
+  const cur = tabs.find((t) => t.id === tab) ?? tabs[0];
   return (
-    <div className={`teamscr role-${me.role}`}>
+    <div className="teamapp">
+      <nav className="stagebar" aria-label="Разделы">
+        {tabs.map((t) => (
+          <button key={t.id} className={`stab ${cur.id === t.id ? 'on' : ''} ${t.tone ?? ''}`} onClick={() => setTab(t.id)}>
+            <span>{t.label}</span>
+            {t.n !== undefined && <span className="stage-n num">{t.n}</span>}
+          </button>
+        ))}
+      </nav>
+      <div className="stage-hint">{cur.hint}</div>
+      <div className="stage-body">
+        {cur.id === 'directory' ? (
+          <Directory />
+        ) : (
+    <div className={`teamscr role-${me.role} t-${cur.id}`}>
       <header className="team-head panel">
         <span className="th-main">
           <b>{team.name}</b>
@@ -48,9 +74,19 @@ export function TeamScreen() {
         </button>
         <ReportButton />
       </header>
-      <TeamQueue list={list} selected={current?.id ?? null} />
-      {current ? <TeamIncident inc={current} self={self} members={members} /> : <section className="panel empty-panel">Инцидентов у команды нет</section>}
-      {me.role === 'lead' ? <LeadSide members={members} list={list} /> : <EngineerSide self={self} members={members} />}
+      {cur.id === 'work' ? (
+        <>
+          <TeamQueue list={list} selected={current?.id ?? null} />
+          {current ? <TeamIncident inc={current} self={self} members={members} /> : <section className="panel empty-panel">Инцидентов у команды нет</section>}
+        </>
+      ) : me.role === 'lead' ? (
+        <LeadSide members={members} list={list} />
+      ) : (
+        <EngineerSide self={self} members={members} />
+      )}
+    </div>
+        )}
+      </div>
     </div>
   );
 }

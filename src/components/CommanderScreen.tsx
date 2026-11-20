@@ -121,7 +121,7 @@ function PlanModal({ plan, onClose }: { plan: { incidentId: string; personId: st
 }
 
 /** Дежурные на смене и что у каждого в работе. */
-function Shift() {
+export function Shift() {
   const staff = useStore((s) => s.staff);
   const incidents = useStore((s) => s.incidents);
   const selectedId = useStore((s) => s.selectedId);
@@ -180,7 +180,7 @@ function Shift() {
 }
 
 /** Когда инцидент не выбран: сигналы, запросы и график всего пункта. */
-function Roster() {
+export function Roster() {
   const staff = useStore((s) => s.staff);
   const signals = useStore((s) => s.signals);
   const requests = useStore((s) => s.requests);

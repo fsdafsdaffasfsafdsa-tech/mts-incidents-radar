@@ -66,6 +66,7 @@ export interface State {
   selectedId: string | null;
   pointTab: PointTab;
   view: 'main' | 'directory';
+  tab: string; // вкладка процесса: map, inbox, teams, requests, signals, done, ai, directory …
   toasts: Toast[];
   sound: boolean;
   theme: 'dark' | 'light';
@@ -114,6 +115,7 @@ let state: State = {
   selectedId: null,
   pointTab: 'incidents',
   view: 'main',
+  tab: '',
   toasts: [],
   sound: readPref('radar.sound', true),
   theme: readPref('radar.theme', 'light'),
@@ -458,3 +460,18 @@ export function setPointTab(pointTab: PointTab) {
 export function setView(view: State['view']) {
   setState({ view });
 }
+export function setTab(tab: string) {
+  setState({ tab });
+  writePref(`radar.tab.${state.me?.role ?? ''}`, tab);
+}
+/** Открыть инцидент: переходим на вкладку, где с ним работают. */
+export function openIncident(id: string) {
+  const inc = state.incidents.get(id);
+  const role = state.me?.role;
+  if (inc && (role === 'coordinator' || role === 'commander')) {
+    const tab = inc.status === 'resolved' ? 'done' : inc.status === 'coordinators' ? (role === 'commander' && !inc.coordinatorId ? 'distribute' : 'inbox') : 'teams';
+    setTab(role === 'commander' && tab === 'inbox' ? 'teams' : tab);
+  } else if (inc) setTab('work');
+  select(id);
+}
+export const savedTab = (role: string) => readPref<string>(`radar.tab.${role}`, '');
