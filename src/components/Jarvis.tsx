@@ -16,7 +16,8 @@ type Action =
   | { type: 'settings'; open: boolean }
   | { type: 'theme'; id: string }
   | { type: 'team'; name: string }
-  | { type: 'show'; what: string };
+  | { type: 'show'; what: string }
+  | { type: 'report' };
 interface Status {
   llm: boolean;
   tts: boolean;
@@ -415,6 +416,9 @@ function runActions(actions: Action[]) {
         break;
       case 'show':
         reveal(a.what);
+        break;
+      case 'report':
+        void import('../lib/shiftReport').then((m) => m.downloadShiftReport());
         break;
       case 'tab':
         if (TABS.includes(a.tab)) {

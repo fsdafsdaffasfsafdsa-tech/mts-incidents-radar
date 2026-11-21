@@ -15,6 +15,7 @@ import { planPoint, routeTeams } from './ai-point.ts';
 import { regionById } from './regions.ts';
 import { RULES } from './complaints.ts';
 import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
+import { myShiftWork } from '../shared/shift.ts';
 
 const MIN = 60_000;
 export const key = () => process.env.OPENROUTER_API_KEY || '';
@@ -42,7 +43,8 @@ export type ClientAction =
   | { type: 'settings'; open: boolean }
   | { type: 'theme'; id: string }
   | { type: 'team'; name: string }
-  | { type: 'show'; what: Show }; // прокрутить карточку к разделу, который изменился, и подсветить
+  | { type: 'show'; what: Show } // прокрутить карточку к разделу, который изменился, и подсветить
+  | { type: 'report' }; // собрать и скачать отчёт смены в PDF
 export type Show = 'top' | 'who' | 'route' | 'level' | 'p1' | 'signal' | 'chat' | 'decide';
 export interface JarvisAsk {
   text: string;
@@ -269,17 +271,7 @@ export function shiftSummary(point: Point, me: Me) {
   const now = Date.now();
   const from = now - SHIFT_MS;
   const all = [...point.incidents.values()];
-  let taken = 0;
-  let routed = 0;
-  const routeTimes: number[] = [];
-  for (const i of all) {
-    if (i.history.some((h) => h.at > from && h.actor === me.name && /ведёт/.test(h.text))) taken++;
-    const r = i.history.find((h) => h.at > from && h.actor === me.name && /передано команде/.test(h.text));
-    if (r) {
-      routed++;
-      routeTimes.push(r.at - i.createdAt);
-    }
-  }
+  const { taken, routed, avgRouteMs } = myShiftWork(all, me.name, from);
   const mine = all.filter((i) => i.coordinatorId === me.personId);
   const solved = mine.filter((i) => i.status === 'resolved' && (i.resolvedAt ?? 0) > from).length;
   const open = mine.filter((i) => i.status !== 'resolved');
@@ -289,11 +281,11 @@ export function shiftSummary(point: Point, me: Me) {
   const ai = all.reduce((n, i) => n + i.history.filter((h) => h.kind === 'ai' && h.at > from).length, 0);
   const req = [...point.requests.values()].filter((r) => r.status === 'pending').length;
   const sig = [...point.signals.values()].filter((s) => s.status === 'open').length;
-  const avg = routeTimes.length ? Math.round(routeTimes.reduce((a, b) => a + b, 0) / routeTimes.length / MIN) : null;
+  const avg = avgRouteMs === null ? null : Math.round(avgRouteMs / MIN);
   const biggest = all.filter((i) => i.origin === 'complaints' && i.createdAt > from).sort((a, b) => (b.complaints ?? 0) - (a.complaints ?? 0))[0];
   return [
     `Смена ${me.name}, последние 12 часов.`,
-    `Вы: взяли ${taken}, передали командам ${routed}${avg !== null ? ` (в среднем через ${avg} мин после появления)` : ''}, решено из ваших ${solved}.`,
+    `Вы: взяли ${taken}, передали командам ${routed}${avg !== null ? ` (в среднем через ${avg} мин после того, как инцидент попал к вам)` : ''}, решено из ваших ${solved}.`,
     `Сейчас у вас открыто ${open.length}, из них горит ${hot.length}${hot.length ? `: ${hot.slice(0, 3).map((i) => `«${i.title}» (${where(i)})`).join('; ')}` : ''}.`,
     `По пункту: новых инцидентов ${created}, решено ${resolvedAll}, ИИ сделал ${ai} действий.`,
     biggest ? `Самый массовый: «${biggest.title}», ${biggest.complaints} жалоб, ${where(biggest)}.` : '',
@@ -367,6 +359,11 @@ class Exec {
         this.done.push(`Открыл «${inc.title}»`);
         return 'ok';
       }
+      case 'shift_report':
+        this.control();
+        this.actions.push({ type: 'report' });
+        this.done.push('Собрал отчёт смены в PDF');
+        return 'отчёт собирается и скачается в браузере дежурного';
       case 'open_settings':
         this.control();
         this.actions.push({ type: 'settings', open: a.open !== false });
@@ -511,6 +508,7 @@ const INFO_TOOLS = [
 const CONTROL_TOOLS = [
   fn('switch_tab', 'Открыть вкладку на экране дежурного', { tab: { type: 'string', enum: Object.keys(TAB_NAMES) } }, ['tab']),
   fn('open_incident', 'Открыть инцидент на экране (карточка по шагам)', ID, ['id']),
+  fn('shift_report', 'Собрать отчёт смены в PDF для руководства (итоги, графики, инциденты, разборы) и скачать его'),
   fn('open_settings', 'Открыть или закрыть окно настроек', { open: { type: 'boolean' } }),
   fn('set_theme', 'Сменить тему экрана', { theme: { type: 'string', enum: Object.keys(THEMES) } }, ['theme']),
   fn('replay', 'Запустить (on=true) или остановить перемотку карты жалоб за последний час', { on: { type: 'boolean' } }),
@@ -684,6 +682,10 @@ function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
     if (!i) return say('Сейчас ничего не горит, сэр.');
     ex.focus = i.id;
     return say(explain(i));
+  }
+  if (/отч[её]т/.test(text)) {
+    const r = tryRun('shift_report', {});
+    return say(r.startsWith('!') ? `Не могу: ${r.slice(1)}.` : 'Собираю отчёт смены в PDF, сэр. Через пару секунд он скачается.');
   }
   if (/сводк|итог.*смен|пересменк/.test(text)) {
     const s = shiftSummary(point, me).split('\n');

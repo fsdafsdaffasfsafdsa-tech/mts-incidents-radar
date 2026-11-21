@@ -1,6 +1,6 @@
 // «Моя смена» (сколько взял, передал, решено) и сводка для пересменки — текст, который можно скопировать следующей смене.
 import { useMemo, useState } from 'react';
-import { ClipboardCopy, FileText, Mic, X } from 'lucide-react';
+import { ClipboardCopy, FileDown, FileText, Mic, X } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { teamName, useStore } from '../store';
 import { fmtClock, fmtDur } from '../lib/format';
@@ -59,8 +59,34 @@ export function MyShift() {
         <button className="btn btn-sm btn-ai" onClick={() => void jarvisAsk('Сводка смены')} title="Джарвис расскажет итоги смены голосом">
           <Mic size={14} /> Сводка голосом
         </button>
+        <ReportButton />
       </div>
     </section>
+  );
+}
+
+/** Отчёт смены в PDF для руководства: итоги, графики, открытые и решённые, разборы главных. */
+export function ReportButton({ small = true }: { small?: boolean }) {
+  const [st, setSt] = useState<'idle' | 'busy' | 'done' | 'err'>('idle');
+  return (
+    <button
+      className={`btn ${small ? 'btn-sm' : ''}`}
+      disabled={st === 'busy'}
+      title="Итоги смены, графики, открытые и решённые инциденты, разборы главных — одним PDF для руководства"
+      onClick={async () => {
+        setSt('busy');
+        try {
+          const { downloadShiftReport } = await import('../lib/shiftReport');
+          await downloadShiftReport();
+          setSt('done');
+        } catch {
+          setSt('err');
+        }
+        setTimeout(() => setSt('idle'), 2500);
+      }}
+    >
+      <FileDown size={14} /> {st === 'busy' ? 'Готовлю отчёт…' : st === 'done' ? 'Отчёт скачан' : st === 'err' ? 'Не получилось' : 'Отчёт смены (PDF)'}
+    </button>
   );
 }
 
