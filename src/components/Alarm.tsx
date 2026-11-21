@@ -32,7 +32,8 @@ export function Alarm() {
     setInc(fresh);
     unlockAudio();
     if (sound && p1Sound) stop.current = siren();
-    if (!jarvisPrefs.scenario) announceIncident(fresh.id, fresh.p1Proposal ? `Внимание. ИИ предлагает наивысший уровень: ${fresh.title}` : `Внимание. Критический инцидент: ${fresh.title}`);
+    if (!jarvisPrefs.scenario)
+      announceIncident(fresh.id, fresh.p1Proposal ? `ИИ предлагает поднять «${fresh.title}» до наивысшего. Подтверждаем?` : `новый критический — «${fresh.title}». Что будем делать?`, fresh.p1Proposal && fresh.priority !== 'P1' ? `p1ask:${fresh.id}` : `crit:${fresh.id}`);
   }, [incidents, on]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => stop.current?.(), []);
@@ -46,7 +47,7 @@ export function Alarm() {
       setInc(pick);
       stop.current?.();
       if (getState().sound) stop.current = siren();
-      announceIncident(pick.id, `Внимание. Критический инцидент: ${pick.title}`);
+      announceIncident(pick.id, `критический — «${pick.title}». Что будем делать?`, `test:${Date.now()}`);
     };
     // Сценарий для жюри: тревога по конкретному инциденту (голос объявления — у сценария).
     const forId = (e: Event) => {
@@ -126,7 +127,7 @@ export function ForecastWatch() {
       if (f?.next?.level !== 'P1' || f.next.inMin > 15) continue;
       warned.current.add(i.id);
       toast({ kind: 'warn', title: `Прогноз: станет критическим через ~${f.next.inMin} мин`, body: `${i.title} · ${f.rate} жалоб/мин, ${f.trend === 'up' ? 'растёт' : 'держится'}`, incidentId: i.id, ttl: 14_000 });
-      announceText(`Сэр, по темпу жалоб ${i.title.replace(/^Жалобы: /, '')} станет критическим примерно через ${f.next.inMin} минут.`, i.id);
+      announceText(`по темпу жалоб ${i.title.replace(/^Жалобы: /, '')} станет критическим примерно через ${f.next.inMin} минут. Поднять уровень заранее?`, i.id, `forecast:${i.id}`);
     }
   }, [now]);
   return null;

@@ -216,7 +216,7 @@ export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filte
 }
 
 // ─── блоки и раскладки (общие для стены и Джарвиса) ────────────────────────
-export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom' | 'forgot' | 'favs';
+export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom' | 'forgot' | 'favs' | 'now' | 'deadlines';
 export type BlockCat = 'incidents' | 'summary' | 'ai' | 'own';
 export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
   { id: 'incidents', name: 'Инциденты' },
@@ -225,6 +225,8 @@ export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
   { id: 'own', name: 'Своё' },
 ];
 export const BLOCKS: { id: BlockId; name: string; hint: string; cat: BlockCat; icon: string }[] = [
+  { id: 'now', name: 'Взять сейчас', hint: 'самое срочное крупно и одна кнопка: передать, взять, вернуть', cat: 'incidents', icon: 'target' },
+  { id: 'deadlines', name: 'Сроки', hint: 'шкала до +4 часов: инциденты точками, что горит следующим', cat: 'incidents', icon: 'timer' },
   { id: 'action', name: 'Кому распределить', hint: 'распределить, закреплённые критические и высокие, остальное листается', cat: 'incidents', icon: 'bell' },
   { id: 'forgot', name: 'Не забыть', hint: 'важные некритические, на которые давно никто не смотрел — подсовывает по очереди', cat: 'incidents', icon: 'eye' },
   { id: 'favs', name: 'Избранное смены', hint: 'закреплённые инциденты с заметками и напоминаниями', cat: 'incidents', icon: 'star' },
@@ -254,12 +256,26 @@ export interface DashColumn {
   scale?: number; // размер текста блока, 0.7–1.6
   opts?: Record<string, boolean | number | string>; // собственные настройки блока
 }
-export type PresetId = 'base' | 'base-wall' | 'base-work' | 'case' | 'board' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
+export type PresetId = 'base' | 'base-groups' | 'base-wall' | 'base-work' | 'case' | 'board' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
 export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashColumn[]; grid?: { block: BlockId; x: number; y: number; w: number; h: number; opts?: Record<string, boolean | number | string> }[]; filter?: DashGroup | null; density?: 'normal' | 'large' }[] = [
   {
     id: 'base',
-    name: 'Базовая: всё по кейсу',
-    hint: 'кому распределить, четыре группы, «не забыть» и избранное — все метрики кейса на одном экране',
+    name: 'Базовая',
+    hint: 'что взять сейчас, сроки шкалой, кому распределить, помощник, «не забыть» и избранное — минимум текста',
+    columns: [],
+    grid: [
+      { block: 'now', x: 0, y: 0, w: 4, h: 6 },
+      { block: 'deadlines', x: 0, y: 6, w: 4, h: 3 },
+      { block: 'assistant', x: 0, y: 9, w: 4, h: 3 },
+      { block: 'action', x: 4, y: 0, w: 5, h: 12 },
+      { block: 'forgot', x: 9, y: 0, w: 3, h: 6 },
+      { block: 'favs', x: 9, y: 6, w: 3, h: 6 },
+    ],
+  },
+  {
+    id: 'base-groups',
+    name: 'Базовая: четыре группы',
+    hint: 'кому распределить и четыре группы кейса колонками',
     columns: [],
     grid: [
       { block: 'action', x: 0, y: 0, w: 5, h: 12 },

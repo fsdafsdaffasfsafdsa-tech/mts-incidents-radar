@@ -170,5 +170,7 @@ export const DEFAULT_SIZE: Partial<Record<BlockId, { w: number; h: number }>> = 
   groups: { w: 8, h: 8 },
   custom: { w: 4, h: 6 },
   forgot: { w: 3, h: 5 },
+  now: { w: 4, h: 6 },
+  deadlines: { w: 5, h: 3 },
   favs: { w: 4, h: 4 },
 };

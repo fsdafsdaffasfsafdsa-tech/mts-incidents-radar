@@ -162,28 +162,52 @@ export function stillUrgent(kind: AlertKind, inc: Incident | undefined, now: num
   }
 }
 
-/** Что сказать голосом о срочном. Коротко, с вопросом — чтобы дежурный мог ответить «беру» или «да». */
-export function voiceLine(kind: AlertKind, inc: Incident, now: number): string {
-  const t = `«${inc.title}»`;
+/**
+ * Что Джарвис скажет о событии: коротко и с вопросом — дежурный отвечает голосом («да», «передай», «верни в работу»).
+ * Обращение («Сэр, …») добавляет сам Джарвис по выбранному персонажу. teamOf — имя команды по id (для совета ИИ).
+ */
+export function voiceLine(kind: AlertKind, inc: Incident, now: number, teamOf: (id: string) => string = (id) => id): string {
+  const t = `«${inc.title.replace(/^Жалобы: /, 'жалобы: ')}»`;
+  const left = inc.slaDeadline - now;
+  const ai = inc.ai?.teamId ? teamOf(inc.ai.teamId) : null;
   switch (kind) {
     case 'crit':
-      return `Внимание! Новый критический: ${t}. Скажите «беру» — и я возьму его на вас.`;
+      return `новый критический — ${t}. ${inc.status === 'coordinators' && ai ? `ИИ советует «${ai}». Передать?` : 'Что будем делать?'}`;
     case 'coord':
-      return `Новый инцидент на распределение: ${t}. Скажите «беру» или спросите, кому передать.`;
+      return `новый инцидент на распределение — ${t}. ${ai ? `ИИ советует «${ai}». Передать?` : 'Взять на себя?'}`;
     case 'recur':
-      return `Внимание: ${inc.recur?.team ? `команда «${inc.recur.team}»` : 'команда'} закрыла ${t}, но жалобы снова идут — уже ${inc.recur?.count ?? 0} ${complaintsWord(inc.recur?.count ?? 0)}. Вернуть в работу?`;
+      return `${inc.recur?.team ? `команда «${inc.recur.team}»` : 'команда'} закрыла ${t}, но жалобы снова идут — уже ${inc.recur?.count ?? 0} ${complaintsWord(inc.recur?.count ?? 0)}. Вернуть в работу?`;
     case 'p1ask':
-      return `ИИ предлагает поднять ${t} до наивысшего. Подтвердить?`;
+      return `ИИ предлагает поднять ${t} до наивысшего. Подтверждаем?`;
     case 'critStuck':
-      return `Критический ${t} не берут уже ${fmtShort(waitingTake(inc, now) ?? 0)}. Указать руководителю?`;
+      return `критический ${t} не берут уже ${fmtShort(waitingTake(inc, now) ?? 0)}. Указать руководителю команды?`;
     case 'critSla':
-      return `У критического ${t} срок на исходе. Проверить у команды?`;
+      return `у критического ${t} срок на исходе. Что будем делать?`;
+    case 'slaHigh':
+      return left > 0 ? `у ${t} срок через ${fmtShort(left)}. Проверить у команды?` : `${t} просрочен. Что будем делать?`;
+    case 'notTaken':
+      return `${t} не берут уже ${fmtShort(waitingTake(inc, now) ?? 0)}. Напомнить команде?`;
+    case 'pingpong':
+      return `${t} передают по кругу — уже ${transferCount(inc)} раза. Разберёмся, чья зона?`;
+    case 'resolvedCrit':
+      return `критический ${t} решён за ${fmtShort((inc.resolvedAt ?? now) - inc.createdAt)}.`;
+    case 'remind':
+      return `напоминание по ${t}${inc.pin?.note ? `: ${inc.pin.note}` : ''}.`;
+    case 'forgot':
+      return `${t} давно без внимания. Посмотрим?`;
+    case 'fav':
+      return `по избранному ${t} есть изменения.`;
     default:
-      return `${ALERT_META[kind].title}: ${t}.`;
+      return `${ALERT_META[kind].title.toLowerCase()}: ${t}.`;
   }
 }
 
 /** Насколько ярко показать инцидент: 0 — спокойный, 4 — самый срочный. Чем важнее — тем ярче. */
 export function heat(score: number): 0 | 1 | 2 | 3 | 4 {
   return score >= 140 ? 4 : score >= 100 ? 3 : score >= 70 ? 2 : score >= 45 ? 1 : 0;
+}
+/** Яркость инцидента: средний и низкий даже просроченные не ярче оранжевого — красным горят только важные. */
+export function heatFor(i: Incident, score: number): 0 | 1 | 2 | 3 | 4 {
+  const h = heat(score);
+  return (i.priority === 'P3' || i.priority === 'P4') && i.status !== 'resolved' ? (Math.min(h, 2) as 0 | 1 | 2) : h;
 }

@@ -145,7 +145,7 @@ type Spoken = { buf: Buffer; type: string; voice: string };
 const cache = new Map<string, Spoken>();
 // Говорящие модели на OpenRouter иногда пропадают («No endpoints found»). Тогда берём следующий живой голос,
 // а упавший пропускаем 5 минут, чтобы не терять на нём время.
-const FALLBACK = ['mm-guy', 'grok-rex', 'el-brian', 'el-adam'];
+const FALLBACK = ['grok-rex', 'el-brian', 'mm-guy', 'gm-charon', 'el-adam'];
 const down = new Map<string, number>();
 async function speakWith(id: string, t: string): Promise<Spoken> {
   const v = VOICE_CATALOG[id];
@@ -174,8 +174,12 @@ export async function speak(text: string, voiceId: string): Promise<Spoken | nul
       return out;
     } catch (err) {
       last = err;
-      down.set(id, Date.now() + 5 * MIN);
-      console.error('Джарвис: голос недоступен, пробую следующий —', err instanceof Error ? err.message : err);
+      // Модель голоса недоступна у OpenRouter (404 «No endpoints») — откладываем все голоса этой модели на полчаса,
+      // иначе каждая фраза сначала стучится в мёртвый голос и Джарвис отвечает с задержкой или молчит.
+      const msg = err instanceof Error ? err.message : String(err);
+      const wait = /: 404 |No endpoints/.test(msg) ? 30 * MIN : 5 * MIN;
+      for (const [vid, v] of Object.entries(VOICE_CATALOG)) if (v.model === VOICE_CATALOG[id].model) down.set(vid, Date.now() + wait);
+      console.error('Джарвис: голос недоступен, пробую следующий —', msg.slice(0, 160));
     }
   }
   throw last instanceof Error ? last : new Error('голоса недоступны');
@@ -541,7 +545,6 @@ class Exec {
       }
       // ── работа пункта ──
       case 'take_incident': {
-        this.control();
         const inc = this.inc(a.id);
         if (!this.me.personId) throw new Error('нет учётки дежурного');
         p.assignCoordinator(inc.id, this.me.personId, this.me.name);
@@ -550,7 +553,6 @@ class Exec {
         return 'взято';
       }
       case 'assign_coordinator': {
-        this.control();
         const inc = this.inc(a.id);
         const person = findCoordinator(String(a.person ?? ''));
         if (!person) throw new Error('такого дежурного нет на смене');
@@ -560,7 +562,6 @@ class Exec {
         return `назначено: ${person.name}`;
       }
       case 'route_incident': {
-        this.control();
         const inc = this.inc(a.id);
         const team = typeof a.team_id === 'string' && teamById(a.team_id) ? a.team_id : suggestions(p, inc).picks[0]?.teamId;
         if (!team || team === POINT_ID) throw new Error('справочник не нашёл команду — назовите её');
@@ -571,7 +572,6 @@ class Exec {
         return `передано команде «${teamName(team)}»`;
       }
       case 'set_level': {
-        this.control();
         const inc = this.inc(a.id);
         const lvl = String(a.level) as Priority;
         if (!['P1', 'P2', 'P3', 'P4'].includes(lvl)) throw new Error('уровень — P1…P4');
@@ -581,7 +581,6 @@ class Exec {
         return 'ok';
       }
       case 'answer_p1': {
-        this.control();
         const inc = this.inc(a.id);
         if (a.confirm) p.setLevel(inc.id, 'P1', this.me.name, 'подтверждено дежурным по предложению ИИ');
         else p.dismissP1(inc.id, this.me.name);
@@ -590,7 +589,6 @@ class Exec {
         return 'ok';
       }
       case 'notify_lead': {
-        this.control();
         const inc = this.inc(a.id);
         const sig = [...p.signals.values()].find((s) => s.incidentId === inc.id && s.status === 'open');
         if (!sig) throw new Error('по этому инциденту нет открытого сигнала');
@@ -600,7 +598,6 @@ class Exec {
         return 'ok';
       }
       case 'add_comment': {
-        this.control();
         const inc = this.inc(a.id);
         const text = String(a.text ?? '').trim();
         if (!text) throw new Error('пустое сообщение');
@@ -610,7 +607,6 @@ class Exec {
         return 'ok';
       }
       case 'pin_incident': {
-        this.control();
         const inc = this.inc(a.id);
         const m = typeof a.remind_min === 'number' && a.remind_min > 0 ? Math.min(720, Math.round(a.remind_min)) : null;
         const note = String(a.note ?? inc.pin?.note ?? '').trim().slice(0, 300);
@@ -619,7 +615,6 @@ class Exec {
         return 'ok';
       }
       case 'reopen_incident': {
-        this.control();
         const inc = this.inc(a.id);
         p.reopen(inc.id, this.me.name);
         this.actions.push({ type: 'open', id: inc.id });
@@ -627,14 +622,12 @@ class Exec {
         return 'ok';
       }
       case 'unpin_incident': {
-        this.control();
         const inc = this.inc(a.id);
         p.unpin(inc.id, this.me.name);
         this.done.push(`Убрал из избранного «${inc.title}»`);
         return 'ok';
       }
       case 'create_from_cluster': {
-        this.control();
         const inc = p.createFromCluster(String(a.key), this.me.name);
         this.focus = inc.id;
         this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'top' });
@@ -678,7 +671,8 @@ const INFO_TOOLS = [
   fn('shift_summary', 'Итоги смены дежурного за 12 часов: что взял, передал, решено, что открыто и горит, что ждёт пункт — для пересменки'),
   fn('suggest_assignee', 'Кому дать инцидент: команды по справочнику и кто из дежурных подходит вести', ID, ['id']),
 ];
-const CONTROL_TOOLS = [
+// Экран: вкладки, карточки, настройки — только когда Джарвис «управляет экраном».
+const SCREEN_TOOLS = [
   fn('switch_tab', 'Открыть вкладку на экране дежурного', { tab: { type: 'string', enum: Object.keys(TAB_NAMES) } }, ['tab']),
   fn('open_incident', 'Открыть инцидент на экране (карточка по шагам)', ID, ['id']),
   fn('shift_report', 'Собрать отчёт смены в PDF для руководства (итоги, графики, инциденты, разборы) и скачать его'),
@@ -686,6 +680,9 @@ const CONTROL_TOOLS = [
   fn('set_theme', 'Сменить тему экрана', { theme: { type: 'string', enum: Object.keys(THEMES) } }, ['theme']),
   fn('replay', 'Запустить (on=true) или остановить перемотку карты жалоб за последний час', { on: { type: 'boolean' } }),
   fn('open_team', 'Найти команду в справочнике и показать её', { team: { type: 'string' } }, ['team']),
+];
+// Действия с инцидентами — по прямой просьбе дежурного голосом или текстом, в любом режиме.
+const ACTION_TOOLS = [
   fn('take_incident', 'Взять инцидент на себя (дежурный будет его вести)', ID, ['id']),
   fn('assign_coordinator', 'Поручить вести инцидент другому дежурному пункта (по фамилии)', { ...ID, person: { type: 'string', description: 'фамилия или имя дежурного' } }, ['id', 'person']),
   fn('route_incident', 'Передать инцидент команде. Без team_id — первой команде из совета ИИ', { ...ID, team_id: { type: 'string' } }, ['id']),
@@ -736,7 +733,7 @@ async function llm(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefi
     ...q.history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }) as Msg),
     { role: 'user', content: q.text.slice(0, 500) },
   ];
-  const tools = [...INFO_TOOLS, ...(q.mode === 'control' ? CONTROL_TOOLS : []), ...(dashOk ? [DASH_TOOL, DESIGN_TOOL, BLOCK_TOOL] : [])];
+  const tools = [...INFO_TOOLS, ...ACTION_TOOLS, ...(q.mode === 'control' ? SCREEN_TOOLS : []), ...(dashOk ? [DASH_TOOL, DESIGN_TOOL, BLOCK_TOOL] : [])];
   let nudged = false;
   emit({ type: 'step', id: 'think', text: 'Думаю над ответом', state: 'run' });
   for (let round = 0; round < 6; round++) {

@@ -13,7 +13,7 @@ import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, wal
 
 type Phase = 'idle' | 'listen' | 'think' | 'speak';
 type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean; done?: string[]; event?: boolean };
-type Step = { id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string };
+export type Step = { id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string };
 type Action =
   | { type: 'open'; id: string }
   | { type: 'tab'; tab: string }
@@ -93,6 +93,8 @@ let analyser: AnalyserNode | null = null;
 let onPhase: (p: Phase) => void = () => undefined;
 let onVoiceNote: (s: string) => void = () => undefined;
 let speaking = 0;
+let speakingText = ''; // что говорит прямо сейчас
+let talking = false; // говорит прямо сейчас
 
 /** Браузер даёт звук только после действия человека — «будим» звук при первом клике или клавише. */
 export function unlockJarvisAudio() {
@@ -115,6 +117,7 @@ if (typeof window !== 'undefined') {
 
 export function stopVoice() {
   speaking++;
+  talking = false;
   audio?.pause();
   audio = null;
   analyser = null;
@@ -145,12 +148,21 @@ export async function say(text: string, opt: { voice?: string; asJarvis?: boolea
   if (!t) return;
   const asJarvis = opt.asJarvis !== false;
   const phase = (p: Phase) => asJarvis && onPhase(p);
+  speakingText = t;
+  talking = true;
+  try {
+    await sayNow(t, id, opt, asJarvis, phase);
+  } finally {
+    if (id === speaking) talking = false;
+  }
+}
+async function sayNow(t: string, id: number, opt: { voice?: string; asJarvis?: boolean }, asJarvis: boolean, phase: (p: Phase) => void) {
   window.dispatchEvent(new Event('radar:siren-stop')); // сирена не перекрикивает Джарвиса
   phase('speak');
   try {
     const st = await jarvisStatus();
     if (st?.tts) {
-      const r = await fetch('/api/jarvis/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t, voice: opt.voice ?? jarvisPrefs.voice }) });
+      const r = await fetch('/api/jarvis/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t, voice: opt.voice ?? jarvisPrefs.voice }), signal: AbortSignal.timeout(15_000) });
       if (id !== speaking) return;
       if (r.status === 200) {
         const url = URL.createObjectURL(await r.blob());
@@ -194,7 +206,7 @@ export async function say(text: string, opt: { voice?: string; asJarvis?: boolea
 }
 
 // Мост к окну Джарвиса: объявления о критических попадают в разговор и становятся его темой.
-let bridge: { announce: (text: string, id: string) => void; ask: (text: string, quiet?: boolean) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
+let bridge: { announce: (text: string, id: string) => Promise<void>; ask: (text: string, quiet?: boolean) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
 /** Джарвис говорит готовый текст об инциденте (строка в разговоре, тема — этот инцидент) и ждёт, пока договорит. */
 export const jarvisSpeak = (text: string, id: string) => bridge?.speak(text, id) ?? say(text);
 
@@ -203,29 +215,105 @@ export const jarvisAsk = (text: string, opts: { quiet?: boolean } = {}) => bridg
 /** Джарвис на этом экране есть (шар смонтирован) — можно задавать вопросы. */
 export const jarvisReady = () => !!bridge;
 
+// ─── объявления: всё, что происходит, говорит Джарвис — по очереди, без повторов, не перебивая ───
+const annQueue: { text: string; id: string; key: string }[] = [];
+const annRecent = new Map<string, number>();
+let annRunning = false;
+const canAnnounce = () => getState().me?.role === 'coordinator' && jarvisPrefs.speak && jarvisPrefs.announce && !jarvisPause.sleep;
+/** «Сэр, …» — обращение выбранного персонажа (у Ники — без обращения). */
+function withAddress(text: string) {
+  const t = text.replace(/^(Внимание[.!]\s*)?(Сэр,\s*)?/i, '').trim();
+  const addr = personaById(jarvisPrefs.persona).address;
+  return addr ? `${addr[0].toUpperCase()}${addr.slice(1)}, ${t[0].toLowerCase()}${t.slice(1)}` : `${t[0].toUpperCase()}${t.slice(1)}`;
+}
+/** Поставить объявление в очередь. key — что это за событие: одно и то же не повторяем 45 секунд. */
+function enqueueAnnounce(text: string, id: string, key = `inc:${id}`) {
+  if (!canAnnounce()) return;
+  const now = Date.now();
+  if ((annRecent.get(key) ?? 0) > now - 45_000 || annQueue.some((x) => x.key === key)) return;
+  annRecent.set(key, now);
+  annQueue.push({ text: withAddress(text), id, key });
+  // много сразу — первые два целиком, остальное одной фразой
+  if (annQueue.length > 3) {
+    const extra = annQueue.splice(2);
+    annQueue.push({ text: withAddress(`ещё ${extra.length} ${extra.length < 5 ? 'события' : 'событий'} — они на стене. Что будем делать?`), id: extra[0].id, key: `many:${now}` });
+  }
+  void runAnnounce();
+}
+async function runAnnounce() {
+  if (annRunning) return;
+  annRunning = true;
+  try {
+    while (annQueue.length) {
+      const a = annQueue.shift()!;
+      if (!canAnnounce()) continue;
+      if (bridge) await bridge.announce(a.text, a.id);
+      else await say(a.text);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } finally {
+    annRunning = false;
+  }
+}
+// Объявления из других частей (рабочее место): window.dispatchEvent(new CustomEvent('radar:announce', { detail: { text, id, key } })).
+window.addEventListener('radar:announce', (e) => {
+  const d = (e as CustomEvent<{ text: string; id: string; key?: string }>).detail;
+  if (d?.text && d.id) enqueueAnnounce(d.text, d.id, d.key);
+});
+
 /** Объявить критический инцидент голосом: что случилось, где и что советует ИИ. */
-export function announceIncident(id: string, fallback: string) {
-  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce || jarvisPause.sleep) return;
-  // Даём сирене прозвучать первой.
-  setTimeout(async () => {
+export function announceIncident(id: string, fallback: string, key = `crit:${id}`) {
+  if (!canAnnounce()) return;
+  void (async () => {
     let text = fallback;
     try {
-      const r = await fetch(`/api/jarvis/brief/${encodeURIComponent(id)}`);
+      const r = await fetch(`/api/jarvis/brief/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(8000) });
       if (r.ok) text = ((await r.json()) as { text: string }).text;
     } catch {
       /* по шаблону с клиента */
     }
-    if (bridge) bridge.announce(text, id);
-    else void say(text);
-  }, 1800);
+    enqueueAnnounce(text, id, key);
+  })();
 }
 
-/** Сказать готовый текст об инциденте (например, прогноз) — если голос и объявления включены. */
-export function announceText(text: string, id: string) {
-  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce || jarvisPause.sleep) return;
-  if (bridge) bridge.announce(text, id);
-  else void say(text);
+/** Сказать готовый текст об инциденте (событие на стене, прогноз) — если голос и объявления включены. */
+export function announceText(text: string, id: string, key?: string) {
+  enqueueAnnounce(text, id, key);
 }
+
+// ─── работа Джарвиса — для ИИ-блока на дашборде ────────────────────────────
+/** Что Джарвис делает сейчас: вопрос, шаги, о каком инциденте речь, ответ. ИИ-блок стены показывает это у себя. */
+export interface JarvisWork {
+  q: string;
+  steps: Step[];
+  focusId: string | null;
+  reply: string;
+  done: string[];
+  busy: boolean;
+  at: number;
+}
+export const jarvisWork: JarvisWork = { q: '', steps: [], focusId: null, reply: '', done: [], busy: false, at: 0 };
+const workSubs = new Set<() => void>();
+function setWork(p: Partial<JarvisWork>) {
+  Object.assign(jarvisWork, p, { at: Date.now() });
+  workSubs.forEach((f) => f());
+}
+export function useJarvisWork() {
+  const [, set] = useState(0);
+  useEffect(() => {
+    const f = () => set((x) => x + 1);
+    workSubs.add(f);
+    return () => void workSubs.delete(f);
+  }, []);
+  return jarvisWork;
+}
+/** Джарвис работает или только что закончил — ИИ-блок показывает его работу. */
+export const jarvisBusyRecently = (now = Date.now()) => jarvisWork.busy || (jarvisWork.at > 0 && now - jarvisWork.at < 25_000);
+/** Дежурный на дашборде (не в рабочем месте). */
+const onDashboard = () => !isWorkOpen() && !new URLSearchParams(location.search).has('wall');
+/** На стене есть ИИ-блок (сам или в сменяемой панели) — работа Джарвиса показывается в нём. */
+const aiBlockOnWall = () => getDash().items.some((i) => i.block === 'assistant' || i.block === 'rotate');
+const workInBlock = () => onDashboard() && aiBlockOnWall();
 
 // ─── пауза ─────────────────────────────────────────────────────────────────
 /**
@@ -463,14 +551,17 @@ function runActions(actions: Action[]) {
     switch (a.type) {
       case 'open':
         if (getState().incidents.has(a.id)) {
-          openWork(); // карточка — в рабочем месте
-          openIncident(a.id);
-          revealRow();
+          setWork({ focusId: a.id });
+          // На дашборде экран не перекидываем: инцидент показывается в ИИ-блоке (кнопка «В рабочем месте» — там же).
+          if (!onDashboard()) {
+            openIncident(a.id);
+            revealRow();
+          }
         }
         window.dispatchEvent(new CustomEvent('radar:jarvis-open', { detail: a.id }));
         break;
       case 'show':
-        reveal(a.what);
+        if (!onDashboard()) reveal(a.what);
         break;
       case 'report':
         void import('../lib/shiftReport').then((m) => m.downloadShiftReport());
@@ -557,6 +648,13 @@ export function Jarvis() {
     };
   }, []);
 
+  /** Окно разговора открываем сами, только если на стене нет ИИ-блока: иначе всё видно в нём. */
+  const openPanel = () => !workInBlock() && setOpen(true);
+  // шаги — и в ИИ-блок
+  useEffect(() => {
+    if (steps.length) setWork({ steps });
+  }, [steps]);
+
   /** Окно продолжения: несколько секунд после ответа Джарвис слушает без слова «Джарвис». */
   function follow(ms = FOLLOW_MS) {
     if (!jarvisPrefs.control) return;
@@ -578,14 +676,21 @@ export function Jarvis() {
   // Объявления о критических: строка в разговоре, тема разговора — этот инцидент.
   useEffect(() => {
     bridge = {
-      announce: (t, id) => {
+      announce: async (t, id) => {
+        // Не перебиваем текущий ответ: ждём, пока договорит и додумает (не дольше 30 секунд).
+        for (let k = 0; k < 100 && (talking || busy.current); k++) await new Promise((r) => setTimeout(r, 300));
         focus.current = id;
+        setWork({ focusId: id, q: '', steps: [], reply: t, done: [], busy: false });
         setLines((l) => [...l, { role: 'assistant', content: t, event: true }]);
-        void say(t).then(() => follow());
+        await say(t);
+        speakEnd.current = Date.now();
+        // Спросил «что будем делать?» — ждём ответа: слушает всегда — окно без слова «Джарвис», иначе — слушаем один раз сами.
+        if (jarvisPrefs.control) follow(15_000);
+        else if (canListen && !jarvisPause.mute && !jarvisPause.sleep) listenOnceRef.current();
       },
       // quiet — спрашивают с видеостены: ответ виден в ИИ-помощнике, окно разговора не закрывает стену.
       ask: async (t, quiet) => {
-        if (!quiet) setOpen(true);
+        if (!quiet) openPanel();
         return askRef.current(t);
       },
       speak: async (t, id) => {
@@ -655,6 +760,7 @@ export function Jarvis() {
     const history = linesRef.current.slice(-8).map(({ role, content, done }) => ({ role, content: done?.length ? `${content} (Сделано: ${done.join('; ')})` : content }));
     setLines((l) => [...l, { role: 'user', content: question }]);
     setPhase('think');
+    setWork({ q: question, steps: [], reply: '', done: [], busy: true, focusId: focus.current });
     try {
       const s = getState();
       const live = jarvisPrefs.work;
@@ -666,6 +772,7 @@ export function Jarvis() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history, dash: dashSummary(), dashControl: getDash().jarvisEdit, persona: jarvisPrefs.persona, stream: live }),
+        signal: AbortSignal.timeout(60_000), // не «зависает» навсегда: иначе он больше не слушает
       });
       type Reply = { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
       let data: Reply;
@@ -685,6 +792,7 @@ export function Jarvis() {
         runActions(data.actions ?? []);
       }
       if (data.focus) focus.current = data.focus;
+      setWork({ busy: false, reply: data.reply, done: data.done ?? [], focusId: data.focus ?? jarvisWork.focusId ?? focus.current });
       setLines((l) => [...l, { role: 'assistant', content: data.reply, llm: data.llm, done: data.done }]);
       // Джарвис показывает изменение в карточке — сворачиваем окно, чтобы оно его не закрывало
       // (ответ виден подписью у шара; окно — по клику на шар).
@@ -697,7 +805,9 @@ export function Jarvis() {
       follow();
       return data.reply;
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError') ? 'не дождался ответа — повторите' : e instanceof Error ? e.message : String(e);
+      setErr(msg);
+      setWork({ busy: false, reply: `Не получилось: ${msg}` });
       setPhase('idle');
       return '';
     } finally {
@@ -717,13 +827,13 @@ export function Jarvis() {
   // Разовое прослушивание (когда Джарвис не управляет экраном): нажали — сказали — ответ.
   function listenOnce() {
     if (!RecCtor) {
-      setOpen(true);
+      openPanel();
       setErr('Браузер не умеет распознавать речь — напишите вопрос (голос работает в Chrome и Edge).');
       return;
     }
     if (phase === 'listen') return rec.current?.stop();
     stopVoice();
-    setOpen(true);
+    openPanel();
     setErr('');
     setHeard('');
     const r = new RecCtor();
@@ -763,7 +873,7 @@ export function Jarvis() {
   }
   function resume() {
     setPause({ sleep: false });
-    setOpen(true);
+    openPanel();
     const t = 'Продолжаем. Слушаю.';
     setLines((l) => [...l, { role: 'assistant', content: t }]);
     if (jarvisPrefs.speak) void say(t).then(() => ((speakEnd.current = Date.now()), follow()));
@@ -793,13 +903,17 @@ export function Jarvis() {
     return () => window.removeEventListener('keydown', k);
   }); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const listenOnceRef = useRef(listenOnce);
+  listenOnceRef.current = listenOnce;
+
   // Режим «управляет экраном»: слушаем всегда, пока Джарвис не думает и не говорит.
   // Фраза со словом «Джарвис» — команда; после ответа несколько секунд можно продолжать без него.
   function onHeard(t: string, final: boolean) {
     const low = lowRu(t);
     // Говорит — слышит только «стоп», «хватит»: можно перебить голосом.
     if (phase === 'speak') {
-      if (STOP_RE.test(low)) {
+      const m = STOP_RE.exec(low);
+      if (m && low.split(/\s+/).length <= 3 && !lowRu(speakingText).includes(m[2])) {
         stopVoice();
         speakEnd.current = Date.now();
         setPhase('idle');
@@ -824,7 +938,7 @@ export function Jarvis() {
         followUntil.current = Math.max(followUntil.current, now + 4000); // человек говорит — окно не закрываем
         setAwaiting(true);
       } else if (WAKE.test(t)) {
-        setOpen(true);
+        openPanel();
         setHeard(afterWake(t));
         follow(6000);
       }
@@ -834,7 +948,7 @@ export function Jarvis() {
     if (live && said.length >= 2) return void askRef.current(said);
     if (WAKE.test(said)) {
       const rest = afterWake(said);
-      setOpen(true);
+      openPanel();
       if (rest.length > 2) return void askRef.current(rest);
       setHeard('');
       return follow(); // «Джарвис» — и пауза: ждём команду
@@ -924,7 +1038,8 @@ export function Jarvis() {
   const last = [...lines].reverse().find((l) => l.role === 'assistant');
   const suggest = control ? SUGGEST_CONTROL : SUGGEST_CHAT;
   const persona = personaById(prefs.persona);
-  const workVisible = prefs.work && steps.length > 0 && (phase === 'think' || Date.now() - stepsAt < 7000);
+  // На дашборде с ИИ-блоком «за работой» показывается в блоке, а не всплывающим окном у шара.
+  const workVisible = prefs.work && steps.length > 0 && (phase === 'think' || Date.now() - stepsAt < 7000) && !workInBlock();
 
   return (
     <div className={`jv jv-${phase} ${pause.sleep ? 'jv-sleep' : ''} ${pause.mute ? 'jv-mute' : ''} ${awaiting && (hearing || !control) && !pause.sleep ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>

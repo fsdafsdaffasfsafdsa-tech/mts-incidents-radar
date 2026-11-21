@@ -22,6 +22,7 @@ import type {
 } from '../shared/types';
 import { configureSound, play, unlockAudio, type Cue, type SoundPack } from './lib/sound';
 import { RECUR_MIN } from '../shared/dash';
+import { voiceLine } from '../shared/attention';
 import { themeById } from './lib/themes';
 import { DEFAULT_HOTKEYS, type HotAction } from './lib/hotkeys';
 
@@ -139,7 +140,7 @@ let state: State = {
   hotkeysOn: readPref('radar.hotkeysOn', true),
   alarmOn: readPref('radar.alarmOn', true),
   toasts: [],
-  sound: readPref('radar.sound', true),
+  sound: readPref('radar.sound2', false), // звуковые эффекты по умолчанию выключены — о событиях говорит Джарвис
   theme: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).base,
   skin: themeById(readPref('radar.skin', readPref('radar.theme', 'light'))).id,
   soundPack: readPref('radar.soundPackV2', false) ? readPref<SoundPack>('radar.soundPack', 'ring') : 'ring',
@@ -347,6 +348,9 @@ function cue(c: Cue) {
   if (state.sound) play(c);
 }
 
+/** Сказать голосом Джарвиса (очередь у Джарвиса: по порядку, без повторов по ключу). */
+const announce = (text: string, id: string, key: string) => window.dispatchEvent(new CustomEvent('radar:announce', { detail: { text, id, key } }));
+
 function onIncident(prev: Incident | undefined, inc: Incident) {
   const me = state.me;
   if (!me) return;
@@ -365,16 +369,19 @@ function onIncident(prev: Incident | undefined, inc: Incident) {
     if (prev && inc.status === 'resolved' && (inc.recur?.count ?? 0) >= RECUR_MIN && (prev.recur?.count ?? 0) < RECUR_MIN) {
       toast({ kind: 'p1', title: 'Решили, а жалобы снова идут', body: `${inc.title} · после решения ${inc.recur!.count} жалоб — вернуть в работу`, incidentId: inc.id, ttl: 20000 });
       cue('p1');
+      announce(voiceLine('recur', inc, Date.now(), teamName), inc.id, `recur:${inc.id}`);
     } else if (!prev && inc.status === 'coordinators') {
       const p1 = inc.priority === 'P1';
       toast({ kind: p1 ? 'p1' : 'coord', title: inc.origin === 'complaints' ? 'ИИ собрал жалобы в инцидент' : 'Новый инцидент на пункте', body: inc.title, incidentId: inc.id, ttl: p1 ? 15000 : 7000 });
       cue(p1 ? 'p1' : 'coord');
+      if (!p1) announce(voiceLine('coord', inc, Date.now(), teamName), inc.id, `coord:${inc.id}`); // критический объявляет тревога
     } else if (prev && !prev.p1Proposal && inc.p1Proposal) {
       toast({ kind: 'p1', title: 'ИИ предлагает «Наивысший»', body: inc.title, incidentId: inc.id, ttl: 15000 });
       cue('p1');
     } else if (prev && me.role === 'coordinator' && prev.coordinatorId !== me.personId && inc.coordinatorId === me.personId) {
       toast({ kind: 'coord', title: inc.history.some((h) => h.kind === 'ai' && h.at === inc.updatedAt) ? 'ИИ распределил вам инцидент' : 'Вам передали инцидент', body: inc.title, incidentId: inc.id, ttl: 9000 });
       cue('coord');
+      announce(`вам передали «${inc.title}». ${inc.ai?.teamId ? `ИИ советует «${teamName(inc.ai.teamId)}». Передать?` : 'Что будем делать?'}`, inc.id, `mine:${inc.id}`);
     } else if (prev && prev.priority !== inc.priority && inc.priority < prev.priority) {
       toast({ kind: 'warn', title: `Уровень повышен: ${inc.priorityText}`, body: inc.title, incidentId: inc.id, ttl: 7000 });
     }
@@ -497,7 +504,7 @@ export const demoAuto = (on: boolean) => quiet(post('/api/demo/auto', { on }));
 export function toggleSound() {
   unlockAudio();
   const sound = !state.sound;
-  writePref('radar.sound', sound);
+  writePref('radar.sound2', sound);
   setState({ sound });
   if (sound) play('coord');
 }
@@ -517,7 +524,7 @@ export function setSoundPack(pack: SoundPack) {
   writePref('radar.soundPack', pack);
   configureSound({ pack });
   setState({ soundPack: pack, sound: true });
-  writePref('radar.sound', true);
+  writePref('radar.sound2', true);
   play('coord', pack);
 }
 export function setVolume(volume: number) {

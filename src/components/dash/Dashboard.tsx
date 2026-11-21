@@ -1,13 +1,13 @@
 // Дашборд координатора — видеостена по кейсу. Видно с расстояния; блоки, стиль и поведение настраиваются
 // в «Настройках дашборда» или голосом через Джарвиса. Прежняя стена — раскладка «Прежняя стена».
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, BellRing, Bot, CheckCircle2, Expand, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Star, Trash2, X } from 'lucide-react';
+import { Activity, AlarmClockOff, ArrowLeftRight, ArrowUp, BellRing, Bot, Briefcase as WorkIcon, CheckCircle2, ExternalLink as ExternalLinkIcon, Hand, Inbox, List, Loader2, Pin, RotateCcw, Search, Timer, TrendingUp, Wrench, Zap, type LucideIcon, Expand, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Star, Trash2, X } from 'lucide-react';
 import type { FeedEvent, Incident } from '../../../shared/types';
 import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, fmtShort, groupsOf, riskOf, transferCount, transfers, urgencyScore, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
 import type { DashStyle } from '../../../shared/dashStyles';
 import { personaById } from '../../../shared/personas';
 import { itsmLink, markSeen, openIncident, reopenIncident, setTab, takeAtPoint, teamName, useStore } from '../../store';
-import { complaintsWord, heat } from '../../../shared/attention';
+import { heatFor } from '../../../shared/attention';
 import { fmtClock } from '../../lib/format';
 import { useNow } from '../../lib/hooks';
 import { applyDashOp, currentStyle, dashEvent, getDash, openWallWindow, openWork, setDash, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
@@ -15,16 +15,18 @@ import { GRID_COLS, GRID_ROWS, fit, free, type GridItem, type Rect } from '../..
 import { BlockGallery, CharacterBlock, ClockBlock, CountersBlock, CustomBlock, FavsBlock, ForgotBlock, GroupBlock, NoteBlock, RiskBlock, RouteBlock, TeamsBlock } from './blocks2';
 import { openFav } from '../FavDialog';
 import { BLOCK_OPTS } from './blockOpts';
-import { Jarvis, jarvisAsk, jarvisPrefs, jarvisReady } from '../Jarvis';
+import { Jarvis, jarvisAsk, jarvisBusyRecently, jarvisPrefs, jarvisReady, useJarvisWork } from '../Jarvis';
 import { RFMap } from '../RFMap';
 import { Spark } from '../kit';
 import { WallPage } from '../WallPage';
 import { DashSettings } from './DashSettings';
 import { AttentionStrip, UrgentOverlay, useAttention } from './attention';
+import { DeadlinesBlock, NowBlock } from './blocks3';
 import './dash.css';
 import './dash-grid.css';
 import './dash-fav.css';
 import './dash-attention.css';
+import './dash-visual.css';
 
 const MIN = 60_000;
 export type Opts = Record<string, boolean | number | string> | undefined;
@@ -353,6 +355,10 @@ function Block({ id, ctx, skip, o, it }: { id: BlockId; ctx: BlockCtx; skip: Set
       return it?.custom ? it.custom.kind === 'character' ? <CharacterBlock ctx={ctx} o={o} spec={it.custom} /> : <CustomBlock ctx={ctx} spec={it.custom} /> : null;
     case 'action':
       return <ActionBlock ctx={ctx} o={o} />;
+    case 'now':
+      return <NowBlock ctx={ctx} />;
+    case 'deadlines':
+      return <DeadlinesBlock ctx={ctx} />;
     case 'work':
       return <WorkBlock ctx={ctx} o={o} />;
     case 'groups':
@@ -449,44 +455,92 @@ export function GroupTags({ i, skip }: { i: Incident; skip?: DashGroup }) {
   );
 }
 
-/** Карточка инцидента: продукт, когда возник, кто решает, статус, срок — и почему требует внимания. */
-function IncCard({ i, att, now, big, onClick, off, detail = false, above = false }: { i: Incident; att?: Attention; now: number; big?: boolean; onClick: () => void; off?: boolean; detail?: boolean; above?: boolean }) {
-  const t = transferCount(i);
-  const left = i.slaDeadline - now;
-  const recur = i.status === 'resolved' && i.recur ? i.recur : null;
-  const quick = recur ? { label: 'Вернуть в работу', run: () => void reopenIncident(i.id) } : i.status === 'coordinators' && !i.coordinatorId ? { label: 'Беру', run: () => void takeAtPoint(i.id) } : null;
+/** Почему требует внимания — значком и одним словом, вместо строки текста. */
+const WHY: [RegExp, LucideIcon, string | null][] = [
+  [/^Передать/, Inbox, 'распределить'],
+  [/^Не при|^Не берут/, Hand, 'не берут'],
+  [/^ИИ: поднять/, Zap, 'ИИ: наивысший'],
+  [/^Срок близко/, Timer, 'срок'],
+  [/^Просрочен/, AlarmClockOff, 'просрочен'],
+  [/передач/, ArrowLeftRight, null],
+  [/^Риск/, TrendingUp, null],
+  [/^Снова жалобы/, RotateCcw, null],
+  [/^В работе/, Wrench, 'в работе'],
+  [/^Разбор/, Search, 'разбор'],
+];
+export function Why({ att }: { att?: Attention }) {
+  if (!att) return null;
+  const hit = WHY.find(([re]) => re.test(att.reason));
+  if (!hit) return null;
+  const [, Icon, word] = hit;
   return (
-    <button data-heat={heat(att?.score ?? urgencyScore(i, now))} className={`dc p-${i.priority} ${big ? 'big' : ''} ${recur ? 'recur' : ''} ${att ? `t-${att.tone}` : ''} ${off ? 'off' : ''}`} onClick={onClick} title={`${i.title}\n${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}\n${who(i)}`} aria-hidden={off || undefined} tabIndex={off ? -1 : undefined}>
+    <span className={`dc-why t-${att.tone}`} title={att.reason}>
+      <Icon size={13} /> {word ?? att.reason.toLowerCase()}
+    </span>
+  );
+}
+/** Кто ведёт — коротко: команда (и исполнитель) или дежурный пункта. */
+export const whoShort = (i: Incident) =>
+  i.status === 'coordinators' ? (i.coordinatorName ? `ведёт ${i.coordinatorName.split(' ')[0]}` : 'никто не ведёт') : `${teamName(i.teamId)}${i.assigneeName ? ` · ${i.assigneeName.split(' ')[0]}` : ''}`;
+/** Срок кольцом: заполняется по мере того, как время уходит; цвет — сколько осталось. */
+export function Ring({ i, now, big }: { i: Incident; now: number; big?: boolean }) {
+  const left = i.slaDeadline - now;
+  const f = frac(i, now);
+  const r = 16;
+  const c = 2 * Math.PI * r;
+  const tone = left <= 0 ? 'over' : left < 30 * MIN ? 'hot' : left < 2 * 60 * MIN ? 'warm' : 'ok';
+  const m = Math.round(Math.abs(left) / MIN);
+  const txt = m < 60 ? `${m}м` : m < 600 ? `${Math.floor(m / 60)}ч${String(m % 60).padStart(2, '0')}` : m < 2880 ? `${Math.floor(m / 60)}ч` : `${Math.floor(m / 1440)}д`;
+  return (
+    <span className={`dring t-${tone} ${big ? 'big' : ''}`} title={left > 0 ? `до срока ${fmtShort(left)}` : `просрочен на ${fmtShort(-left)}`}>
+      <svg className="dring-c" viewBox="0 0 40 40" aria-hidden>
+        <circle className="bg" cx="20" cy="20" r={r} />
+        <circle className="fg" cx="20" cy="20" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - (left <= 0 ? 1 : f))} />
+      </svg>
+      <b className="num">{left <= 0 ? `−${txt}` : txt}</b>
+    </span>
+  );
+}
+
+/**
+ * Карточка инцидента — с минимумом текста: цвет (уровень и срочность), название, значок «почему», кто ведёт, кольцо срока.
+ * Продукт, время, статус — во всплывающей подсказке и в ITSM; у критических — строкой.
+ */
+function IncCard({ i, att, now, big, onClick, off, detail = false, above = false }: { i: Incident; att?: Attention; now: number; big?: boolean; onClick: () => void; off?: boolean; detail?: boolean; above?: boolean }) {
+  const recur = i.status === 'resolved' && i.recur ? i.recur : null;
+  const quick = recur ? { label: 'Вернуть', run: () => void reopenIncident(i.id) } : i.status === 'coordinators' && !i.coordinatorId ? { label: 'Беру', run: () => void takeAtPoint(i.id) } : null;
+  const aiTeam = detail && i.status === 'coordinators' && i.ai?.teamId ? teamName(i.ai.teamId) : null;
+  return (
+    <button
+      data-heat={heatFor(i, att?.score ?? urgencyScore(i, now))}
+      className={`dc p-${i.priority} ${big ? 'big' : ''} ${recur ? 'recur' : ''} ${off ? 'off' : ''}`}
+      onClick={onClick}
+      title={`${i.title}\n${PRIO[i.priority]} · ${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}\n${who(i)}`}
+      aria-hidden={off || undefined}
+      tabIndex={off ? -1 : undefined}
+    >
       <span className="dc-bar" />
       <span className="dc-main">
-        <span className="dc-top">
-          <span className={`dc-prio p-${i.priority}`}>{PRIO[i.priority]}</span>
-          {above && <span className="dc-above">Важнее критического</span>}
-          {att && <span className={`dc-why t-${att.tone}`}>{att.reason}</span>}
-          <GroupTags i={i} />
-          {t >= 2 && (
-            <span className="dc-tr warn" title="Передач между командами">
-              <ArrowLeftRight size={12} /> {t}
+        <b className="dc-title">
+          {big && <span className="dc-prio">{recur ? 'Снова жалобы' : PRIO[i.priority]}</span>}
+          {i.title}
+        </b>
+        <span className="dc-meta2">
+          <Why att={att} />
+          {above && (
+            <span className="dc-above" title="Срочнее самого срочного критического">
+              <ArrowUp size={12} /> важнее
             </span>
           )}
-        </span>
-        <b className="dc-title">{i.title}</b>
-        <span className="dc-line">
-          {recur ? (
-            <>
-              <b className="dc-who">решала {recur.team ?? 'команда'}</b> · решён {fmtShort(now - (i.resolvedAt ?? now))} назад · {i.productName || i.service}
-            </>
+          {aiTeam ? (
+            <span className="dc-ai" title="Совет ИИ — кому передать">
+              <Sparkles size={12} /> {aiTeam}
+            </span>
           ) : (
-            <>
-              <b className="dc-who">{who(i)}</b> · {i.productName || i.service} · {fmtClock(i.createdAt)} · {i.stateText}
-            </>
+            <span className="dc-who2">{recur ? `решала ${recur.team ?? 'команда'}` : whoShort(i)}</span>
           )}
+          {big && !recur && <span className="dc-sub">{i.productName || i.service} · {fmtClock(i.createdAt)}</span>}
         </span>
-        {detail && i.status === 'coordinators' && i.ai?.teamId && (
-          <span className="dc-ai">
-            <Sparkles size={12} /> ИИ: в «{teamName(i.ai.teamId)}»
-          </span>
-        )}
       </span>
       {quick && (
         <span
@@ -514,17 +568,12 @@ function IncCard({ i, att, now, big, onClick, off, detail = false, above = false
         <Star size={15} />
       </span>
       {recur ? (
-        <span className="dc-sla hot">
+        <span className="dring t-over" title="жалоб после решения">
+          <RotateCcw size={14} />
           <b className="num">{recur.count}</b>
-          <small>{complaintsWord(recur.count)} после решения</small>
         </span>
       ) : (
-        <span className={`dc-sla ${left < 30 * MIN ? 'hot' : ''}`}>
-          <b className="num">{left > 0 ? fmtShort(left) : `−${fmtShort(-left)}`}</b>
-          <span className="dc-sla-bar">
-            <i style={{ width: `${frac(i, now) * 100}%` }} />
-          </span>
-        </span>
+        <Ring i={i} now={now} big={big} />
       )}
     </button>
   );
@@ -546,7 +595,7 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const detail = ob(o, 'ai', false);
   const above = (x: { inc: Incident; att: Attention }) => snap.topCrit > 0 && x.inc.priority !== 'P1' && x.att.score > snap.topCrit;
   const card = (x: { inc: Incident; att: Attention }, extra: { route?: boolean; off?: boolean } = {}) => (
-    <IncCard key={x.inc.id} i={x.inc} att={x.att} now={now} big={x.inc.priority === 'P1' || x.inc.status === 'resolved'} detail={detail || !!extra.route} above={above(x)} off={extra.off} onClick={() => ctx.open(x.inc)} />
+    <IncCard key={x.inc.id} i={x.inc} att={x.att} now={now} big={x.inc.priority === 'P1' || x.inc.status === 'resolved'} detail={detail || !!extra.route || x.inc.status === 'coordinators'} above={above(x)} off={extra.off} onClick={() => ctx.open(x.inc)} />
   );
   return (
     <div className={`db db-action ${ob(o, 'compact', false) ? 'compact' : ''}`}>
@@ -565,9 +614,9 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
       <div className="db-pin">
         {toRoute.length > 0 && (
           <>
-            <div className="db-zone z-route">
+            <div className="db-zone z-route" title="На пункте: передать в команду">
+              <Inbox size={14} />
               <b>Распределить</b>
-              <span>на пункте — передать в команду</span>
               <i className="num">{toRoute.length}</i>
             </div>
             {toRoute.map((x) => card(x, { route: true }))}
@@ -575,9 +624,9 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
         )}
         {pinned.length > 0 && (
           <>
-            <div className="db-zone z-pin">
+            <div className="db-zone z-pin" title="Критические и высокие — не листаются">
+              <Pin size={14} />
               <b>Закреплено</b>
-              <span>критические и высокие — не листаются</span>
               <i className="num">{pinned.length}</i>
             </div>
             {pinned.map((x) => card(x))}
@@ -585,9 +634,9 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
         )}
       </div>
       {rest.length > 0 && (
-        <div className="db-zone z-rest">
+        <div className="db-zone z-rest" title="Листается">
+          <List size={14} />
           <b>Остальное</b>
-          <span>листается</span>
           <i className="num">{rest.length}</i>
         </div>
       )}
@@ -599,57 +648,50 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   );
 }
 
+/** В работе у команд: название, кто и сколько в работе — второй строкой; срок кольцом. Узкие колонки не режут названия. */
 function WorkBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now, d } = ctx;
   const p = useFitPager(snap.work.length, on(o, 'page', d.pageSec));
-  const c = { time: ob(o, 'cTime'), sla: ob(o, 'cSla'), tr: ob(o, 'cTr'), team: ob(o, 'cTeam') };
-  const tpl = ['minmax(0, 2.4fr)', c.time && '5.4em', c.sla && '7em', c.tr && '3em', c.team && 'minmax(0, 1.4fr)'].filter(Boolean).join(' ');
   return (
     <div className="db db-work">
-      <BlockHead title="В работе у команд" count={snap.work.length} />
-      <div className="dw-row dw-h" style={{ gridTemplateColumns: tpl }}>
-        <span>Инцидент</span>
-        {c.time && <span>В работе</span>}
-        {c.sla && <span>До срока</span>}
-        {c.tr && <span title="Передач между командами">⇄</span>}
-        {c.team && <span>Команда</span>}
-      </div>
+      <BlockHead title="В работе у команд" count={snap.work.length} icon={<Wrench size={17} />} />
       <div className="db-list" ref={p.box}>
         {snap.work.slice(p.start).map((i, n) => {
           const w = waitingTake(i, now);
           const since = i.startedAt ?? i.routedAt ?? i.createdAt;
           const t = transferCount(i);
-          const hops = transfers(i);
           return (
             <button
               key={i.id}
-              data-heat={heat(urgencyScore(i, now))}
-              className={`dw-row p-${i.priority} ${n >= p.fit ? 'off' : ''}`}
-              style={{ gridTemplateColumns: tpl }}
+              data-heat={heatFor(i, urgencyScore(i, now))}
+              className={`dw2 p-${i.priority} ${n >= p.fit ? 'off' : ''}`}
               onClick={() => ctx.open(i)}
               title={`${i.title}\n${i.productName || i.service} · ${i.stateText}\n${i.assigneeName ?? 'исполнитель не назначен'}`}
               aria-hidden={n >= p.fit || undefined}
               tabIndex={n >= p.fit ? -1 : undefined}
             >
-              <span className="dw-inc">
-                <span className={`dw-p p-${i.priority}`}>{i.priority}</span>
+              <span className="dc-bar" />
+              <span className="dw2-main">
                 <b>{i.title}</b>
+                <small>
+                  {w !== null ? (
+                    <span className={w > 10 * MIN ? 'warn' : ''}>
+                      <Hand size={11} /> не взяли {fmtShort(w)}
+                    </span>
+                  ) : (
+                    <span>
+                      <Wrench size={11} /> {fmtShort(now - since)}
+                    </span>
+                  )}
+                  {t >= 2 && (
+                    <span className="warn">
+                      <ArrowLeftRight size={11} /> {t}
+                    </span>
+                  )}
+                  <span className="dw2-team">{whoShort(i)}</span>
+                </small>
               </span>
-              {c.time && (
-                <span className={`dw-time num ${w !== null && w > 10 * MIN ? 'warn' : ''}`} title={w !== null ? 'команда ещё не взяла' : 'в работе'}>
-                  {fmtShort(w ?? now - since)}
-                </span>
-              )}
-              {c.sla && (
-                <span className={`dw-sla ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>
-                  <b className="num">{leftText(i, now)}</b>
-                  <span className="dc-sla-bar">
-                    <i style={{ width: `${frac(i, now) * 100}%` }} />
-                  </span>
-                </span>
-              )}
-              {c.tr && <span className={`num dw-tr ${t >= 2 ? 'warn' : ''}`}>{t}</span>}
-              {c.team && <b className="dw-team">{hops.at(-1)?.team ?? teamName(i.teamId)}</b>}
+              <Ring i={i} now={now} />
             </button>
           );
         })}
@@ -682,13 +724,11 @@ function GroupsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
                 </div>
               ))}
             {snap.byGroup[g.id].map((i) => (
-              <button key={i.id} data-heat={heat(urgencyScore(i, now))} className={`dg-row p-${i.priority}`} onClick={() => ctx.open(i)} title={`${i.productName || i.service} · ${i.stateText}`}>
+              <button key={i.id} data-heat={heatFor(i, urgencyScore(i, now))} className={`dg-row p-${i.priority}`} onClick={() => ctx.open(i)} title={`${i.productName || i.service} · ${i.stateText}`}>
                 <span className="dc-bar" />
                 <span>
                   <b>{i.title}</b>
-                  <small>
-                    {i.productName || i.service} · {fmtClock(i.createdAt)} · {who(i)} · {i.stateText}
-                  </small>
+                  <small>{whoShort(i)}</small>
                 </span>
                 <span className={`num dg-left ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>{leftText(i, now)}</span>
               </button>
@@ -734,6 +774,71 @@ let assistBusy = false;
 const assistSubs = new Set<() => void>();
 const assistEmit = () => assistSubs.forEach((f) => f());
 const HINTS = ['Покажи только критические', 'Поменяй местами левый и правый блоки', 'Покажи крупно самый срочный', 'Стиль «Центр управления»', 'Добавь карту', 'Раскладка «Четыре группы»', 'Сделай новогоднее оформление с золотом'];
+/** Работа Джарвиса внутри ИИ-блока: что спросили, что он делает по шагам, о каком инциденте речь и что ответил. */
+function JarvisAtWork({ work, ctx, name }: { work: ReturnType<typeof useJarvisWork>; ctx: BlockCtx; name: string }) {
+  const incidents = useStore((s) => s.incidents);
+  const i = work.focusId ? incidents.get(work.focusId) : undefined;
+  return (
+    <div className="da-work" aria-live="polite">
+      <div className="da-work-h">
+        <Activity size={14} /> {name} {work.busy ? 'за работой…' : work.q ? 'ответил' : 'сообщает'}
+      </div>
+      {work.q && <p className="da-work-q">«{work.q}»</p>}
+      {work.steps.length > 0 && (
+        <ul className="da-steps">
+          {work.steps.slice(-4).map((x) => (
+            <li key={x.id} className={x.state}>
+              {x.state === 'run' ? <Loader2 size={12} /> : x.state === 'done' ? <CheckCircle2 size={12} /> : <X size={12} />}
+              <span>{x.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {i && (
+        <div className={`da-focus p-${i.priority}`}>
+          <span className="dc-bar" />
+          <div>
+            <b>{i.title}</b>
+            <small>
+              {PRIO[i.priority]} · {who(i)} · {i.status === 'resolved' ? 'решён' : `срок ${leftText(i, ctx.now)}`}
+            </small>
+            {i.status === 'coordinators' && i.ai?.teamId && (
+              <small className="da-focus-ai">
+                <Sparkles size={11} /> ИИ: в «{teamName(i.ai.teamId)}» · {Math.round((i.ai.confidence ?? 0) * 100)}%
+              </small>
+            )}
+          </div>
+          <span className="da-focus-act">
+            <button onClick={() => ctx.open(i)} title="Открыть в ITSM">
+              <ExternalLinkIcon size={13} />
+            </button>
+            <button
+              onClick={() => {
+                openWork();
+                setTab(i.status === 'coordinators' ? 'inbox' : i.status === 'resolved' ? 'done' : 'teams');
+                openIncident(i.id);
+              }}
+              title="Открыть в рабочем месте"
+            >
+              <WorkIcon size={13} /> В рабочем месте
+            </button>
+          </span>
+        </div>
+      )}
+      {!work.busy && work.reply && <p className="da-work-a">{work.reply}</p>}
+      {!work.busy && work.done.length > 0 && (
+        <p className="da-work-done">
+          {work.done.map((d, k) => (
+            <span key={k}>
+              <CheckCircle2 size={12} /> {d}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now } = ctx;
   const brief = useBrief();
@@ -768,6 +873,8 @@ function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
     [snap, now],
   );
   const route = snap.byGroup.coord.filter((i) => i.ai?.teamId).slice(0, 3);
+  const work = useJarvisWork();
+  const working = jarvisBusyRecently(now);
   const send = async (q: string) => {
     if (!q.trim() || busy) return;
     setBusy(true);
@@ -779,8 +886,9 @@ function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   return (
     <div className="db db-ai">
       <BlockHead title={`${persona.name} · ИИ-помощник`} icon={<Bot size={18} />} right={<span className={`db-live ${ready && jarvisPrefs.control ? 'on' : ''}`}>{ready ? (jarvisPrefs.control ? 'слушает' : 'по кнопке') : 'выключен'}</span>} />
-      <div className="da-brief da-char" style={{ ['--pc' as string]: persona.color }}>
-        <img className={`da-fig ${busy ? 'busy' : ''}`} src={persona.cutout} alt={persona.name} draggable={false} onError={(e) => ((e.currentTarget.style.display = 'none'))} />
+      {working && <JarvisAtWork work={work} ctx={ctx} name={persona.name} />}
+      <div className={`da-brief da-char ${working ? 'mini' : ''}`} style={{ ['--pc' as string]: persona.color }}>
+        <img className={`da-fig ${busy || work.busy ? 'busy' : ''}`} src={persona.cutout} alt={persona.name} draggable={false} onError={(e) => ((e.currentTarget.style.display = 'none'))} />
         <div className="da-bubble">
           <small>
             <Sparkles size={12} /> Главное сейчас{brief?.llm ? ' · ИИ' : ''}
@@ -788,7 +896,7 @@ function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
           <p>{brief?.text ?? (snap.action[0] ? `Главное — «${snap.action[0].inc.title}»: ${snap.action[0].att.reason.toLowerCase()}.` : 'Срочного нет — всё под контролем.')}</p>
         </div>
       </div>
-      {ob(o, 'risks') && risks.length > 0 && (
+      {ob(o, 'risks', false) && risks.length > 0 && (
         <div className="da-sec">
           <small>Риск стать критическим</small>
           {risks.map(({ i, r }) => (
@@ -802,7 +910,7 @@ function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
           ))}
         </div>
       )}
-      {ob(o, 'route') && route.length > 0 && (
+      {ob(o, 'route', false) && route.length > 0 && (
         <div className="da-sec">
           <small>Кому передать (на координаторах)</small>
           {route.map((i) => (
@@ -818,12 +926,13 @@ function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
       )}
       {!ob(o, 'ask') ? null : ready ? (
         <div className="da-ask">
-          {log.map((x, k) => (
-            <div key={k} className="da-log">
-              <span className="q">{x.q}</span>
-              <span className="a">{x.a}</span>
-            </div>
-          ))}
+          {!working &&
+            log.map((x, k) => (
+              <div key={k} className="da-log">
+                <span className="q">{x.q}</span>
+                <span className="a">{x.a}</span>
+              </div>
+            ))}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -833,7 +942,7 @@ function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
             <input value={text} onChange={(e) => setText(e.target.value)} placeholder={busy ? 'Джарвис думает…' : 'Скажите «Джарвис, …» или напишите'} disabled={busy} />
           </form>
           <div className="da-hints">
-            {HINTS.map((h) => (
+            {HINTS.slice(0, 3).map((h) => (
               <button key={h} onClick={() => void send(h)} disabled={busy}>
                 {h}
               </button>
@@ -1009,7 +1118,8 @@ function RotateBlock({ ctx, skip, o }: { ctx: BlockCtx; skip: Set<BlockId>; o?: 
     const t = setInterval(() => setK((x) => x + 1), sec * 1000);
     return () => clearInterval(t);
   }, [sec, hold]);
-  const cur = list[k % list.length];
+  useJarvisWork();
+  const cur = jarvisBusyRecently(ctx.now) && list.includes('assistant') ? 'assistant' : list[k % list.length];
   return (
     <div
       className="db-rotate"

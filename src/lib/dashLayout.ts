@@ -25,6 +25,7 @@ export interface DashLayout {
   jarvisEdit: boolean; // Джарвис может перестраивать стену
   customStyles: DashStyle[]; // придуманные ChatGPT по описанию
   locked: boolean; // интерфейс закреплён: Джарвис и случайные нажатия ничего не меняют
+  ver?: number; // версия раскладки по умолчанию: при новой базовой прежние один раз переводятся на неё
 }
 
 const KEY = 'radar.dash.v1';
@@ -34,9 +35,12 @@ export const presetItems = (id: PresetId): GridItem[] => {
   if (p.grid) return p.grid.map((g, k) => ({ ...g, id: newId() + k, ...(g.opts ? { opts: { ...g.opts } } : {}) }));
   return columnsToItems(p.columns);
 };
+/** Новая базовая раскладка — один раз заменяет прежние у тех, кто её не закрепил. */
+const LAYOUT_VER = 3;
 export const DEFAULT_DASH: DashLayout = {
-  preset: 'case',
-  items: presetItems('case'),
+  ver: LAYOUT_VER,
+  preset: 'base',
+  items: presetItems('base'),
   counters: true,
   ticker: true,
   filter: null,
@@ -46,7 +50,7 @@ export const DEFAULT_DASH: DashLayout = {
   pageSec: 15,
   onlyFile: false,
   banners: true,
-  sound: true,
+  sound: false, // звуковые эффекты стены — по умолчанию выключены: о событиях говорит Джарвис
   jarvis: true,
   jarvisEdit: true,
   customStyles: [],
@@ -79,7 +83,16 @@ function clean(x: (Partial<DashLayout> & { columns?: DashColumn[] }) | null): Da
     })
     .slice(0, 24);
   d.items = normalize(items);
-  if (!d.items.length && d.preset !== 'legacy') d.items = presetItems('case');
+  if (!d.items.length && d.preset !== 'legacy') d.items = presetItems('base');
+  if ((d.ver ?? 0) < LAYOUT_VER) {
+    if ((d.ver ?? 0) < 2 && !d.locked) {
+      d.preset = 'base';
+      d.items = presetItems('base');
+      d.filter = null;
+    }
+    d.sound = false; // v3: звуковые эффекты выключены, о событиях говорит Джарвис (включить — в настройках)
+    d.ver = LAYOUT_VER;
+  }
   delete d.columns;
   d.customStyles = (Array.isArray(d.customStyles) ? d.customStyles : []).filter((s) => s && typeof s.id === 'string' && s.custom).slice(-12);
   if (!DASH_STYLE_IDS.includes(d.style) && !d.customStyles.some((s) => s.id === d.style)) d.style = DEFAULT_DASH.style;

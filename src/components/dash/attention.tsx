@@ -89,8 +89,9 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
       setAlerts((l) => [...l.filter((x) => !fresh.some((f) => f.inc.id === x.inc.id && f.kind === x.kind)), ...fresh].sort(byRank));
       const top = fresh[0];
       if (dRef.current.sound) chime(top.level === 'urgent' ? 'urgent' : top.kind === 'resolvedCrit' ? 'good' : 'soft');
-      // Срочное — помощник говорит и ждёт ответа: «беру», «верни в работу», «принял».
-      if (top.level === 'urgent' && !standalone) setTimeout(() => announceText(voiceLine(top.kind, top.inc, now), top.inc.id), 900);
+      // Всё, что «срочно» и «внимание», говорит помощник — с вопросом, что делаем; мелочи («инфо») — молча.
+      // На отдельном экране стены не говорим: голос — в окне дежурного.
+      if (!standalone) for (const a of fresh.slice(0, 3)) announceText(voiceLine(a.kind, a.inc, now, teamName), a.inc.id, `${a.kind}:${a.inc.id}`);
     },
     [standalone],
   );

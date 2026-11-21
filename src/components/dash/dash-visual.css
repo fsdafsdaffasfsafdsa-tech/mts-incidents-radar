@@ -1,0 +1,492 @@
+/* ═══ блоки с минимумом текста: значки, кольца сроков, точки на шкале ═══ */
+
+/* «почему» — значок и одно слово */
+.dash .dc-why {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.12em 0.55em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  font-weight: 700;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* ─── кольцо срока ─── */
+.dring {
+  --rc: var(--d-ok);
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 3em;
+  height: 3em;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+.dring .dring-c {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.dring circle {
+  fill: none;
+  stroke-width: 4;
+}
+.dring .bg {
+  stroke: var(--d-line);
+}
+.dring .fg {
+  stroke: var(--rc);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s ease;
+}
+.dring b {
+  position: relative;
+  font-size: 0.74em;
+  font-weight: 800;
+  color: var(--rc);
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.dring.t-warm {
+  --rc: var(--d-warn);
+}
+.dring.t-hot,
+.dring.t-over {
+  --rc: var(--d-crit);
+}
+.dring.t-over {
+  background: color-mix(in srgb, var(--d-crit) 16%, transparent);
+}
+.dring:not(:has(.dring-c)) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.05em;
+  color: var(--rc);
+}
+.dring.big {
+  width: 4.6em;
+  height: 4.6em;
+}
+.dring.big b {
+  font-size: 1.05em;
+}
+
+/* ─── карточка: одна строка под названием ─── */
+.dc .dc-title .dc-prio {
+  display: inline-block;
+  margin-right: 0.5em;
+  vertical-align: 0.15em;
+  font-size: 0.6em;
+}
+.dc-meta2 {
+  display: flex;
+  align-items: center;
+  gap: 0.35em 0.6em;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--d-muted);
+  font-size: 0.86em;
+}
+.dc-who2,
+.dc-sub {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dc-sub {
+  opacity: 0.8;
+}
+.dc-meta2 .dc-ai {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  min-width: 0;
+  color: var(--d-accent);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dc-meta2 .dc-above {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  flex: none;
+  font-size: 0.9em;
+}
+.dash[data-dark='0'] .dc.big :is(.dc-meta2, .dc-who2, .dc-sub) {
+  color: rgb(255 255 255 / 0.9);
+}
+.dash[data-dark='0'] .dc.big .dring {
+  --rc: #fff;
+}
+.dash[data-dark='0'] .dc.big .dring .bg {
+  stroke: rgb(255 255 255 / 0.3);
+}
+
+/* ─── «В работе у команд»: две строки ─── */
+.dw2 {
+  --pc: var(--d-low);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6em;
+  align-items: center;
+  width: 100%;
+  flex: none;
+  padding: 0.4em 0.6em 0.4em 0;
+  border: 1px solid var(--d-line);
+  border-radius: calc(var(--d-radius) * 0.7);
+  background: var(--d-panel2);
+  color: var(--d-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dw2.off {
+  visibility: hidden;
+}
+.dw2-main {
+  display: grid;
+  gap: 0.12em;
+  min-width: 0;
+}
+.dw2-main b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dw2-main small {
+  display: flex;
+  gap: 0.7em;
+  min-width: 0;
+  color: var(--d-muted);
+  font-size: 0.82em;
+  white-space: nowrap;
+}
+.dw2-main small > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  flex: none;
+}
+.dw2-main small .warn {
+  color: var(--d-warn);
+  font-weight: 700;
+}
+.dw2-main small .dw2-team {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dw2 .dring {
+  width: 2.5em;
+  height: 2.5em;
+}
+.dw2[data-heat='0'] {
+  opacity: 0.72;
+}
+.dw2[data-heat='2'] {
+  background: color-mix(in srgb, var(--d-high) 10%, var(--d-panel2));
+}
+.dw2[data-heat='3'] {
+  background: color-mix(in srgb, var(--d-crit) 14%, var(--d-panel2));
+  border-color: color-mix(in srgb, var(--d-crit) 50%, var(--d-line));
+}
+.dw2[data-heat='4'] {
+  background: color-mix(in srgb, var(--d-crit) 24%, var(--d-panel2));
+  border-color: var(--d-crit);
+}
+
+/* ─── «Взять сейчас» ─── */
+.db-now {
+  gap: 0.6em;
+}
+.dn-card {
+  --pc: var(--d-low);
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.9em;
+  align-items: center;
+  padding: 0.9em 1em;
+  border-radius: var(--d-radius);
+  border: 2px solid color-mix(in srgb, var(--pc) 65%, var(--d-line));
+  background: color-mix(in srgb, var(--pc) 14%, var(--d-panel2));
+  color: var(--d-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.db-now[data-heat='4'] .dn-card {
+  box-shadow: 0 0 0 1px var(--pc), 0 0 1.6em color-mix(in srgb, var(--pc) 40%, transparent);
+  animation: dc-hot 2.6s ease-in-out infinite;
+}
+.dn-text {
+  display: grid;
+  gap: 0.4em;
+  min-width: 0;
+}
+.dn-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  flex-wrap: wrap;
+  font-size: 0.85em;
+}
+.dn-prio {
+  padding: 0.12em 0.6em;
+  border-radius: 0.4em;
+  background: var(--pc);
+  color: #fff;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.9em;
+}
+.dn-title {
+  font-size: 1.5em;
+  line-height: 1.18;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dn-who {
+  color: var(--d-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash .dn-act {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  padding: 0.8em 1em;
+  border: 0;
+  border-radius: 999px;
+  background: var(--d-accent);
+  color: var(--d-on-accent, #fff);
+  font: inherit;
+  font-size: 1.1em;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash .dn-act:hover {
+  filter: brightness(1.08);
+}
+.dash .dn-act:active {
+  transform: scale(0.98);
+}
+.dn-next {
+  flex: none;
+  display: grid;
+  gap: 0.35em;
+}
+.dn-row {
+  --pc: var(--d-low);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 0.5em;
+  align-items: center;
+  padding: 0.3em 0.5em 0.3em 0;
+  border: 1px solid var(--d-line);
+  border-radius: calc(var(--d-radius) * 0.6);
+  background: var(--d-panel2);
+  color: var(--d-text);
+  font: inherit;
+  font-size: 0.9em;
+  text-align: left;
+  cursor: pointer;
+}
+.dn-row b {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dn-row .dc-why {
+  font-size: 0.82em;
+}
+.dn-row .dring {
+  width: 2.3em;
+  height: 2.3em;
+}
+.dn-row .dring b {
+  font-size: 0.68em;
+}
+.dn-calm {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.5em;
+  color: var(--d-ok);
+}
+.dn-calm b {
+  color: var(--d-text);
+  font-size: 1.2em;
+}
+
+/* ─── «Сроки»: шкала с точками ─── */
+.db-dl {
+  gap: 0.45em;
+}
+.dl-later {
+  color: var(--d-muted);
+  font-size: 0.8em;
+}
+.dl-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.8em;
+}
+.dl-over {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-width: 4.6em;
+  padding: 0.3em 0.6em;
+  border-radius: calc(var(--d-radius) * 0.7);
+  background: var(--d-panel2);
+  color: var(--d-muted);
+}
+.dl-over.on {
+  background: color-mix(in srgb, var(--d-crit) 20%, var(--d-panel2));
+  color: var(--d-crit);
+}
+.dl-over b {
+  font-size: 1.8em;
+  line-height: 1;
+}
+.dl-over small {
+  font-size: 0.72em;
+}
+.dl-chart {
+  display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr)) auto;
+  min-width: 0;
+}
+.dl-lane {
+  display: grid;
+  grid-template-columns: 2.6em minmax(0, 1fr);
+  align-items: center;
+  min-height: 0;
+}
+.dl-lname {
+  color: var(--d-muted);
+  font-size: 0.68em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dl-track {
+  position: relative;
+  height: 100%;
+  border-bottom: 1px dashed var(--d-line);
+}
+.dash .dl-dot {
+  --pc: var(--d-low);
+  position: absolute;
+  top: 50%;
+  width: 0.9em;
+  height: 0.9em;
+  margin: -0.45em 0 0 -0.45em;
+  padding: 0;
+  border: 2px solid var(--d-panel);
+  border-radius: 50%;
+  background: var(--pc);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.dl-dot.p-P1 {
+  --pc: var(--d-crit);
+}
+.dl-dot.p-P2 {
+  --pc: var(--d-high);
+}
+.dl-dot.p-P3 {
+  --pc: var(--d-mid);
+}
+.l-P1 .dl-dot {
+  width: 1.3em;
+  height: 1.3em;
+  margin: -0.65em 0 0 -0.65em;
+}
+.dash .dl-dot:hover {
+  transform: scale(1.4);
+  z-index: 2;
+}
+.dl-dot[data-heat='4'],
+.dl-dot[data-heat='3'] {
+  box-shadow: 0 0 0 0.25em color-mix(in srgb, var(--pc) 35%, transparent);
+  animation: dl-pulse 1.5s ease-in-out infinite;
+}
+@keyframes dl-pulse {
+  50% {
+    box-shadow: 0 0 0 0.45em color-mix(in srgb, var(--pc) 15%, transparent);
+  }
+}
+.dl-ticks {
+  position: relative;
+  height: 1.1em;
+  margin-left: 2.6em;
+}
+.dl-ticks span {
+  position: absolute;
+  transform: translateX(-50%);
+  color: var(--d-muted);
+  font-size: 0.66em;
+  white-space: nowrap;
+}
+.dl-ticks span:first-child {
+  transform: none;
+}
+.dash .dl-next {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--d-muted);
+  font: inherit;
+  font-size: 0.82em;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+.dl-next b {
+  color: var(--d-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dl-dot,
+  .db-now .dn-card {
+    animation: none !important;
+  }
+}
+
+/* ИИ-помощник: «главное сейчас» — три строки, не простыня */
+.db-ai .da-brief p {
+  -webkit-line-clamp: 3;
+  font-size: 1em;
+}

@@ -23,7 +23,8 @@ export async function startPrefsSync(login: string) {
     const r = await fetch('/api/prefs');
     const saved = r.ok ? (((await r.json()) as { prefs: Saved | null }).prefs ?? null) : null;
     if (owner !== login) return;
-    if (saved?.dash) setDash(saved.dash);
+    // версия — своя у сохранённой раскладки: старая (без версии) один раз переводится на новую базовую
+    if (saved?.dash) setDash({ ...saved.dash, ver: saved.dash.ver ?? 0 });
     if (saved?.jarvis) for (const k of JKEYS) if (saved.jarvis[k] !== undefined && saved.jarvis[k] !== jarvisPrefs[k]) setJarvisPref(k, saved.jarvis[k] as never);
   } catch {
     /* без сети — живём настройками браузера */

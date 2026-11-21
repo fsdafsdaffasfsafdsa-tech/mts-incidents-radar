@@ -194,7 +194,7 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
             <input type="checkbox" checked={d.banners} onChange={(e) => setDash({ banners: e.target.checked })} /> Баннер на всю стену: новый критический, критический решён, назначен на координаторов
           </label>
           <label className="dset-check">
-            <input type="checkbox" checked={d.sound} onChange={(e) => setDash({ sound: e.target.checked })} /> Звук тревоги
+            <input type="checkbox" checked={d.sound} onChange={(e) => setDash({ sound: e.target.checked })} /> Звуковые эффекты (по умолчанию выключены — о событиях говорит Джарвис)
           </label>
           <p className="dset-hint">
             Три уровня: <b>срочно</b> — на весь экран, звук и голос помощника (новый критический, «решили, а жалобы снова», ИИ предлагает «Наивысший», критический не берут); <b>внимание</b> — полосой сверху (срок близко, не берут, напоминание); <b>инфо</b> — тихой строкой (решён, передан, взяли в работу).
