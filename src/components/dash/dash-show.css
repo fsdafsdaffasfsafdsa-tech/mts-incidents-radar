@@ -1,135 +1,205 @@
-/* ═══ пульт показа, пересменка 16:9 и «жёсткие» анимации на события ═══ */
+/* ═══ кнопки ситуаций, пересменка 16:9 и «жёсткие» анимации на события ═══ */
 
-/* ─── пульт показа (для ведущего) ─── */
+/* ─── кнопки ситуаций — всегда внизу стены, в потоке (стена над ними ужимается, ничего не перекрывают) ─── */
 .sp {
-  position: fixed;
-  left: 16px;
-  bottom: 16px;
-  z-index: 60;
-  width: min(560px, calc(100vw - 32px));
-  padding: 12px;
-  border-radius: 16px;
-  background: rgb(12 17 27 / 0.94);
-  border: 1px solid #2b3650;
-  box-shadow: 0 18px 48px rgb(0 0 0 / 0.45);
-  color: #eef2f8;
-  font-size: 14px;
-  animation: sp-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  position: relative;
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.6em;
+  font-size: clamp(12px, 0.78vw, 20px);
+  animation: sp-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) 0.3s backwards;
 }
 @keyframes sp-in {
   from {
     opacity: 0;
-    transform: translateY(16px) scale(0.97);
+    transform: translateY(100%);
   }
-}
-.sp-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.sp-head b {
-  font-size: 15px;
-}
-.sp-mode,
-.sp-clear,
-.sp-x {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid #2b3650;
-  color: #b5c1d4;
-  cursor: pointer;
-  user-select: none;
-}
-.sp-head .sp-motion {
-  margin-left: 0;
-}
-.sp-motion.on {
-  border-color: #ff5269;
-  color: #ff5269;
-}
-.sp-mode svg,
-.sp-clear svg,
-.sp-x svg {
-  width: 14px;
-  height: 14px;
-}
-.sp-mode {
-  margin-left: auto;
-}
-.sp-mode.on {
-  border-color: #3ecf8e;
-  color: #3ecf8e;
-}
-.sp-clear:hover {
-  border-color: #ff5269;
-  color: #ff5269;
-}
-.sp-x {
-  padding: 4px 6px;
 }
 .sp-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 0.5em;
 }
 .sp-btn {
-  --tc: #4e8cff;
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  padding: 10px 6px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--tc) 45%, #2b3650);
-  background: color-mix(in srgb, var(--tc) 12%, #141c2c);
+  --tc: var(--jv, #4e8cff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45em;
+  min-width: 0;
+  padding: 0.6em 0.5em;
+  border-radius: calc(var(--d-radius, 12px) * 0.8);
+  border: 1px solid color-mix(in srgb, var(--tc) 50%, var(--d-line, #2b3650));
+  background: color-mix(in srgb, var(--tc) 14%, var(--d-panel, #141c2c));
+  color: var(--d-text, #eef2f8);
   cursor: pointer;
   user-select: none;
   transition: transform 0.15s, background 0.15s;
 }
 .sp-btn:hover {
-  background: color-mix(in srgb, var(--tc) 24%, #141c2c);
+  background: color-mix(in srgb, var(--tc) 28%, var(--d-panel, #141c2c));
 }
 .sp-btn:active {
-  transform: scale(0.95);
+  transform: scale(0.94);
 }
 .sp-btn svg {
-  width: 22px;
-  height: 22px;
+  flex: none;
+  width: 1.35em;
+  height: 1.35em;
   color: var(--tc);
 }
 .sp-btn small {
-  font-size: 12px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 1em;
+  font-weight: 700;
   line-height: 1.15;
-  text-align: center;
-  color: #eef2f8;
+  text-align: left;
 }
 .sp-btn.busy {
-  animation: sp-busy 0.8s ease-in-out infinite;
+  animation: sp-busy 0.7s ease-in-out infinite;
 }
 @keyframes sp-busy {
   50% {
-    opacity: 0.5;
+    opacity: 0.45;
+    transform: scale(0.96);
   }
 }
 .sp-btn.t-crit {
-  --tc: #ff5269;
+  --tc: var(--d-crit, #ff5269);
 }
 .sp-btn.t-high {
-  --tc: #ffb547;
+  --tc: var(--d-high, #ffb547);
 }
 .sp-btn.t-mid {
-  --tc: #f2d16b;
+  --tc: var(--d-warn, #f2d16b);
 }
-.sp-btn.t-ok {
-  --tc: #3ecf8e;
+.sp-side {
+  display: flex;
+  gap: 0.4em;
+}
+.sp-clear,
+.sp-motion {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.55em 0.8em;
+  border-radius: 999px;
+  border: 1px solid var(--d-line, #2b3650);
+  color: var(--d-muted, #b5c1d4);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sp-clear svg,
+.sp-motion svg {
+  width: 1.1em;
+  height: 1.1em;
+}
+.sp-clear:hover {
+  border-color: var(--d-crit, #ff5269);
+  color: var(--d-crit, #ff5269);
+}
+.sp-motion.on {
+  border-color: color-mix(in srgb, var(--d-crit, #ff5269) 60%, var(--d-line, #2b3650));
+  color: var(--d-crit, #ff5269);
 }
 .sp-note {
-  margin: 10px 2px 0;
-  font-size: 13px;
-  color: #b5c1d4;
+  /* подпись «что создано» всплывает над кнопками и сама гаснет */
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.6em);
+  z-index: 5;
+  margin: 0;
+  padding: 0.45em 1em;
+  border-radius: 999px;
+  translate: -50% 0;
+  background: var(--d-panel, #141c2c);
+  border: 1px solid var(--d-line, #2b3650);
+  box-shadow: 0 0.6em 1.6em rgb(0 0 0 / 0.35);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: sp-note 3.2s ease-out forwards;
+}
+.sp-note.bad {
+  color: var(--d-crit, #ff5269);
+}
+@keyframes sp-note {
+  0% {
+    opacity: 0;
+    transform: translateY(0.6em) scale(0.95);
+  }
+  10%,
+  80% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.dash-editing .sp {
+  display: none;
+}
+
+/* ─── срочное: перекрывает экран, пока не приняли ─── */
+.us-wrap {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.us-ack {
+  position: absolute;
+  right: 2.5%;
+  bottom: 4%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.5em 1.1em;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 0.35);
+  color: rgb(255 255 255 / 0.85);
+  font-size: 1.1em;
+  font-weight: 700;
+}
+.us-ack svg {
+  width: 1.1em;
+  height: 1.1em;
+}
+.us-wrap:hover .us-ack {
+  background: rgb(255 255 255 / 0.12);
+}
+
+/* ─── кнопка «Пересменка» в шапке ─── */
+.dash .wh-video {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.45em 1em;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--jv, #4e8cff) 55%, var(--d-line));
+  background: color-mix(in srgb, var(--jv, #4e8cff) 14%, var(--d-panel));
+  color: var(--d-text);
+  font-size: var(--f-body);
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.15s, background 0.15s;
+}
+.dash .wh-video:hover {
+  background: color-mix(in srgb, var(--jv, #4e8cff) 28%, var(--d-panel));
+}
+.dash .wh-video:active {
+  transform: scale(0.95);
+}
+.dash .wh-video svg {
+  width: 1.25em;
+  height: 1.25em;
+  color: var(--jv, #4e8cff);
 }
 
 /* ─── пересменка 16:9 ─── */

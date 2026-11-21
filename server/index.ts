@@ -100,7 +100,13 @@ try {
 }
 mailbox.start();
 attachMailbox(mailbox); // Джарвис читает письма и заводит по ним инциденты
-if (getMeta(db, 'show') === '1') setShow(point, mailbox, true); // режим показа переживает перезапуск
+// Самотёка нет: всё — по кнопкам ситуаций. Первый запуск в этом режиме (или база пуста после «очистить», а модель
+// при старте заново разложила выгрузку) — пустая смена; дальше перезапуск сохраняет то, что накнопали.
+setShow(point, mailbox, true);
+if (getMeta(db, 'show') !== '1' || !saved) {
+  clearAll(point, mailbox);
+  setMeta(db, 'show', '1');
+}
 function send(res: http.ServerResponse, msg: PointMessage) {
   res.write(`data: ${JSON.stringify(msg)}\n\n`);
 }
@@ -523,10 +529,8 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       pointOnly();
       const body = await readBody(req);
       const kind = str(body.kind);
-      if (kind === 'on' || kind === 'off') {
-        setMeta(db, 'show', kind === 'on' ? '1' : '0');
-        return json(res, 200, setShow(point, mailbox, kind === 'on'));
-      }
+      // самотёка нет: режим всегда «по кнопкам»
+      if (kind === 'on' || kind === 'off') return json(res, 200, setShow(point, mailbox, true));
       if (kind === 'clear') {
         clearAll(point, mailbox);
         for (const [r, who] of clients) send(r, { type: 'snapshot', data: snapshot(who) });

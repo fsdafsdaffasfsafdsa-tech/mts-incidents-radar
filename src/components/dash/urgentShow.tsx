@@ -2,7 +2,7 @@
 // (возник → решён → снова жалобы → сейчас → срок). Внизу — субтитры его речи (слово за словом,
 // вопрос выделен) и «слушаю»; кнопок нет — дежурный отвечает голосом.
 import { useEffect, useMemo, useState } from 'react';
-import { Mic, Siren } from 'lucide-react';
+import { Check, Mic, Siren } from 'lucide-react';
 import type { Incident } from '../../../shared/types';
 import { ALERT_META, voiceLine, type AlertKind } from '../../../shared/attention';
 import { personaById } from '../../../shared/personas';
@@ -107,14 +107,15 @@ function Timeline({ i, now }: { i: Incident; now: number }) {
 }
 
 /** Срочное: плашка сверху, название и линия времени по центру, субтитры Джарвиса внизу. */
-export function UrgentShow({ list, incidents, now }: { list: Alert[]; incidents: Map<string, Incident>; now: number }) {
+export function UrgentShow({ list, incidents, now, onAck }: { list: Alert[]; incidents: Map<string, Incident>; now: number; onAck: (key?: string) => void }) {
   const a = list[0];
   const i = a ? incidents.get(a.inc.id) ?? a.inc : null;
   if (!a || !i) return null;
   const meta = ALERT_META[a.kind];
   const { name, place } = splitTitle(i);
+  // перекрывает весь экран, пока не приняли: щелчок в любом месте, Esc или «принял» голосом
   return (
-    <div className={`us-wrap k-${a.kind}`} role="alertdialog" aria-label={`Срочно: ${meta.title}`}>
+    <div className={`us-wrap k-${a.kind}`} role="alertdialog" aria-label={`Срочно: ${meta.title}`} title="Щелчок, Esc или «принял» голосом — принято" onClick={() => onAck(a.key)}>
       <div className="us-dim" />
       <div className="us-kind">
         <Siren /> {meta.title}
@@ -129,6 +130,9 @@ export function UrgentShow({ list, incidents, now }: { list: Alert[]; incidents:
         <Timeline i={i} now={now} />
       </div>
       <Subtitles text={spoken(a.kind, i, a.at)} at={a.at} />
+      <span className="us-ack">
+        <Check /> принял
+      </span>
     </div>
   );
 }

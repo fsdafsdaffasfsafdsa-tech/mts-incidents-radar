@@ -179,9 +179,10 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
   const openRaw = useOpen(standalone, setFocusId);
   const open = useCallback((i: Incident) => openRaw(i, wantRadar()), [openRaw]);
   const att = useAttention(incidents, d, standalone);
-  // срочное — на весь экран 30 секунд, потом сворачивается в полосу и ждёт «Принял» там
-  const urgentNow = att.urgent.filter((a) => now - a.at < 30_000);
-  const stripList = [...att.urgent.filter((a) => now - a.at >= 30_000), ...att.strip];
+  // срочное — на весь экран, пока не приняли (щелчок, Esc или «принял» голосом) или пока ситуация не разрешилась;
+  // принятое уходит в полосу
+  const urgentNow = att.urgent;
+  const stripList = att.strip;
   const [full, setFull] = useState(false);
   useEffect(() => {
     const f = () => setFull(!!document.fullscreenElement);
@@ -232,9 +233,9 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
         </div>
       )}
       <GridField d={d} ctx={ctx} inWall={inWall} editing={editing} setEditing={setEditing} />
-      <UrgentShow list={urgentNow} incidents={incidents} now={now} />
+      {!editing.on && <ShowPanel />}
+      <UrgentShow list={urgentNow} incidents={incidents} now={now} onAck={att.ack} />
       <Handover />
-      <ShowPanel />
       {d.ticker && <DashTicker />}
       {focusId && <FocusCard id={focusId} now={now} onClose={() => setFocusId(null)} />}
       {settings && <DashSettings onClose={() => setSettings(false)} />}
