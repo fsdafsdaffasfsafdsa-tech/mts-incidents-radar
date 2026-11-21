@@ -578,6 +578,16 @@ export const unpinIncident = (id: string) => post(`/api/incidents/${encodeURICom
 export const reopenIncident = (id: string) => quiet(post(`/api/incidents/${encodeURIComponent(id)}/reopen`));
 /** Демо: команда закрывает инцидент из жалоб, а жалобы продолжаются. */
 export const demoRecur = () => post('/api/demo/scenario', { step: 'recur' });
+/** Показ по кнопкам: ситуация (crit, recur, …), «on»/«off» — самотёк, «clear» — чистая смена. */
+export const showAction = (kind: string) => post<{ text?: string; show?: boolean; ok?: boolean }>('/api/show', { kind });
+export async function showState(): Promise<{ show: boolean } | null> {
+  try {
+    const r = await fetch('/api/show', { credentials: 'same-origin' });
+    return r.ok ? ((await r.json()) as { show: boolean }) : null;
+  } catch {
+    return null;
+  }
+}
 /** Дежурный посмотрел инцидент — «Не забыть» перестаёт его подсовывать. */
 export const markSeen = (id: string) => {
   if (state.me?.role === 'coordinator') void post(`/api/incidents/${encodeURIComponent(id)}/seen`).catch(() => undefined);

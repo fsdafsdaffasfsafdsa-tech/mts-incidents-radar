@@ -386,7 +386,7 @@
 .dash-col.edit .db.db-char.cut {
   outline-offset: -2px;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dch-fig,
   .dch-bubble {
     animation: none;

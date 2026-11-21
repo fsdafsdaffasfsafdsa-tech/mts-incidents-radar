@@ -1,0 +1,591 @@
+/* ═══ пульт показа, пересменка 16:9 и «жёсткие» анимации на события ═══ */
+
+/* ─── пульт показа (для ведущего) ─── */
+.sp {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 60;
+  width: min(560px, calc(100vw - 32px));
+  padding: 12px;
+  border-radius: 16px;
+  background: rgb(12 17 27 / 0.94);
+  border: 1px solid #2b3650;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.45);
+  color: #eef2f8;
+  font-size: 14px;
+  animation: sp-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes sp-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+}
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.sp-head b {
+  font-size: 15px;
+}
+.sp-mode,
+.sp-clear,
+.sp-x {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #2b3650;
+  color: #b5c1d4;
+  cursor: pointer;
+  user-select: none;
+}
+.sp-head .sp-motion {
+  margin-left: 0;
+}
+.sp-motion.on {
+  border-color: #ff5269;
+  color: #ff5269;
+}
+.sp-mode svg,
+.sp-clear svg,
+.sp-x svg {
+  width: 14px;
+  height: 14px;
+}
+.sp-mode {
+  margin-left: auto;
+}
+.sp-mode.on {
+  border-color: #3ecf8e;
+  color: #3ecf8e;
+}
+.sp-clear:hover {
+  border-color: #ff5269;
+  color: #ff5269;
+}
+.sp-x {
+  padding: 4px 6px;
+}
+.sp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.sp-btn {
+  --tc: #4e8cff;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--tc) 45%, #2b3650);
+  background: color-mix(in srgb, var(--tc) 12%, #141c2c);
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.15s, background 0.15s;
+}
+.sp-btn:hover {
+  background: color-mix(in srgb, var(--tc) 24%, #141c2c);
+}
+.sp-btn:active {
+  transform: scale(0.95);
+}
+.sp-btn svg {
+  width: 22px;
+  height: 22px;
+  color: var(--tc);
+}
+.sp-btn small {
+  font-size: 12px;
+  line-height: 1.15;
+  text-align: center;
+  color: #eef2f8;
+}
+.sp-btn.busy {
+  animation: sp-busy 0.8s ease-in-out infinite;
+}
+@keyframes sp-busy {
+  50% {
+    opacity: 0.5;
+  }
+}
+.sp-btn.t-crit {
+  --tc: #ff5269;
+}
+.sp-btn.t-high {
+  --tc: #ffb547;
+}
+.sp-btn.t-mid {
+  --tc: #f2d16b;
+}
+.sp-btn.t-ok {
+  --tc: #3ecf8e;
+}
+.sp-note {
+  margin: 10px 2px 0;
+  font-size: 13px;
+  color: #b5c1d4;
+}
+
+/* ─── пересменка 16:9 ─── */
+.ho-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  background: rgb(5 8 14 / 0.9);
+  animation: ho-in 0.4s ease-out;
+}
+@keyframes ho-in {
+  from {
+    opacity: 0;
+  }
+}
+.ho-frame {
+  position: relative;
+  width: min(96vw, calc(96vh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #0f1522;
+  color: #eef2f8;
+  font-size: min(1.6vw, 2.85vh);
+  box-shadow: 0 30px 90px rgb(0 0 0 / 0.6);
+  animation: ho-zoom 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+@keyframes ho-zoom {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+}
+.ho-bg {
+  position: absolute;
+  inset: -20%;
+  background: radial-gradient(circle at 30% 30%, rgb(78 140 255 / 0.18), transparent 45%), radial-gradient(circle at 75% 70%, rgb(255 82 105 / 0.14), transparent 45%);
+  animation: ho-drift 14s ease-in-out infinite alternate;
+}
+@keyframes ho-drift {
+  to {
+    transform: translate(4%, -3%) rotate(4deg);
+  }
+}
+.ho-scene {
+  position: absolute;
+  inset: 6% 6% 20%;
+  display: grid;
+  place-items: center;
+  animation: ho-scene 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+@keyframes ho-scene {
+  from {
+    opacity: 0;
+    transform: translateX(6%) scale(0.96);
+  }
+}
+.ho-title {
+  display: grid;
+  justify-items: center;
+  gap: 0.4em;
+  text-align: center;
+}
+.ho-title b {
+  font-family: inherit;
+  font-size: 4.2em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  animation: ho-pop 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.4) 0.15s backwards;
+}
+.ho-title small {
+  font-size: 1.4em;
+  color: #b5c1d4;
+}
+.ho-title em {
+  font-style: normal;
+  font-size: 1.1em;
+  color: #4e8cff;
+}
+.ho-clap,
+.ho-ok {
+  display: grid;
+  place-items: center;
+  width: 4.5em;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgb(78 140 255 / 0.18);
+  color: #4e8cff;
+  animation: ho-pop 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.5);
+}
+.ho-ok {
+  background: rgb(62 207 142 / 0.18);
+  color: #3ecf8e;
+}
+.ho-clap svg,
+.ho-ok svg {
+  width: 55%;
+  height: 55%;
+}
+@keyframes ho-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.3) rotate(-8deg);
+  }
+}
+.ho-nums {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.2em;
+  width: 100%;
+}
+.ho-num {
+  display: grid;
+  justify-items: center;
+  gap: 0.3em;
+  padding: 1.2em 0.6em;
+  border-radius: 0.8em;
+  background: color-mix(in srgb, var(--c) 14%, #182133);
+  border: 2px solid color-mix(in srgb, var(--c) 50%, #2b3650);
+  animation: ho-up 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.3) backwards;
+}
+@keyframes ho-up {
+  from {
+    opacity: 0;
+    transform: translateY(40%) scale(0.8);
+  }
+}
+.ho-num svg {
+  width: 2.2em;
+  height: 2.2em;
+  color: var(--c);
+}
+.ho-num b {
+  font-family: inherit;
+  font-size: 4em;
+  line-height: 1;
+  font-weight: 800;
+  color: var(--c);
+}
+.ho-num small {
+  font-size: 1.2em;
+  color: #b5c1d4;
+}
+.ho-tl {
+  position: relative;
+  width: 100%;
+  height: 60%;
+}
+.ho-tl-line {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  top: 50%;
+  height: 4px;
+  border-radius: 4px;
+  background: #3a4762;
+  transform-origin: left;
+  animation: ho-line 1.2s ease-out;
+}
+@keyframes ho-line {
+  from {
+    transform: scaleX(0);
+  }
+}
+.ho-ev {
+  /* точка ровно на линии, подписи по очереди снизу и сверху; сдвиг — свойством translate, чтобы не спорить с анимацией */
+  position: absolute;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3em;
+  width: 10em;
+  translate: -50% -0.8em;
+  text-align: center;
+  animation: ho-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.4) backwards;
+}
+.ho-ev:nth-child(odd) {
+  translate: -50% calc(-100% + 0.8em);
+  flex-direction: column-reverse;
+}
+.ho-ev i {
+  width: 1.6em;
+  height: 1.6em;
+  border-radius: 50%;
+  border: 3px solid #0f1522;
+}
+.ho-ev b {
+  font-size: 1.1em;
+}
+.ho-ev small {
+  font-size: 0.85em;
+  color: #b5c1d4;
+}
+.ho-cards {
+  display: grid;
+  gap: 0.8em;
+  width: 80%;
+}
+.ho-h {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin: 0 0 0.2em;
+  font-family: inherit;
+  font-size: 2.2em;
+  color: #ff5269;
+  animation: ho-pop 0.5s ease-out;
+}
+.ho-h.blue {
+  color: #4e8cff;
+}
+.ho-h svg {
+  width: 1em;
+  height: 1em;
+}
+.ho-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 0.8em;
+  align-items: center;
+  padding: 0.8em 1em;
+  border-radius: 0.7em;
+  background: #182133;
+  border-left: 0.35em solid var(--c);
+  animation: ho-slide 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) backwards;
+}
+@keyframes ho-slide {
+  from {
+    opacity: 0;
+    transform: translateX(-30%);
+  }
+}
+.ho-card-ic {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 2.6em;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+  color: var(--c);
+}
+.ho-card-ic svg {
+  width: 55%;
+  height: 55%;
+}
+.ho-card b {
+  font-size: 1.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ho-card small {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: 1.1em;
+  color: #b5c1d4;
+}
+.ho-card small svg {
+  width: 1em;
+  height: 1em;
+  color: var(--c);
+}
+.ho-calm {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: 1.6em;
+  color: #3ecf8e;
+}
+.ho-calm svg {
+  width: 1.2em;
+  height: 1.2em;
+}
+.ho-prog {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 3%;
+  display: flex;
+  gap: 0.4em;
+}
+.ho-prog i {
+  flex: 1;
+  height: 0.28em;
+  border-radius: 1em;
+  background: #2b3650;
+  overflow: hidden;
+}
+.ho-prog i.done {
+  background: #4e8cff;
+}
+.ho-prog i.now {
+  background: linear-gradient(90deg, #4e8cff 50%, #2b3650 50%) right / 200% 100%;
+  animation: ho-bar linear forwards;
+}
+@keyframes ho-bar {
+  to {
+    background-position: left;
+  }
+}
+.ho-sub {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 5%;
+  margin: 0;
+  padding: 0.6em 1em;
+  border-radius: 0.6em;
+  background: rgb(10 14 22 / 0.78);
+  font-size: 1.5em;
+  line-height: 1.35;
+  text-align: center;
+  color: #6f7d95;
+}
+.ho-sub span.on {
+  color: #ffffff;
+}
+.ho-x {
+  position: absolute;
+  right: 1.5%;
+  top: 2%;
+  display: grid;
+  place-items: center;
+  width: 2em;
+  height: 2em;
+  border-radius: 50%;
+  color: #6f7d95;
+  cursor: pointer;
+}
+.ho-x svg {
+  width: 60%;
+  height: 60%;
+}
+
+/* ─── «жёсткие» анимации на события ─── */
+/* срочное окно — влетает с толчком и красной вспышкой по краям экрана */
+.us-wrap .us-center {
+  animation: hard-in 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.25);
+}
+.us-wrap .us-kind {
+  animation: hard-drop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.4);
+}
+.us-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 0.45em var(--uc), inset 0 0 12vmin color-mix(in srgb, var(--uc) 55%, transparent);
+  opacity: 0;
+  animation: hard-edge 1.6s ease-out 2;
+  pointer-events: none;
+}
+@keyframes hard-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  60% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+  80% {
+    transform: translate(-50%, -50%) scale(0.98) rotate(-0.6deg);
+  }
+}
+@keyframes hard-drop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -160%) scale(1.2);
+  }
+}
+@keyframes hard-edge {
+  20% {
+    opacity: 1;
+  }
+}
+/* шапка «Главное» — крупное число влетает с отскоком */
+.wh-hero {
+  animation: hard-pop 0.65s cubic-bezier(0.2, 0.9, 0.3, 1.5);
+}
+.wh-hero.h-crit {
+  animation: hard-pop 0.65s cubic-bezier(0.2, 0.9, 0.3, 1.5), wh-glow 2.4s ease-in-out infinite;
+}
+@keyframes hard-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+/* блоки стены появляются по очереди при открытии */
+.dash-grid > .dash-col {
+  animation: hard-block 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.dash-grid > .dash-col:nth-child(2) {
+  animation-delay: 0.07s;
+}
+.dash-grid > .dash-col:nth-child(3) {
+  animation-delay: 0.14s;
+}
+.dash-grid > .dash-col:nth-child(4) {
+  animation-delay: 0.21s;
+}
+.dash-grid > .dash-col:nth-child(5) {
+  animation-delay: 0.28s;
+}
+.dash-grid > .dash-col:nth-child(6) {
+  animation-delay: 0.35s;
+}
+@keyframes hard-block {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.97);
+  }
+}
+/* «горит» в матрице сроков — плитка дышит красным, пока в ней что-то есть */
+.mx-tile.z-hot {
+  position: relative;
+}
+.mx-tile.z-hot.on::after {
+  /* «горит» дышит красной рамкой — через прозрачность, без перерисовки */
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 2px var(--d-crit), 0 0 1.2em color-mix(in srgb, var(--d-crit) 45%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  animation: hard-breath 2.2s ease-in-out infinite;
+}
+@keyframes hard-breath {
+  50% {
+    opacity: 1;
+  }
+}
+@container style(--motion: calm) {
+  .sp,
+  .ho-wrap,
+  .ho-frame,
+  .ho-bg,
+  .ho-scene,
+  .ho-scene *,
+  .us-wrap .us-center,
+  .us-wrap .us-kind,
+  .us-wrap::after,
+  .wh-hero,
+  .dash-grid > .dash-col,
+  .mx-tile.z-hot.on::after {
+    animation: none !important;
+  }
+}

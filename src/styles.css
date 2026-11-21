@@ -3171,7 +3171,7 @@ kbd {
     flex-wrap: wrap;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   *,
   *::before,
   *::after {
@@ -6613,7 +6613,7 @@ kbd {
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
+@container not style(--motion: calm) {
   .prow,
   .trow,
   .req,
@@ -7656,7 +7656,7 @@ kbd {
 .heat.hot {
   background-image: linear-gradient(90deg, color-mix(in srgb, var(--p1) 30%, transparent) 0%, color-mix(in srgb, var(--p1) 8%, transparent) 90%);
 }
-@media (prefers-reduced-motion: no-preference) {
+@container not style(--motion: calm) {
   :root:not([data-motion='off']) .heat.hot {
     animation: heat-pulse 2.4s ease-in-out infinite;
   }

@@ -478,7 +478,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dl-dot,
   .db-now .dn-card {
     animation: none !important;

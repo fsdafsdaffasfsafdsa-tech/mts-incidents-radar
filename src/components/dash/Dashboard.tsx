@@ -28,6 +28,8 @@ import { TeamLoadBlock } from './teams';
 import { CounterHeader } from './header';
 import { MailBlock } from './mail';
 import { useBump, useFlip } from './anim';
+import { Handover } from './handover';
+import { ShowPanel } from './showPanel';
 import './dash.css';
 import './dash-grid.css';
 import './dash-fav.css';
@@ -35,6 +37,7 @@ import './dash-attention.css';
 import './dash-visual.css';
 import './dash-wall2.css';
 import './dash-urgent.css';
+import './dash-show.css';
 
 const MIN = 60_000;
 export type Opts = Record<string, boolean | number | string> | undefined;
@@ -230,6 +233,8 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
       )}
       <GridField d={d} ctx={ctx} inWall={inWall} editing={editing} setEditing={setEditing} />
       <UrgentShow list={urgentNow} incidents={incidents} now={now} />
+      <Handover />
+      <ShowPanel />
       {d.ticker && <DashTicker />}
       {focusId && <FocusCard id={focusId} now={now} onClose={() => setFocusId(null)} />}
       {settings && <DashSettings onClose={() => setSettings(false)} />}

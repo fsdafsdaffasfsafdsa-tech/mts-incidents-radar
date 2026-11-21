@@ -1797,7 +1797,7 @@ button.dw-row:nth-child(odd) {
     box-shadow: none;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dash-snow,
   .dh-garland i {
     animation: none;

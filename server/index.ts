@@ -20,6 +20,7 @@ import { ItsmFile } from './itsm-file.ts';
 import { RAW } from './catalog.ts';
 import { actorLine, ask as askJarvis, attachMailbox, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
 import { parseDashCtx } from './jarvis-dash.ts';
+import { SHOW_KINDS, clearAll, runShow, setShow, type ShowKind } from './show.ts';
 import { design as designDash } from './design.ts';
 import { characterSays, drawAvatar, makeBlock } from './blockgen.ts';
 import { reviewFor, reviewList } from './review.ts';
@@ -99,6 +100,7 @@ try {
 }
 mailbox.start();
 attachMailbox(mailbox); // Джарвис читает письма и заводит по ним инциденты
+if (getMeta(db, 'show') === '1') setShow(point, mailbox, true); // режим показа переживает перезапуск
 function send(res: http.ServerResponse, msg: PointMessage) {
   res.write(`data: ${JSON.stringify(msg)}\n\n`);
 }
@@ -511,6 +513,27 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
         return json(res, 200, point.resolveByTeam(inc.id, inc.assignee ?? eng.id, 'Перезапустили узел пакетного ядра в Новосибирске, трафик восстановлен, жалобы прекратились'));
       }
       throw new Error('Неизвестный шаг');
+    }
+    // ─── показ по кнопкам (server/show.ts): самотёк на паузе, ситуации — с пульта ───
+    if (p === '/api/show' && req.method === 'GET') {
+      pointOnly();
+      return json(res, 200, { show: point.show, kinds: SHOW_KINDS });
+    }
+    if (p === '/api/show' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      const kind = str(body.kind);
+      if (kind === 'on' || kind === 'off') {
+        setMeta(db, 'show', kind === 'on' ? '1' : '0');
+        return json(res, 200, setShow(point, mailbox, kind === 'on'));
+      }
+      if (kind === 'clear') {
+        clearAll(point, mailbox);
+        for (const [r, who] of clients) send(r, { type: 'snapshot', data: snapshot(who) });
+        return json(res, 200, { ok: true });
+      }
+      if (!(SHOW_KINDS as readonly string[]).includes(kind)) throw new Error('Неизвестная ситуация');
+      return json(res, 200, runShow(point, mailbox, kind as ShowKind, actor));
     }
     if (p === '/api/demo/auto' && post) {
       pointOnly();

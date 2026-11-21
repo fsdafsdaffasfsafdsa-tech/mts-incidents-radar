@@ -200,7 +200,7 @@
   font-size: 1em;
   white-space: nowrap;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .us-wrap * {
     animation-duration: 0.01s !important;
     transition: none !important;

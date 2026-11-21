@@ -157,6 +157,8 @@ export function parseEml(raw: string): Draft & { at: number } {
 // ─── ящик ─────────────────────────────────────────────────────────────────
 export class Mailbox {
   items: MailItem[] = [];
+  /** Демо-письма приходят сами; в режиме показа — выключено, письма только по кнопке. */
+  demo = true;
   private seq = 1;
   private nextDemo = Date.now() + 25_000;
   private llmLog: number[] = [];
@@ -197,6 +199,16 @@ export class Mailbox {
     this.emit(item);
     return item;
   }
+  /** Письмо для показа по кнопке: приходит сразу и разбирается как настоящее. */
+  inject(d: { from: string; fromName: string; subject: string; body: string }) {
+    return this.add({ ...d, at: Date.now(), source: 'demo' });
+  }
+  /** Очистить ящик (кнопка «Очистить» в режиме показа). */
+  clear() {
+    for (const m of this.items) if (!m.read) m.read = true;
+    this.items = [];
+    this.dirty = true;
+  }
   /** Настоящее письмо файлом .eml (или просто текстом). */
   upload(raw: string) {
     const isEml = /^[\w-]+:\s/m.test(raw.slice(0, 2000)) && /\r?\n\r?\n/.test(raw);
@@ -233,7 +245,7 @@ export class Mailbox {
   }
   private async tick() {
     const now = Date.now();
-    if (this.online() && now >= this.nextDemo) {
+    if (this.demo && this.online() && now >= this.nextDemo) {
       this.add({ ...draft(this.point, now), at: now, source: 'demo' });
       this.nextDemo = now + (100 + rnd() * 140) * 1000;
     }

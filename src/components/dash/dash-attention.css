@@ -167,7 +167,7 @@
   font-weight: 800;
   font-size: 0.9em;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dur-wrap::before,
   .dur,
   .dur-wrap {
@@ -405,7 +405,7 @@
   --pc: color-mix(in srgb, var(--d-crit) 55%, var(--d-high));
   border-color: var(--pc);
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dc[data-heat='4'] {
     animation: none;
   }

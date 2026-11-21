@@ -48,6 +48,8 @@ export class Point {
   feed: FeedEvent[] = [];
   stream = new ComplaintStream();
   shift = 0;
+  /** Режим показа: «коллеги» и команды сами ничего не делают — ситуации запускаются кнопками (server/show.ts). */
+  show = false;
   private hidden = new Map<string, Hidden>();
   private online = new Map<string, number>();
   private listeners = new Set<Listener>();
@@ -348,7 +350,7 @@ export class Point {
       this.detectStuck(now);
       this.timers(now);
     }
-    this.autopilot(now);
+    if (!this.show) this.autopilot(now);
     this.sla(now);
     for (const id of this.dirty) {
       const inc = this.incidents.get(id);
@@ -1278,6 +1280,55 @@ export class Point {
   /** Демо: сбой в регионе или на платформе. */
   outage(service: string, regionIds: string[], minutes = 6, perSec = 0.4) {
     return this.stream.start(service, regionIds, minutes, perSec);
+  }
+
+  // ─── показ по кнопкам (server/show.ts) ─────────────────────────────────────
+  /** Инцидент из всплеска жалоб прямо сейчас: жалобы ставятся на карту, ИИ собирает инцидент, советует команду. */
+  scenarioIncident(o: { service: string; regionId: string; n: number; priority?: Priority; slaMin?: number; reason?: string }) {
+    const now = Date.now();
+    for (let k = 0; k < o.n; k++) this.addComplaint(makeComplaint(now - k * 3000, o.service, o.regionId));
+    const inc = this.fromCluster({ key: `${o.service}|${o.regionId}`, service: o.service, regionId: o.regionId, count: o.n, expected: 0.4, pValue: 1e-9 }, null);
+    if (o.priority && inc.priority !== o.priority) {
+      (inc.levelLog ??= []).push({ at: now, from: inc.priority, to: o.priority, reason: o.reason ?? 'ИИ: по числу жалоб и критичности сервиса', auto: true });
+      inc.priority = o.priority;
+      inc.slaDeadline = now + PRIORITY_SLA_MIN[o.priority] * MIN;
+    }
+    if (o.slaMin !== undefined) inc.slaDeadline = now + o.slaMin * MIN;
+    const top = routeTeams(inc, this.ctx(now))[0];
+    if (top) inc.ai = { ...inc.ai, teamId: top.teamId, confidence: Math.min(0.96, 0.6 + top.score / 250) };
+    this.hide(inc, now);
+    this.touch(inc, now);
+    return inc;
+  }
+  /** Таймеры и «застрявшие» — сразу, не дожидаясь следующего такта. */
+  runTimers() {
+    const now = Date.now();
+    this.timers(now);
+    this.detectStuck(now);
+  }
+  /** Поменять поле инцидента для сценария и разослать изменения. */
+  patch(id: string, f: (inc: Incident) => void) {
+    const inc = this.need(id);
+    f(inc);
+    this.touch(inc, Date.now());
+    return inc;
+  }
+  /** Очистить смену для показа: инциденты, жалобы, сигналы, лента. Клиенты получают пустой снимок. */
+  reset() {
+    for (const id of this.incidents.keys()) this.emit({ type: 'remove', data: { id } });
+    this.incidents.clear();
+    this.complaints = [];
+    this.clusters = [];
+    this.requests.clear();
+    this.signals.clear();
+    this.feed = [];
+    this.hidden.clear();
+    this.dirty.clear();
+    this.buffer = [];
+    this.stream.outages = [];
+    this.createdLog = [];
+    this.resolvedLog = [];
+    this.breachedLog = [];
   }
 
   /** Демо: одна жалоба (для тестов и ручной проверки). */

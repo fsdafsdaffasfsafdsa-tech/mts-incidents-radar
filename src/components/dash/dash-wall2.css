@@ -638,7 +638,7 @@
     box-shadow: 0 0 0 0.9em transparent;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dur-ill,
   .dur-mic,
   .db-now .dn-card {
@@ -713,7 +713,7 @@ body:has(.db-jv2) .jv-sub {
     opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dash .dring .fg,
   .dash .db-now .dn-card,
   .dash .dn-ill > svg,
@@ -914,7 +914,7 @@ body:has(.db-jv2) .jv-sub {
   overflow: hidden;
   align-content: start;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dn3-step.now,
   .dn3-line i,
   .dn3-ic svg {
@@ -1109,7 +1109,7 @@ body:has(.db-jv2) .jv-sub {
 .dash .db-now .dn-next .dn-row {
   cursor: pointer;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .dn4-bar i {
     animation: none;
     transition: none;
@@ -1276,7 +1276,7 @@ body:has(.db-jv2) .jv-sub {
   height: 1em;
   color: var(--d-muted);
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .ml-row,
   .ml-bar-fill {
     animation: none;
@@ -1388,7 +1388,7 @@ body:has(.db-jv2) .jv-sub {
 .wh-chip.sel {
   outline: 2px solid var(--gc);
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .wh-hero,
   .wh-chip b {
     animation: none !important;
@@ -1505,7 +1505,7 @@ body:has(.db-jv2) .jv-sub {
 .tm-axis-s small:last-child {
   transform: translateX(-100%);
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .tm-row,
   .tm-cd i,
   .tm-cd b {
@@ -1595,7 +1595,7 @@ body:has(.db-jv2) .jv-sub {
 .dp-dot.stuck {
   animation: tm-blink 1.4s ease-in-out infinite;
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .mx-tile,
   .dp-dot {
     animation: none !important;
@@ -1706,7 +1706,7 @@ body:has(.db-jv2) .jv-sub {
   color: var(--d-muted);
   font-size: var(--f-cap);
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .jvb-mic.on,
   .jvb-eq i {
     animation: none !important;
@@ -1802,7 +1802,7 @@ body:has(.db-jv2) .jv-sub {
     filter: brightness(1.8);
   }
 }
-@media (prefers-reduced-motion: reduce) {
+@container style(--motion: calm) {
   .jvb-w,
   .mx-th b,
   .tm-cd.over i {

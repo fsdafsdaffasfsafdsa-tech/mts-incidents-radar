@@ -5,8 +5,29 @@
 //   useFlash — что-то поменялось: класс на ~1 с для CSS-подсветки.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
-const reduced = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Тихий режим — переключатель самого приложения, а не системы: на стене дежурки анимации — часть сигнала, а в Windows
+// «эффекты анимации» часто выключены ради скорости, и браузер тогда просил бы сайт не двигаться вовсе.
+// CSS слушает его через @container style(--motion: calm).
+const MOTION_KEY = 'radar.motion';
+export const motionCalm = () => typeof document !== 'undefined' && document.documentElement.style.getPropertyValue('--motion') === 'calm';
+export function setMotionCalm(calm: boolean) {
+  if (typeof document === 'undefined') return;
+  if (calm) document.documentElement.style.setProperty('--motion', 'calm');
+  else document.documentElement.style.removeProperty('--motion');
+  try {
+    localStorage.setItem(MOTION_KEY, calm ? 'calm' : 'full');
+  } catch {
+    /* хранилище недоступно — режим только на эту вкладку */
+  }
+}
+try {
+  if (typeof localStorage !== 'undefined' && localStorage.getItem(MOTION_KEY) === 'calm') setMotionCalm(true);
+} catch {
+  /* нет доступа к хранилищу — анимации по умолчанию */
+}
+const reduced = motionCalm;
 const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
+const SHAKE: Keyframe[] = [0, -7, 6, -5, 4, -2, 0].map((x) => ({ transform: `translateX(${x}px)` }));
 
 /**
  * Строки с data-flip="id" внутри box: переезд на новое место — плавно (FLIP), новая строка — въезжает справа,
@@ -29,12 +50,25 @@ export function useFlip(box: RefObject<HTMLElement | null>) {
       if (!animate) return;
       const old = was!.get(id);
       if (!old) {
-        n.animate([{ opacity: 0, transform: 'translateX(14px) scale(0.98)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: EASE });
-        n.animate([{ boxShadow: '0 0 0 0 transparent' }, { boxShadow: '0 0 0 3px var(--flash, var(--jv))' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 1100, easing: 'ease-out' });
+        // новая строка — влетает справа с перелётом и вспышкой
+        n.animate(
+          [
+            { opacity: 0, transform: 'translateX(48px) scale(0.9)' },
+            { opacity: 1, transform: 'translateX(-6px) scale(1.04)', offset: 0.6 },
+            { transform: 'translateX(2px) scale(0.99)', offset: 0.82 },
+            { opacity: 1, transform: 'none' },
+          ],
+          { duration: 640, easing: EASE },
+        );
+        n.animate([{ boxShadow: '0 0 0 0 transparent' }, { boxShadow: '0 0 0 4px var(--flash, var(--jv)), 0 0 18px var(--flash, var(--jv))' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 1300, easing: 'ease-out' });
         return;
       }
-      if (old.top !== top) n.animate([{ transform: `translateY(${old.top - top}px)` }, { transform: 'none' }], { duration: 480, easing: EASE });
-      if (level > old.level) n.animate([{ boxShadow: '0 0 0 0 transparent' }, { boxShadow: '0 0 0 4px var(--flash, var(--d-crit))' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 900, easing: 'ease-out' });
+      if (old.top !== top) n.animate([{ transform: `translateY(${old.top - top}px)` }, { transform: 'translateY(0) scale(1.02)', offset: 0.75 }, { transform: 'none' }], { duration: 520, easing: EASE });
+      if (level > old.level) {
+        n.animate([{ boxShadow: '0 0 0 0 transparent' }, { boxShadow: '0 0 0 5px var(--flash, var(--d-crit)), 0 0 22px var(--flash, var(--d-crit))' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 1000, easing: 'ease-out' });
+        // раскалился до красного — короткая тряска
+        if (level >= 3) n.animate(SHAKE, { duration: 460, easing: 'ease-in-out', composite: 'add' });
+      }
     });
     prev.current = next;
   });
@@ -49,7 +83,12 @@ export function useBump<T extends HTMLElement>(value: unknown) {
     const up = typeof value === 'number' && typeof prev.current === 'number' ? value > prev.current : true;
     prev.current = value;
     if (!ref.current || reduced()) return;
-    ref.current.animate([{ transform: 'scale(1)' }, { transform: `scale(${up ? 1.35 : 0.8})` }, { transform: 'scale(1)' }], { duration: 420, easing: EASE });
+    ref.current.animate(
+      up
+        ? [{ transform: 'scale(1)' }, { transform: 'scale(1.6) rotate(-6deg)', offset: 0.4 }, { transform: 'scale(0.92)', offset: 0.75 }, { transform: 'scale(1)' }]
+        : [{ transform: 'scale(1)' }, { transform: 'scale(0.7)', offset: 0.4 }, { transform: 'scale(1)' }],
+      { duration: 520, easing: EASE },
+    );
   }, [value]);
   return ref;
 }
