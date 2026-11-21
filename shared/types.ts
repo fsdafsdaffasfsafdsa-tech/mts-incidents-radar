@@ -65,6 +65,15 @@ export interface Crew {
 }
 
 /** Избранное смены: инцидент закреплён дежурным с заметкой и, по желанию, напоминанием. */
+/** Решили, а жалобы снова идут: сколько жалоб пришло после решения и когда. Своё поле Радара. */
+export interface IncidentRecur {
+  count: number; // жалоб после решения
+  since: number; // первая жалоба после решения
+  lastAt: number; // последняя
+  team: string | null; // какая команда решала
+  resolvedBy: string | null; // кто закрыл
+}
+
 export interface IncidentPin {
   by: string;
   at: number;
@@ -111,6 +120,7 @@ export interface Incident {
   comments?: IncidentComment[];
   // ─── свои поля Радара (ментор разрешил дополнять формат выгрузки) ───
   pin?: IncidentPin | null; // избранное смены: кто закрепил, заметка, напоминание
+  recur?: IncidentRecur | null; // решили, а жалобы снова идут
   attentionAt?: number | null; // когда дежурный последний раз смотрел инцидент
   attentionBy?: string | null;
   startedAt: number | null;
@@ -159,7 +169,9 @@ export type FeedKind =
   | 'comment'
   | 'routed'
   | 'request'
-  | 'signal';
+  | 'signal'
+  | 'recur'
+  | 'reopened';
 
 export interface FeedEvent {
   id: string;

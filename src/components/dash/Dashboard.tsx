@@ -1,12 +1,13 @@
 // Дашборд координатора — видеостена по кейсу. Видно с расстояния; блоки, стиль и поведение настраиваются
 // в «Настройках дашборда» или голосом через Джарвиса. Прежняя стена — раскладка «Прежняя стена».
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, BellRing, Bot, CheckCircle2, Expand, Eye, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Star, Trash2, X } from 'lucide-react';
+import { ArrowLeftRight, BellRing, Bot, CheckCircle2, Expand, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Star, Trash2, X } from 'lucide-react';
 import type { FeedEvent, Incident } from '../../../shared/types';
-import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, fmtShort, groupsOf, riskOf, transferCount, transfers, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
+import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, fmtShort, groupsOf, riskOf, transferCount, transfers, urgencyScore, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
 import type { DashStyle } from '../../../shared/dashStyles';
 import { personaById } from '../../../shared/personas';
-import { getState, itsmLink, markSeen, openIncident, setTab, teamName, useStore } from '../../store';
+import { itsmLink, markSeen, openIncident, reopenIncident, setTab, takeAtPoint, teamName, useStore } from '../../store';
+import { complaintsWord, heat } from '../../../shared/attention';
 import { fmtClock } from '../../lib/format';
 import { useNow } from '../../lib/hooks';
 import { applyDashOp, currentStyle, dashEvent, getDash, openWallWindow, openWork, setDash, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
@@ -19,9 +20,11 @@ import { RFMap } from '../RFMap';
 import { Spark } from '../kit';
 import { WallPage } from '../WallPage';
 import { DashSettings } from './DashSettings';
+import { AttentionStrip, UrgentOverlay, useAttention } from './attention';
 import './dash.css';
 import './dash-grid.css';
 import './dash-fav.css';
+import './dash-attention.css';
 
 const MIN = 60_000;
 export type Opts = Record<string, boolean | number | string> | undefined;
@@ -162,7 +165,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
   const snap = useMemo(() => dashSnapshot(incidents.values(), now, { filter: d.filter, onlyFile: d.onlyFile }), [incidents, now, d.filter, d.onlyFile]);
   const openRaw = useOpen(standalone, setFocusId);
   const open = useCallback((i: Incident) => openRaw(i, wantRadar()), [openRaw]);
-  const alerts = useAlerts(incidents, d);
+  const att = useAttention(incidents, d, standalone);
   const [full, setFull] = useState(false);
   useEffect(() => {
     const f = () => setFull(!!document.fullscreenElement);
@@ -170,10 +173,17 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
     return () => document.removeEventListener('fullscreenchange', f);
   }, []);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && (setFocusId(null), alerts.dismiss(), setEditing({ on: false, id: null }));
+    // Esc: сначала «Принял» срочному на весь экран, потом закрыть остальное.
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (att.urgent.length) return att.ack();
+      setFocusId(null);
+      att.dismiss();
+      setEditing({ on: false, id: null });
+    };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [alerts, setFocusId, setEditing]);
+  }, [att, setFocusId, setEditing]);
   const ctx: BlockCtx = { snap, now, d, style, open, standalone };
   const inWall = new Set<BlockId>(d.items.map((c) => c.block));
   // Пока меняем блоки — шар помощника не закрывает правый нижний угол поля.
@@ -183,7 +193,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
   }, [editing.on]);
   return (
     <div
-      className={`dash ${standalone || home ? 'standalone' : ''} ${home ? 'home' : ''} ${alerts.top?.kind === 'crit' ? 'dash-alarm' : ''}`}
+      className={`dash ${standalone || home ? 'standalone' : ''} ${home ? 'home' : ''} ${att.urgent.length ? 'dash-alarm' : ''}`}
       data-dark={style.dark ? '1' : '0'}
       data-card={style.card ?? 'solid'}
       data-font={style.font ?? 'sans'}
@@ -193,15 +203,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
     >
       {style.deco === 'snow' && <Snow />}
       {d.counters ? <DashHeader snap={snap} now={now} d={d} home={home} garland={style.deco === 'snow'} /> : home && <span className="dash-work-float"><WorkButton /></span>}
-      {alerts.list.length > 0 ? (
-        <AlertStrip list={alerts.list} now={now} onClose={alerts.dismiss} onOpen={(id) => setFocusId(id)} />
-      ) : (
-        <div className="dash-alerts idle" aria-live="polite">
-          <span className="dal-idle">
-            <CheckCircle2 size={15} /> Новых уведомлений нет
-          </span>
-        </div>
-      )}
+      <AttentionStrip list={att.strip} info={att.info} incidents={incidents} now={now} onClose={att.dismiss} onOpen={open} />
       {editing.on && (
         <div className="dash-editbar">
           <b>Свободное поле</b>
@@ -214,6 +216,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
         </div>
       )}
       <GridField d={d} ctx={ctx} inWall={inWall} editing={editing} setEditing={setEditing} />
+      <UrgentOverlay list={att.urgent} incidents={incidents} now={now} onAck={att.ack} onOpen={open} />
       {d.ticker && <DashTicker />}
       {focusId && <FocusCard id={focusId} now={now} onClose={() => setFocusId(null)} />}
       {settings && <DashSettings onClose={() => setSettings(false)} />}
@@ -291,6 +294,11 @@ function DashHeader({ snap, now, d, home, garland }: { snap: DashSnapshot; now: 
         {chip('high', '')}
         {chip('research', '')}
         <span className="dh-sep" />
+        {c.recur > 0 && (
+          <span className="dh-mini hot" title="Решили, а жалобы снова идут — вернуть в работу">
+            <b className="num">{c.recur}</b> снова жалобы
+          </span>
+        )}
         <span className={`dh-mini ${c.threat ? 'warn' : ''}`} title="Срок под угрозой: меньше 30 минут или уже прошёл">
           <b className="num">{c.threat}</b> срок
         </span>
@@ -445,8 +453,10 @@ export function GroupTags({ i, skip }: { i: Incident; skip?: DashGroup }) {
 function IncCard({ i, att, now, big, onClick, off, detail = false, above = false }: { i: Incident; att?: Attention; now: number; big?: boolean; onClick: () => void; off?: boolean; detail?: boolean; above?: boolean }) {
   const t = transferCount(i);
   const left = i.slaDeadline - now;
+  const recur = i.status === 'resolved' && i.recur ? i.recur : null;
+  const quick = recur ? { label: 'Вернуть в работу', run: () => void reopenIncident(i.id) } : i.status === 'coordinators' && !i.coordinatorId ? { label: 'Беру', run: () => void takeAtPoint(i.id) } : null;
   return (
-    <button className={`dc p-${i.priority} ${big ? 'big' : ''} ${att ? `t-${att.tone}` : ''} ${off ? 'off' : ''}`} onClick={onClick} title={`${i.title}\n${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}\n${who(i)}`} aria-hidden={off || undefined} tabIndex={off ? -1 : undefined}>
+    <button data-heat={heat(att?.score ?? urgencyScore(i, now))} className={`dc p-${i.priority} ${big ? 'big' : ''} ${recur ? 'recur' : ''} ${att ? `t-${att.tone}` : ''} ${off ? 'off' : ''}`} onClick={onClick} title={`${i.title}\n${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}\n${who(i)}`} aria-hidden={off || undefined} tabIndex={off ? -1 : undefined}>
       <span className="dc-bar" />
       <span className="dc-main">
         <span className="dc-top">
@@ -462,7 +472,15 @@ function IncCard({ i, att, now, big, onClick, off, detail = false, above = false
         </span>
         <b className="dc-title">{i.title}</b>
         <span className="dc-line">
-          <b className="dc-who">{who(i)}</b> · {i.productName || i.service} · {fmtClock(i.createdAt)} · {i.stateText}
+          {recur ? (
+            <>
+              <b className="dc-who">решала {recur.team ?? 'команда'}</b> · решён {fmtShort(now - (i.resolvedAt ?? now))} назад · {i.productName || i.service}
+            </>
+          ) : (
+            <>
+              <b className="dc-who">{who(i)}</b> · {i.productName || i.service} · {fmtClock(i.createdAt)} · {i.stateText}
+            </>
+          )}
         </span>
         {detail && i.status === 'coordinators' && i.ai?.teamId && (
           <span className="dc-ai">
@@ -470,6 +488,19 @@ function IncCard({ i, att, now, big, onClick, off, detail = false, above = false
           </span>
         )}
       </span>
+      {quick && (
+        <span
+          role="button"
+          tabIndex={-1}
+          className="dc-quick"
+          onClick={(e) => {
+            e.stopPropagation();
+            quick.run();
+          }}
+        >
+          {quick.label}
+        </span>
+      )}
       <span
         role="button"
         tabIndex={-1}
@@ -482,28 +513,44 @@ function IncCard({ i, att, now, big, onClick, off, detail = false, above = false
       >
         <Star size={15} />
       </span>
-      <span className={`dc-sla ${left < 30 * MIN ? 'hot' : ''}`}>
-        <b className="num">{left > 0 ? fmtShort(left) : `−${fmtShort(-left)}`}</b>
-        <span className="dc-sla-bar">
-          <i style={{ width: `${frac(i, now) * 100}%` }} />
+      {recur ? (
+        <span className="dc-sla hot">
+          <b className="num">{recur.count}</b>
+          <small>{complaintsWord(recur.count)} после решения</small>
         </span>
-      </span>
+      ) : (
+        <span className={`dc-sla ${left < 30 * MIN ? 'hot' : ''}`}>
+          <b className="num">{left > 0 ? fmtShort(left) : `−${fmtShort(-left)}`}</b>
+          <span className="dc-sla-bar">
+            <i style={{ width: `${frac(i, now) * 100}%` }} />
+          </span>
+        </span>
+      )}
     </button>
   );
 }
 
+/**
+ * «Кому распределить» — главный блок дежурного, три зоны:
+ *   «Распределить» — на пункте, команде ещё не переданы: кому передать (совет ИИ);
+ *   «Закреплено» — критические, высокие, «снова жалобы», срочнее критического: стоят на месте, не листаются;
+ *   «Остальное» — листается.
+ */
 function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now, d } = ctx;
-  const crit = snap.action.filter((x) => x.inc.priority === 'P1');
-  const others = snap.action.filter((x) => x.inc.priority !== 'P1');
-  // Срочнее самого срочного критического (короткий срок, ждёт пункт…) — над критическими, не больше двух.
-  const above = snap.topCrit > 0 ? others.filter((x) => x.att.score > snap.topCrit).slice(0, 2) : [];
-  const rest = others.filter((x) => !above.includes(x));
+  const isPinned = (x: { inc: Incident; att: Attention }) => x.inc.priority === 'P1' || x.inc.priority === 'P2' || x.inc.status === 'resolved' || (snap.topCrit > 0 && x.att.score > snap.topCrit);
+  const toRoute = snap.action.filter((x) => x.inc.status === 'coordinators');
+  const pinned = snap.action.filter((x) => x.inc.status !== 'coordinators' && isPinned(x));
+  const rest = snap.action.filter((x) => x.inc.status !== 'coordinators' && !isPinned(x));
   const p = useFitPager(rest.length, on(o, 'page', d.pageSec));
   const detail = ob(o, 'ai', false);
+  const above = (x: { inc: Incident; att: Attention }) => snap.topCrit > 0 && x.inc.priority !== 'P1' && x.att.score > snap.topCrit;
+  const card = (x: { inc: Incident; att: Attention }, extra: { route?: boolean; off?: boolean } = {}) => (
+    <IncCard key={x.inc.id} i={x.inc} att={x.att} now={now} big={x.inc.priority === 'P1' || x.inc.status === 'resolved'} detail={detail || !!extra.route} above={above(x)} off={extra.off} onClick={() => ctx.open(x.inc)} />
+  );
   return (
     <div className={`db db-action ${ob(o, 'compact', false) ? 'compact' : ''}`}>
-      <BlockHead title={d.filter ? GROUP_NAME[d.filter] : 'Требует действия'} count={snap.action.length} icon={<BellRing size={18} />} />
+      <BlockHead title={d.filter ? GROUP_NAME[d.filter] : 'Кому распределить'} count={snap.action.length} icon={<BellRing size={18} />} />
       {ob(o, 'resolved') &&
         snap.resolvedCrit.map((i) => (
           <div key={i.id} className="dc-resolved">
@@ -514,21 +561,38 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
             <span className="num">за {fmtShort((i.resolvedAt ?? now) - i.createdAt)}</span>
           </div>
         ))}
-      {above.map(({ inc, att }) => (
-        <IncCard key={inc.id} i={inc} att={att} now={now} detail={detail} above onClick={() => ctx.open(inc)} />
-      ))}
-      {crit.length > 0 && (
-        <div className="db-crit">
-          {crit.map(({ inc, att }) => (
-            <IncCard key={inc.id} i={inc} att={att} now={now} big detail={detail} onClick={() => ctx.open(inc)} />
-          ))}
+      {!snap.action.length && !snap.resolvedCrit.length && <div className="db-empty">Распределять нечего — всё под контролем</div>}
+      <div className="db-pin">
+        {toRoute.length > 0 && (
+          <>
+            <div className="db-zone z-route">
+              <b>Распределить</b>
+              <span>на пункте — передать в команду</span>
+              <i className="num">{toRoute.length}</i>
+            </div>
+            {toRoute.map((x) => card(x, { route: true }))}
+          </>
+        )}
+        {pinned.length > 0 && (
+          <>
+            <div className="db-zone z-pin">
+              <b>Закреплено</b>
+              <span>критические и высокие — не листаются</span>
+              <i className="num">{pinned.length}</i>
+            </div>
+            {pinned.map((x) => card(x))}
+          </>
+        )}
+      </div>
+      {rest.length > 0 && (
+        <div className="db-zone z-rest">
+          <b>Остальное</b>
+          <span>листается</span>
+          <i className="num">{rest.length}</i>
         </div>
       )}
-      {!snap.action.length && !snap.resolvedCrit.length && <div className="db-empty">Всё под контролем</div>}
       <div className="db-list" ref={p.box}>
-        {rest.slice(p.start).map(({ inc, att }, k) => (
-          <IncCard key={inc.id} i={inc} att={att} now={now} detail={detail} onClick={() => ctx.open(inc)} off={k >= p.fit} />
-        ))}
+        {rest.slice(p.start).map((x, k) => card(x, { off: k >= p.fit }))}
       </div>
       <PagerFoot p={p} total={rest.length} />
     </div>
@@ -559,6 +623,7 @@ function WorkBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
           return (
             <button
               key={i.id}
+              data-heat={heat(urgencyScore(i, now))}
               className={`dw-row p-${i.priority} ${n >= p.fit ? 'off' : ''}`}
               style={{ gridTemplateColumns: tpl }}
               onClick={() => ctx.open(i)}
@@ -617,11 +682,13 @@ function GroupsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
                 </div>
               ))}
             {snap.byGroup[g.id].map((i) => (
-              <button key={i.id} className={`dg-row p-${i.priority}`} onClick={() => ctx.open(i)} title={`${i.productName || i.service} · ${i.stateText}`}>
+              <button key={i.id} data-heat={heat(urgencyScore(i, now))} className={`dg-row p-${i.priority}`} onClick={() => ctx.open(i)} title={`${i.productName || i.service} · ${i.stateText}`}>
                 <span className="dc-bar" />
                 <span>
                   <b>{i.title}</b>
-                  <small>{who(i)}</small>
+                  <small>
+                    {i.productName || i.service} · {fmtClock(i.createdAt)} · {who(i)} · {i.stateText}
+                  </small>
                 </span>
                 <span className={`num dg-left ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>{leftText(i, now)}</span>
               </button>
@@ -907,7 +974,7 @@ function StatsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   );
 }
 
-const KIND_TEXT: Partial<Record<FeedEvent['kind'], string>> = { p1: 'Критический', coordinators: 'На координаторах', resolved: 'Решён', routed: 'Передан', escalated: 'Эскалация', sla_breach: 'Срок прошёл', sla_warning: 'Срок близко', priority_up: 'Уровень выше', created: 'Новый', assigned: 'Назначен', in_progress: 'Взяли' };
+const KIND_TEXT: Partial<Record<FeedEvent['kind'], string>> = { p1: 'Критический', coordinators: 'На координаторах', resolved: 'Решён', routed: 'Передан', escalated: 'Эскалация', sla_breach: 'Срок прошёл', sla_warning: 'Срок близко', priority_up: 'Уровень выше', created: 'Новый', assigned: 'Назначен', in_progress: 'Взяли', recur: 'Снова жалобы', reopened: 'Возвращён в работу' };
 function EventsBlock({ o }: { o?: Opts }) {
   const feed = useStore((s) => s.feed);
   const incidents = useStore((s) => s.incidents);
@@ -980,148 +1047,6 @@ function DashTicker() {
         ))}
       </div>
     </footer>
-  );
-}
-
-// ─── тревоги: новый критический, критический решён, назначен на координаторов ───
-interface Alert {
-  key: string;
-  kind: 'crit' | 'resolved' | 'coord' | 'remind' | 'fav' | 'forgot';
-  inc: Incident;
-  until: number;
-  test?: boolean;
-  text?: string;
-}
-const ALERT_MS = { crit: 30_000, resolved: 45_000, coord: 20_000, remind: 40_000, fav: 20_000, forgot: 18_000 };
-const RANK = { crit: 0, resolved: 1, coord: 2, remind: 3, fav: 4, forgot: 5 };
-const FORGOT_EVERY = 10 * 60_000; // «не забудьте» — раз в 10 минут, если есть забытые важные
-function chime(kind: Alert['kind']) {
-  try {
-    const ctx = new AudioContext();
-    const notes = kind === 'crit' ? [880, 660, 880, 660] : kind === 'resolved' ? [523, 659, 784] : kind === 'forgot' || kind === 'fav' ? [587, 740] : [660, 880];
-    notes.forEach((f, k) => {
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.frequency.value = f;
-      o.type = kind === 'crit' ? 'square' : 'sine';
-      g.gain.setValueAtTime(0.0001, ctx.currentTime + k * 0.22);
-      g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + k * 0.22 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + k * 0.22 + 0.2);
-      o.connect(g).connect(ctx.destination);
-      o.start(ctx.currentTime + k * 0.22);
-      o.stop(ctx.currentTime + k * 0.22 + 0.22);
-    });
-    setTimeout(() => void ctx.close(), 1500);
-  } catch {
-    /* без звука */
-  }
-}
-function useAlerts(incidents: Map<string, Incident>, d: DashLayout) {
-  const prev = useRef<{ p1: Set<string>; coord: Set<string> } | null>(null);
-  const [list, setList] = useState<Alert[]>([]);
-  const dRef = useRef(d);
-  dRef.current = d;
-  const push = useCallback((a: Omit<Alert, 'until' | 'key'>) => {
-    if (!dRef.current.banners) return;
-    setList((l) => [...l.filter((x) => !(x.inc.id === a.inc.id && x.kind === a.kind)), { ...a, key: `${a.kind}-${a.inc.id}-${Date.now()}`, until: Date.now() + ALERT_MS[a.kind] }].sort((x, y) => RANK[x.kind] - RANK[y.kind]));
-    if (dRef.current.sound) chime(a.kind);
-  }, []);
-  const favPrev = useRef<Map<string, string> | null>(null);
-  useEffect(() => {
-    const all = [...incidents.values()].filter((i) => !dRef.current.onlyFile || i.origin !== 'complaints');
-    const p1 = new Set(all.filter((i) => i.priority === 'P1' && i.status !== 'resolved').map((i) => i.id));
-    const coord = new Set(all.filter((i) => i.status === 'coordinators').map((i) => i.id));
-    if (prev.current) {
-      for (const i of all) {
-        if (p1.has(i.id) && !prev.current.p1.has(i.id)) push({ kind: 'crit', inc: i });
-        else if (prev.current.p1.has(i.id) && i.status === 'resolved') push({ kind: 'resolved', inc: i });
-        if (coord.has(i.id) && !prev.current.coord.has(i.id) && !p1.has(i.id)) push({ kind: 'coord', inc: i });
-      }
-    }
-    prev.current = { p1, coord };
-    // избранное: решён, передан, сменился уровень — сразу видно всей смене
-    const favs = new Map(all.filter((i) => i.pin).map((i) => [i.id, `${i.status}|${i.priority}|${i.teamId}`]));
-    if (favPrev.current)
-      for (const [id, sig] of favs) {
-        const was = favPrev.current.get(id);
-        if (!was || was === sig) continue;
-        const i = incidents.get(id)!;
-        const [st, pr, tm] = was.split('|');
-        const text = i.status === 'resolved' && st !== 'resolved' ? 'решён' : i.teamId !== tm ? `передан: ${teamName(i.teamId)}` : i.priority !== pr ? `уровень: ${PRIO[i.priority]}` : 'изменился статус';
-        push({ kind: 'fav', inc: i, text });
-      }
-    favPrev.current = favs;
-  }, [incidents, push]);
-  // напоминания из избранного и «не забудьте» — по часам, а не по событиям
-  const fired = useRef(new Set<string>());
-  const lastForgot = useRef(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => {
-      const now = Date.now();
-      const all = [...getState().incidents.values()];
-      for (const i of all)
-        if (i.pin?.remindAt && i.pin.remindAt <= now && now - i.pin.remindAt < 10 * 60_000) {
-          const k = `${i.id}:${i.pin.remindAt}`;
-          if (!fired.current.has(k)) (fired.current.add(k), push({ kind: 'remind', inc: i, text: i.pin.note || 'напоминание' }));
-        }
-      if (now - lastForgot.current >= FORGOT_EVERY) {
-        lastForgot.current = now;
-        const snap = dashSnapshot(all, now, { onlyFile: dRef.current.onlyFile });
-        const top = snap.forgotten[0];
-        if (top) push({ kind: 'forgot', inc: top.inc, text: `${snap.forgotten.length} важн. без внимания · ${fmtShort(top.idle)}` });
-      }
-    }, 15_000);
-    return () => clearInterval(t);
-  }, [push]);
-  useDashEvents(
-    useCallback(
-      (e) => {
-        if (e.type !== 'test-alarm') return;
-        const any = [...incidents.values()].find((i) => i.status !== 'resolved') ?? [...incidents.values()][0];
-        if (any) push({ kind: e.kind, inc: any, test: true });
-      },
-      [incidents, push],
-    ),
-  );
-  useEffect(() => {
-    if (!list.length) return;
-    const t = setInterval(() => setList((l) => l.filter((a) => a.until > Date.now())), 1000);
-    return () => clearInterval(t);
-  }, [list.length]);
-  const dismiss = useCallback((key?: string) => setList((l) => (key ? l.filter((a) => a.key !== key) : l.slice(1))), []);
-  return useMemo(() => ({ list, top: list[0] ?? null, dismiss }), [list, dismiss]);
-}
-
-/** Уведомления стены — полосой между шапкой и блоками: ничего не закрывают, до трёх сразу, сами уходят. */
-const ALERT_TITLE = { crit: 'Новый критический', resolved: 'Критический решён', coord: 'Передать в команду', remind: 'Напоминание из избранного', fav: 'Избранное', forgot: 'Не забудьте' };
-function AlertStrip({ list, now, onClose, onOpen }: { list: Alert[]; now: number; onClose: (key?: string) => void; onOpen: (id: string) => void }) {
-  return (
-    <div className="dash-alerts" role="alert">
-      {list.slice(0, 3).map((a) => {
-        const i = a.inc;
-        return (
-          <div key={a.key} className={`dal k-${a.kind}`}>
-            <button className="dal-in" onClick={() => onOpen(i.id)} title="Показать крупно">
-              {a.kind === 'resolved' ? <CheckCircle2 size={20} /> : a.kind === 'fav' || a.kind === 'remind' ? <Star size={20} /> : a.kind === 'forgot' ? <Eye size={20} /> : <BellRing size={20} />}
-              <span className="dal-t">
-                <small>
-                  {ALERT_TITLE[a.kind]}
-                  {a.test ? ' · проверка' : ''}
-                </small>
-                <b>{i.title}</b>
-                {a.text && <em>{a.text}</em>}
-              </span>
-              <span className="dal-r num">{a.kind === 'resolved' ? `за ${fmtShort((i.resolvedAt ?? now) - i.createdAt)}` : i.status === 'resolved' ? '✓' : leftText(i, now)}</span>
-            </button>
-            <button className="dal-x" onClick={() => onClose(a.key)} aria-label="Скрыть">
-              <X size={15} />
-            </button>
-            <i className="dal-life" style={{ animationDuration: `${ALERT_MS[a.kind]}ms` }} />
-          </div>
-        );
-      })}
-      {list.length > 3 && <span className="dal-more">ещё {list.length - 3}</span>}
-    </div>
   );
 }
 

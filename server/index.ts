@@ -194,7 +194,7 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       return;
     }
 
-    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve|comment|pin|unpin|seen)$/);
+    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve|comment|pin|unpin|seen|reopen)$/);
     if (m) {
       const [, id, what] = m;
       const inc = point.incidents.get(id);
@@ -223,6 +223,7 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       if (what === 'pin') return json(res, 200, point.pin(id, actor, str(body.note), Number(body.remindMin) || null));
       if (what === 'unpin') return json(res, 200, point.unpin(id, actor));
       if (what === 'seen') return json(res, 200, point.seen(id, actor));
+      if (what === 'reopen') return json(res, 200, point.reopen(id, actor));
     }
 
     // ─── Джарвис: голосовой помощник дежурного ───
@@ -446,6 +447,18 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
         return json(res, 200, { startedAt: o.start, service: o.service, regionIds: o.regionIds });
       }
       if (step === 'actor') return json(res, 200, { text: await actorLine(str(body.goal), str(body.last), str(body.fallback)) });
+      // Показ «решили, а жалобы снова»: команда закрывает инцидент из жалоб, а сбой продолжается.
+      if (step === 'recur') {
+        const now = Date.now();
+        let target = [...point.incidents.values()].filter((i) => i.origin === 'complaints' && i.status !== 'resolved' && i.teamId && i.teamId !== POINT_ID && i.regionIds?.length).sort((a, b) => b.createdAt - a.createdAt)[0];
+        if (target) {
+          const eng = membersOf(target.teamId!).find((x) => x.role === 'engineer') ?? membersOf(target.teamId!)[0];
+          point.resolveByTeam(target.id, target.assignee ?? eng?.id ?? '', 'Перезапустили сервис, жалобы прекратились');
+        } else target = [...point.incidents.values()].filter((i) => i.origin === 'complaints' && i.status === 'resolved' && i.resolvedAt && now - i.resolvedAt < 30 * 60_000 && i.regionIds?.length).sort((a, b) => (b.resolvedAt ?? 0) - (a.resolvedAt ?? 0))[0];
+        if (!target) throw new Error('Пока нет инцидента из жалоб у команды — подождите минуту, пока ИИ соберёт и пункт передаст');
+        point.outage(target.service, target.regionIds!, 4, 0.9);
+        return json(res, 200, { id: target.id, title: target.title });
+      }
       const inc = point.incidents.get(str(body.id));
       const team = inc ? teamById(inc.teamId) : undefined;
       if (!inc || !team) throw new Error('Инцидент ещё не передан команде');

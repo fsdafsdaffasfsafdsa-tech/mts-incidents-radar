@@ -520,7 +520,7 @@ export { GroupTags, fmtShort };
 
 // ─── «Не забыть»: подсовывает важные некритические, на которые давно никто не смотрел ───
 export function ForgotBlock({ ctx }: { ctx: BlockCtx }) {
-  // то, что и так вверху «Требует действия», здесь не повторяем
+  // то, что и так вверху «Кому распределить», здесь не повторяем
   const top = new Set(ctx.snap.action.slice(0, 3).map((x) => x.inc.id));
   const list = ctx.snap.forgotten.filter((x) => !top.has(x.inc.id));
   const [k, setK] = useState(0);

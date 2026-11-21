@@ -1,12 +1,13 @@
 // Карточка инцидента для пункта — по шагам: 1) что случилось, 2) что советует ИИ и почему, 3) ваше решение.
 import { useEffect, useMemo, useState } from 'react';
-import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, Send, Siren, Star, UserCheck, X } from 'lucide-react';
+import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, RotateCcw, Send, Siren, Star, UserCheck, X } from 'lucide-react';
 import { openFav } from './FavDialog';
 import type { Incident, Priority } from '../../shared/types';
 import { PRIORITY_TEXT } from '../../shared/types';
 import { FORECAST_TEXT, forecast } from '../../shared/forecast';
 import { SCHEDULE_TEXT } from '../../shared/schedule';
-import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, readLocal, resolveAtPoint, routeTo, setLevel, takeAtPoint, useStore, writeLocal, itsmLink } from '../store';
+import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, readLocal, resolveAtPoint, routeTo, setLevel, takeAtPoint, useStore, writeLocal, itsmLink, reopenIncident } from '../store';
+import { RECUR_MIN } from '../../shared/dash';
 import { fmtClock } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, PRIO_COLORS, PrioDot } from './ui';
@@ -68,8 +69,11 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
     });
   const stepH = (k: string) => ({ role: 'button', tabIndex: 0, onClick: () => toggle(k), onKeyDown: (e: React.KeyboardEvent) => e.key === 'Enter' && toggle(k), 'aria-expanded': !closed.has(k) });
   // Одна главная кнопка в шапке — самое нужное сейчас действие.
+  const recurring = !open && !!inc.recur && inc.recur.count >= RECUR_MIN;
   const primary =
-    !open || me.role !== 'coordinator'
+    recurring && me.role === 'coordinator'
+      ? { label: `Снова жалобы (${inc.recur!.count}) — вернуть в работу`, cls: 'btn-danger', icon: RotateCcw, run: () => void reopenIncident(inc.id) }
+      : !open || me.role !== 'coordinator'
       ? null
       : inc.p1Proposal && inc.priority !== 'P1'
         ? { label: 'Поднять до «Наивысшего»', cls: 'btn-danger', icon: Siren, run: () => answerP1(inc.id, true) }

@@ -80,7 +80,8 @@ const PRESSURE_SPAN = 120 * MIN; // давление срока растёт з�
  * высокий со сроком через 10 минут срочнее критического, у которого в запасе 4 часа.
  */
 export function urgencyScore(i: Incident, now: number): number {
-  if (i.status === 'resolved') return 0;
+  // решили, а жалобы снова идут — срочнее почти всего: проблема не устранена, а все думают, что всё хорошо
+  if (i.status === 'resolved') return isRecurring(i, now) ? 150 + Math.min(30, i.recur!.count) : 0;
   const left = i.slaDeadline - now;
   const pressure = left <= 0 ? 100 : 100 * Math.pow(Math.max(0, 1 - left / PRESSURE_SPAN), 1.5);
   let s = BASE[i.priority] + PRESSURE[i.priority] * pressure;
@@ -101,7 +102,7 @@ export interface Attention {
 }
 /** Почему инцидент требует действия (коротко) и насколько срочно. null — действия не требует. */
 export function attention(i: Incident, now: number): Attention | null {
-  if (i.status === 'resolved') return null;
+  if (i.status === 'resolved') return isRecurring(i, now) ? { score: urgencyScore(i, now), reason: `Снова жалобы · ${i.recur!.count}`, tone: 'crit' } : null;
   const left = i.slaDeadline - now;
   const w = waitingTake(i, now);
   const t = transferCount(i);
@@ -123,6 +124,12 @@ export function attention(i: Incident, now: number): Attention | null {
   if (isResearch(i)) return { score, reason: 'Разбор причин', tone: 'info' };
   return null;
 }
+
+// ─── «Решили, а жалобы снова идут» ───
+/** Сколько жалоб после решения поднимает сигнал (сервер ещё сравнивает с фоном). */
+export const RECUR_MIN = 3;
+/** Решённый инцидент, по которому снова идут жалобы, — его надо вернуть в работу. */
+export const isRecurring = (i: Incident, now: number) => i.status === 'resolved' && !!i.recur && i.recur.count >= RECUR_MIN && now - i.recur.lastAt < 20 * MIN;
 
 // ─── «Не забыть»: важные некритические, на которые давно никто не смотрел ───
 export const FORGET_MIN = 20;
@@ -157,7 +164,7 @@ export function fmtShort(ms: number): string {
 
 // ─── снимок для стены ──────────────────────────────────────────────────────
 export interface DashSnapshot {
-  counts: Record<DashGroup, number> & { threat: number; notTaken: number; pingpong: number; doneHour: number; open: number; atTeams: number };
+  counts: Record<DashGroup, number> & { threat: number; notTaken: number; pingpong: number; doneHour: number; open: number; atTeams: number; recur: number };
   action: { inc: Incident; att: Attention }[]; // по убыванию срочности
   work: Incident[]; // у команд, по сроку
   byGroup: Record<DashGroup, Incident[]>;
@@ -173,8 +180,9 @@ export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filte
   for (const i of open) for (const g of groupsOf(i)) byGroup[g].push(i);
   for (const g of Object.keys(byGroup) as DashGroup[]) byGroup[g].sort((a, b) => a.slaDeadline - b.slaDeadline);
   const inFilter = (i: Incident) => !opts.filter || groupsOf(i).includes(opts.filter);
-  const action = open
-    .filter(inFilter)
+  const recurring = list.filter((i) => isRecurring(i, now)); // решили, а жалобы снова — тоже требуют действия
+  const action = [...open, ...recurring]
+    .filter((i) => i.status === 'resolved' || inFilter(i))
     .map((inc) => ({ inc, att: attention(inc, now) }))
     .filter((x): x is { inc: Incident; att: Attention } => !!x.att)
     .sort((a, b) => b.att.score - a.att.score || a.inc.slaDeadline - b.inc.slaDeadline);
@@ -191,6 +199,7 @@ export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filte
       doneHour: list.filter((i) => i.status === 'resolved' && i.resolvedAt && now - i.resolvedAt < 3_600_000).length,
       open: open.length,
       atTeams: open.filter((i) => i.status !== 'coordinators').length,
+      recur: recurring.length,
     },
     action,
     work,
@@ -216,7 +225,7 @@ export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
   { id: 'own', name: 'Своё' },
 ];
 export const BLOCKS: { id: BlockId; name: string; hint: string; cat: BlockCat; icon: string }[] = [
-  { id: 'action', name: 'Требует действия', hint: 'всё, чем заняться сейчас — по срочности', cat: 'incidents', icon: 'bell' },
+  { id: 'action', name: 'Кому распределить', hint: 'распределить, закреплённые критические и высокие, остальное листается', cat: 'incidents', icon: 'bell' },
   { id: 'forgot', name: 'Не забыть', hint: 'важные некритические, на которые давно никто не смотрел — подсовывает по очереди', cat: 'incidents', icon: 'eye' },
   { id: 'favs', name: 'Избранное смены', hint: 'закреплённые инциденты с заметками и напоминаниями', cat: 'incidents', icon: 'star' },
   { id: 'work', name: 'В работе у команд', hint: 'таблица: сколько в работе, срок, передачи, команда', cat: 'incidents', icon: 'table' },
@@ -245,12 +254,48 @@ export interface DashColumn {
   scale?: number; // размер текста блока, 0.7–1.6
   opts?: Record<string, boolean | number | string>; // собственные настройки блока
 }
-export type PresetId = 'case' | 'board' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
+export type PresetId = 'base' | 'base-wall' | 'base-work' | 'case' | 'board' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
 export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashColumn[]; grid?: { block: BlockId; x: number; y: number; w: number; h: number; opts?: Record<string, boolean | number | string> }[]; filter?: DashGroup | null; density?: 'normal' | 'large' }[] = [
+  {
+    id: 'base',
+    name: 'Базовая: всё по кейсу',
+    hint: 'кому распределить, четыре группы, «не забыть» и избранное — все метрики кейса на одном экране',
+    columns: [],
+    grid: [
+      { block: 'action', x: 0, y: 0, w: 5, h: 12 },
+      { block: 'groups', x: 5, y: 0, w: 7, h: 7 },
+      { block: 'forgot', x: 5, y: 7, w: 3, h: 5 },
+      { block: 'favs', x: 8, y: 7, w: 4, h: 5 },
+    ],
+  },
+  {
+    id: 'base-wall',
+    name: 'Базовая: стена издалека',
+    hint: 'крупно: кому распределить, критические и на координаторах',
+    columns: [],
+    density: 'large',
+    grid: [
+      { block: 'action', x: 0, y: 0, w: 6, h: 12 },
+      { block: 'group', x: 6, y: 0, w: 6, h: 6, opts: { group: 'crit' } },
+      { block: 'group', x: 6, y: 6, w: 6, h: 6, opts: { group: 'coord' } },
+    ],
+  },
+  {
+    id: 'base-work',
+    name: 'Базовая: второй монитор',
+    hint: 'рядом с рабочим местом: кому распределить, в работе у команд, помощник и избранное',
+    columns: [],
+    grid: [
+      { block: 'action', x: 0, y: 0, w: 5, h: 12 },
+      { block: 'work', x: 5, y: 0, w: 4, h: 12 },
+      { block: 'rotate', x: 9, y: 0, w: 3, h: 7 },
+      { block: 'favs', x: 9, y: 7, w: 3, h: 5 },
+    ],
+  },
   {
     id: 'case',
     name: 'Кейс: три экрана',
-    hint: 'слева помощник и «не забыть», в центре — что требует действия, справа — в работе у команд и избранное',
+    hint: 'слева помощник и «не забыть», в центре — кому распределить, справа — в работе у команд и избранное',
     columns: [],
     grid: [
       { block: 'rotate', x: 0, y: 0, w: 3, h: 7 },
@@ -263,7 +308,7 @@ export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashC
   {
     id: 'board',
     name: 'Свободное поле',
-    hint: 'персонаж, риск, что требует действия, критические и работа команд — блоками на поле',
+    hint: 'персонаж, риск, кому распределить, критические и работа команд — блоками на поле',
     columns: [],
     grid: [
       { block: 'character', x: 0, y: 0, w: 3, h: 5, opts: { persona: 'jarvis' } },
@@ -277,7 +322,7 @@ export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashC
   { id: 'ai', name: 'ИИ-центр', hint: 'помощник, действия и история передач', columns: [{ block: 'assistant', width: 1.1 }, { block: 'action', width: 1.5 }, { block: 'transfers', width: 1 }] },
   { id: 'critical', name: 'Только критичное', hint: 'критические крупно и их история', columns: [{ block: 'action', width: 2 }, { block: 'transfers', width: 1 }], filter: 'crit', density: 'large' },
   { id: 'night', name: 'Ночь, крупно', hint: 'две колонки крупным шрифтом — видно издалека', columns: [{ block: 'action', width: 1 }, { block: 'work', width: 1 }], density: 'large' },
-  { id: 'map', name: 'С картой', hint: 'цифры, карта жалоб и что требует действия', columns: [{ block: 'stats', width: 1 }, { block: 'map', width: 1.8 }, { block: 'action', width: 1.2 }] },
+  { id: 'map', name: 'С картой', hint: 'цифры, карта жалоб и кому распределить', columns: [{ block: 'stats', width: 1 }, { block: 'map', width: 1.8 }, { block: 'action', width: 1.2 }] },
   { id: 'legacy', name: 'Прежняя стена', hint: 'стена, которая была раньше: часы, карта, «горит сейчас»', columns: [] },
 ];
 export const PRESET_NAME: Record<PresetId, string> = Object.fromEntries(PRESETS.map((p) => [p.id, p.name])) as Record<PresetId, string>;

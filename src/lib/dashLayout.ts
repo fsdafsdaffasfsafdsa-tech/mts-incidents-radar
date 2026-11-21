@@ -2,6 +2,7 @@
 // и сразу доходят до окна стены, открытого отдельно (событие storage) — Джарвис в окне дежурного
 // перестраивает стену на соседнем экране.
 import { useEffect, useState } from 'react';
+import type { AlertKind } from '../../shared/attention';
 import { BLOCKS, PRESETS, type BlockId, type DashColumn, type DashGroup, type DashOp, type PresetId } from '../../shared/dash';
 import { DASH_STYLE_IDS, dashStyleById, type DashStyle } from '../../shared/dashStyles';
 import { DEFAULT_SIZE, addItem, columnsToItems, newId, normalize, readingOrder, removeItem, swapItems, widen, type GridItem } from '../../shared/dashGrid';
@@ -137,7 +138,7 @@ export function useDash(): DashLayout {
 type Ev =
   | { type: 'focus'; id: string | null }
   | { type: 'settings'; open: boolean }
-  | { type: 'test-alarm'; kind: 'crit' | 'resolved' | 'coord' }
+  | { type: 'test-alarm'; kind: AlertKind }
   | { type: 'designing'; text: string | null }
   | { type: 'edit'; on: boolean; id?: string | null }
   | { type: 'gallery'; open: boolean; at?: { x: number; y: number } | null };

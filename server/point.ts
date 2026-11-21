@@ -2,10 +2,11 @@
 // Люди за экранами действуют сами; за тех, кто сейчас не в системе, работает автопилот (для демо).
 import { PRIORITY_SLA_MIN, PRIORITY_TEXT, type Cluster, type Complaint, type FeedEvent, type FeedKind, type Incident, type Person, type PointMessage, type Priority, type Signal, type Stats, type Status, type TeamRequest } from '../shared/types.ts';
 import { RAW, employeeLogin, groupByName, priorityFromId, productByName, serviceName, type RawIncident } from './catalog.ts';
-import { ComplaintStream, RULES, findClusters, higher, isIncidentCluster, makeComplaint, nextAutoLevel, summarize, targetLevel } from './complaints.ts';
+import { ComplaintStream, RULES, findClusters, higher, isIncidentCluster, makeComplaint, nextAutoLevel, summarize, targetLevel, expected } from './complaints.ts';
 import { POINT_ID, POINT_STAFF, isOn, itsmTeam, membersOf, onShift, personById, serviceDef, teamById, teamOnDuty } from './directory.ts';
 import { TIMERS, checkTransfer, planPoint, routeTeams, stuckReason, type PointCtx, type PointPlanItem } from './ai-point.ts';
 import { regionById } from './regions.ts';
+import { RECUR_MIN } from '../shared/dash.ts';
 
 type Listener = (m: PointMessage) => void;
 const MIN = 60_000;
@@ -34,6 +35,9 @@ export interface PointSaved {
   signals: Signal[];
   feed: FeedEvent[];
 }
+
+/** После решения ещё столько следим, не пошли ли жалобы снова. */
+const RECUR_WINDOW = 40 * MIN;
 
 export class Point {
   incidents = new Map<string, Incident>();
@@ -369,9 +373,87 @@ export class Point {
       c.incidentId = inc.id;
       inc.complaints = (inc.complaints ?? 0) + 1;
       this.dirty.add(inc.id);
+    } else {
+      // Решённый недавно по тому же сервису и региону — жалобы после решения: проблема, похоже, не устранена.
+      const done = this.resolvedFor(c.service, c.regionId, c.at);
+      if (done) this.recurComplaint(done, c);
     }
     this.complaints.push(c);
     this.buffer.push(c);
+  }
+
+  private resolvedFor(service: string, regionId: string, at: number) {
+    for (const i of this.incidents.values()) {
+      if (i.origin === 'complaints' && i.status === 'resolved' && i.resolvedAt && at - i.resolvedAt < RECUR_WINDOW && i.service === service && (i.regionIds ?? []).includes(regionId)) return i;
+    }
+    return undefined;
+  }
+
+  /** Жалоба после решения. Сигнал — когда за 15 минут их набралось заметно больше фона (не меньше RECUR_MIN). */
+  private recurComplaint(inc: Incident, c: Complaint) {
+    c.incidentId = inc.id;
+    inc.complaints = (inc.complaints ?? 0) + 1;
+    const team = inc.teamId && inc.teamId !== POINT_ID ? teamById(inc.teamId)?.name ?? null : null;
+    const resolvedBy = [...inc.history].reverse().find((h) => /: решено$/.test(h.text))?.actor ?? null;
+    const r = inc.recur ?? { count: 0, since: c.at, lastAt: c.at, team, resolvedBy };
+    const wasOn = r.count >= RECUR_MIN;
+    const recent = this.complaints.filter((x) => x.incidentId === inc.id && x.at >= (inc.resolvedAt ?? 0) && c.at - x.at < 15 * MIN).length + 1;
+    // фон — по всем регионам инцидента: у сбоя на восемь регионов и фоновых жалоб в восемь раз больше
+    const bg = (inc.regionIds?.length ? inc.regionIds : [c.regionId]).reduce((a, r) => a + expected(inc.service, r, 15), 0);
+    const need = Math.max(RECUR_MIN, Math.ceil(bg * 3));
+    r.lastAt = c.at;
+    r.count = wasOn ? r.count + 1 : recent >= need ? recent : Math.min(recent, RECUR_MIN - 1);
+    inc.recur = r;
+    if (!wasOn && r.count >= RECUR_MIN) {
+      inc.history.push({ at: c.at, kind: 'ai', text: `ИИ: после решения снова жалобы — ${r.count} за ${Math.max(1, Math.round((c.at - r.since) / MIN))} мин. Похоже, проблема не устранена` });
+      this.touch(inc, c.at);
+      this.pushFeed('recur', inc, `Решён, но снова жалобы: ${r.count}`);
+    } else this.dirty.add(inc.id);
+  }
+
+  /** Вернуть решённый инцидент в работу: той же команде (или на пункт, если команды нет). */
+  reopen(id: string, actor: string) {
+    const inc = this.need(id);
+    if (inc.status !== 'resolved') throw new Error('Инцидент ещё не решён');
+    const now = Date.now();
+    const n = inc.recur?.count ?? 0;
+    const team = inc.teamId && inc.teamId !== POINT_ID ? teamById(inc.teamId) : undefined;
+    const h = this.hidden.get(id);
+    inc.resolvedAt = null;
+    inc.stateReason = null;
+    inc.recur = null;
+    inc.slaDeadline = now + PRIORITY_SLA_MIN[inc.priority] * MIN;
+    inc.assignee = null;
+    inc.assigneeName = null;
+    inc.startedAt = null;
+    inc.escalation = 0;
+    if (team) {
+      inc.status = 'assigned';
+      inc.stateText = 'Назначен';
+      inc.routedAt = now;
+      if (h) {
+        h.acceptAt = teamOnDuty(team.id, now) ? now + between(30, 90) * 1000 : null;
+        h.finishAt = null;
+        h.roll = 'ok';
+        h.rollDone = true;
+      }
+    } else {
+      inc.status = 'coordinators';
+      inc.stateText = 'Назначен';
+      inc.teamId = POINT_ID;
+      if (h) {
+        h.pointAt = now;
+        h.routeAt = null;
+      }
+    }
+    if (h) {
+      h.warned = false;
+      h.breached = false;
+    }
+    inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: вернул в работу${team ? ` — команде «${team.name}»` : ' на пункт'}: после решения снова жалобы${n ? ` (${n})` : ''}` });
+    this.touch(inc, now);
+    this.pushFeed('reopened', inc, `Возвращён в работу: снова жалобы`, actor);
+    return inc;
   }
 
   private openFor(service: string, regionId: string) {
@@ -580,7 +662,7 @@ export class Point {
   private cleanup(now: number) {
     this.complaints = this.complaints.filter((c) => now - c.at < KEEP_COMPLAINTS);
     for (const inc of [...this.incidents.values()]) {
-      if (inc.origin !== 'dataset' && inc.status === 'resolved' && inc.resolvedAt && now - inc.resolvedAt > 40 * MIN) {
+      if (inc.origin !== 'dataset' && inc.status === 'resolved' && inc.resolvedAt && now - inc.resolvedAt > RECUR_WINDOW && !(inc.recur && now - inc.recur.lastAt < 20 * MIN)) {
         this.incidents.delete(inc.id);
         this.hidden.delete(inc.id);
         this.emit({ type: 'remove', data: { id: inc.id } });
@@ -965,6 +1047,10 @@ export class Point {
     if (solution) inc.solution = solution;
     else if (!inc.solution) inc.solution = auto ? 'Причина устранена, сервис восстановлен' : null;
     this.finish(inc, p.name);
+    // Демо: иногда решение не помогает — через минуту-полторы жалобы по тому же сервису и региону идут снова.
+    if (auto && inc.origin === 'complaints' && inc.regionIds?.length && rnd() < 0.25) {
+      this.stream.start(inc.service, inc.regionIds, between(3, 5), between(0.3, 0.5), Date.now() + between(40, 90) * 1000);
+    }
     return inc;
   }
 

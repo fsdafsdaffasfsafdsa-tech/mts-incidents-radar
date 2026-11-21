@@ -4,7 +4,8 @@
 //   «Голос Джарвиса» — отвечает вслух живым голосом (говорящие модели OpenRouter, ключ на сервере), объявляет критические.
 // Разговор помнит, о каком инциденте речь: «объясни», «кому дать?», «выдай» — без номеров.
 import { useEffect, useRef, useState } from 'react';
-import { Activity, Check, Loader2, Lock, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
+import { Activity, Check, Loader2, Lock, Mic, MicOff, Pause, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
+import './jarvis-pause.css';
 import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
 import type { DashOp } from '../../shared/dash';
 import { PERSONAS, inGender, personaById } from '../../shared/personas';
@@ -204,7 +205,7 @@ export const jarvisReady = () => !!bridge;
 
 /** Объявить критический инцидент голосом: что случилось, где и что советует ИИ. */
 export function announceIncident(id: string, fallback: string) {
-  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce) return;
+  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce || jarvisPause.sleep) return;
   // Даём сирене прозвучать первой.
   setTimeout(async () => {
     let text = fallback;
@@ -221,10 +222,36 @@ export function announceIncident(id: string, fallback: string) {
 
 /** Сказать готовый текст об инциденте (например, прогноз) — если голос и объявления включены. */
 export function announceText(text: string, id: string) {
-  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce) return;
+  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce || jarvisPause.sleep) return;
   if (bridge) bridge.announce(text, id);
   else void say(text);
 }
+
+// ─── пауза ─────────────────────────────────────────────────────────────────
+/**
+ * sleep — «всё, пока не надо»: не говорит и не отвечает, слушает только «продолжаем работу»;
+ * mute — микрофон выключен кнопкой: не слышит ничего, пока не включат снова.
+ */
+export const jarvisPause = { sleep: false, mute: false };
+const pauseSubs = new Set<() => void>();
+function setPause(p: Partial<typeof jarvisPause>) {
+  Object.assign(jarvisPause, p);
+  pauseSubs.forEach((f) => f());
+}
+function usePause() {
+  const [, set] = useState(0);
+  useEffect(() => {
+    const f = () => set((x) => x + 1);
+    pauseSubs.add(f);
+    return () => void pauseSubs.delete(f);
+  }, []);
+  return jarvisPause;
+}
+const lowRu = (t: string) => t.toLowerCase().replace(/ё/g, 'е').trim();
+const STOP_RE = /(^|[\s,.!?])(стоп|хватит|стой|достаточно|замолчи|помолчи|тихо|прекрати)([\s,.!?]|$)/;
+const SLEEP_RE = /(вс[её],? ?(пока )?не надо|пока не надо|пауза|не слушай|отдохни|перерыв|отключись|помолчи пока|выключи микрофон|не мешай)/;
+const RESUME_RE = /(продолж|возвращайся|вернись|работаем|просыпайся|проснись|включись|снова в работу)/;
+const ACK_RE = /^(принял|принято|понял|вижу|ясно|ок|окей|хорошо|увидел)[.!]*$/;
 
 // ─── распознавание речи ────────────────────────────────────────────────────
 type Rec = {
@@ -494,6 +521,8 @@ function runActions(actions: Action[]) {
 // ─── шар и окно разговора ──────────────────────────────────────────────────
 export function Jarvis() {
   const prefs = usePrefs();
+  const pause = usePause();
+  const speakEnd = useRef(0); // когда закончил говорить — хвост собственного голоса не принимаем за команду
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [lines, setLines] = useState<Line[]>([]);
@@ -595,6 +624,29 @@ export function Jarvis() {
   async function ask(q: string): Promise<string> {
     const question = afterWake(q) || q.trim();
     if (!question || busy.current) return '';
+    const nq = lowRu(question);
+    // Написали или сказали на паузе — значит, снова нужен.
+    if (jarvisPause.sleep && !SLEEP_RE.test(nq)) {
+      if (RESUME_RE.test(nq) && nq.split(/\s+/).length <= 4) return resumeRef.current(), '';
+      setPause({ sleep: false });
+    }
+    // «Всё, пока не надо» — пауза; «принял» о срочном — подтверждение. Это решается здесь, без сервера.
+    if (SLEEP_RE.test(nq)) {
+      setLines((l) => [...l, { role: 'user', content: question }, { role: 'assistant', content: 'Хорошо, не мешаю. Скажите «продолжаем работу», когда понадоблюсь.' }]);
+      setAwaiting(false);
+      followUntil.current = 0;
+      if (jarvisPrefs.speak) await say('Хорошо, не мешаю. Скажите «продолжаем работу», когда понадоблюсь.');
+      speakEnd.current = Date.now();
+      setPause({ sleep: true });
+      return '';
+    }
+    if (ACK_RE.test(nq) && focus.current) {
+      window.dispatchEvent(new CustomEvent('radar:ack', { detail: focus.current }));
+      setLines((l) => [...l, { role: 'user', content: question }, { role: 'assistant', content: 'Принято.' }]);
+      if (jarvisPrefs.speak) await say('Принято.');
+      speakEnd.current = Date.now();
+      return 'Принято.';
+    }
     busy.current = true;
     setErr('');
     setHeard('');
@@ -638,6 +690,9 @@ export function Jarvis() {
       // (ответ виден подписью у шара; окно — по клику на шар).
       if (data.actions?.some((a) => a.type === 'show') && window.innerWidth < 2200) setOpen(false);
       if (jarvisPrefs.speak || jarvisPrefs.scenario) await say(data.reply);
+      speakEnd.current = Date.now();
+      // сделал что-то по инциденту из срочного — срочное на стене считаем принятым
+      if (data.done?.length && focus.current) window.dispatchEvent(new CustomEvent('radar:ack', { detail: focus.current }));
       setPhase('idle');
       follow();
       return data.reply;
@@ -697,11 +752,71 @@ export function Jarvis() {
     r.start();
   }
 
+  /** Распознал собственную реплику (колонки → микрофон) — не команда. */
+  function isEcho(t: string) {
+    const last = [...linesRef.current].reverse().find((l) => l.role === 'assistant');
+    if (!last || Date.now() - speakEnd.current > 6000) return false;
+    const words = lowRu(t).split(/[^а-яa-z0-9]+/).filter((w) => w.length > 3);
+    if (words.length < 3) return false;
+    const said = lowRu(last.content);
+    return words.filter((w) => said.includes(w)).length / words.length >= 0.6;
+  }
+  function resume() {
+    setPause({ sleep: false });
+    setOpen(true);
+    const t = 'Продолжаем. Слушаю.';
+    setLines((l) => [...l, { role: 'assistant', content: t }]);
+    if (jarvisPrefs.speak) void say(t).then(() => ((speakEnd.current = Date.now()), follow()));
+    else follow();
+  }
+  const resumeRef = useRef(resume);
+  resumeRef.current = resume;
+  function toggleMute() {
+    unlockJarvisAudio();
+    const mute = !jarvisPause.mute;
+    setPause(mute ? { mute: true } : { mute: false, sleep: false });
+    if (!mute) {
+      setErr('');
+      follow();
+    }
+  }
+  function stopTalking() {
+    stopVoice();
+    speakEnd.current = Date.now();
+    setPhase('idle');
+    follow();
+  }
+  // Esc — замолчать.
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && phase === 'speak' && stopTalking();
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Режим «управляет экраном»: слушаем всегда, пока Джарвис не думает и не говорит.
   // Фраза со словом «Джарвис» — команда; после ответа несколько секунд можно продолжать без него.
   function onHeard(t: string, final: boolean) {
+    const low = lowRu(t);
+    // Говорит — слышит только «стоп», «хватит»: можно перебить голосом.
+    if (phase === 'speak') {
+      if (STOP_RE.test(low)) {
+        stopVoice();
+        speakEnd.current = Date.now();
+        setPhase('idle');
+        setHeard('');
+        follow();
+      }
+      return;
+    }
+    // Пауза — ждём только «продолжаем работу».
+    if (jarvisPause.sleep) {
+      if (final && RESUME_RE.test(low)) resume();
+      return;
+    }
     if (busy.current || phase !== 'idle') return;
     const now = Date.now();
+    if (now - speakEnd.current < 1200) return; // хвост собственного голоса
+    if (final && isEcho(t)) return;
     const live = now < followUntil.current;
     if (!final) {
       if (live) {
@@ -742,8 +857,8 @@ export function Jarvis() {
     };
   }, []);
   useEffect(() => {
-    ear.set(!!RecCtor && control && !prefs.scenario && !micDenied && phase === 'idle');
-  }, [control, micDenied, phase, prefs.scenario]);
+    ear.set(!!RecCtor && control && !prefs.scenario && !micDenied && !pause.mute && (phase === 'idle' || phase === 'speak'));
+  }, [control, micDenied, phase, prefs.scenario, pause.mute]);
   // Сторож: раз в 2 с и при возвращении на вкладку поднимает слух, если браузер его уронил.
   useEffect(() => {
     if (!control) return;
@@ -759,11 +874,11 @@ export function Jarvis() {
   // Нажали на шар или клавишу V.
   function press() {
     unlockJarvisAudio();
-    if (phase === 'speak') {
-      stopVoice();
-      setPhase('idle');
-      follow();
-      return;
+    if (phase === 'speak') return stopTalking();
+    if (jarvisPause.sleep || jarvisPause.mute) {
+      setPause({ sleep: false, mute: false });
+      setOpen(true);
+      return follow();
     }
     setOpen(true);
     if (control) {
@@ -785,11 +900,14 @@ export function Jarvis() {
 
   // Подпись — по настоящему состоянию микрофона, а не по таймеру.
   const hearing = control ? earState === 'on' : phase === 'listen';
-  const label =
-    phase === 'think'
+  const label = pause.mute
+    ? 'Микрофон выключен — нажмите, чтобы включить'
+    : pause.sleep && phase === 'idle'
+      ? 'Пауза — скажите «продолжаем работу»'
+      : phase === 'think'
       ? 'Думаю…'
       : phase === 'speak'
-        ? 'Говорю… (нажмите, чтобы прервать)'
+        ? 'Говорю… «стоп» — прервать'
         : !control
           ? phase === 'listen'
             ? 'Слушаю…'
@@ -809,7 +927,7 @@ export function Jarvis() {
   const workVisible = prefs.work && steps.length > 0 && (phase === 'think' || Date.now() - stepsAt < 7000);
 
   return (
-    <div className={`jv jv-${phase} ${awaiting && (hearing || !control) ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>
+    <div className={`jv jv-${phase} ${pause.sleep ? 'jv-sleep' : ''} ${pause.mute ? 'jv-mute' : ''} ${awaiting && (hearing || !control) && !pause.sleep ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>
       {open && (
         <div className="jv-panel" role="dialog" aria-label="Джарвис — голосовой помощник">
           <div className="jv-head">
@@ -934,7 +1052,27 @@ export function Jarvis() {
         </div>
       )}
       <div className="jv-dock">
-        {(phase !== 'idle' || awaiting || (control && (!open || !hearing))) && <span className={`jv-label ${control && phase === 'idle' && !hearing ? 'warn' : ''}`}>{label}</span>}
+        {(phase !== 'idle' || awaiting || pause.sleep || pause.mute || (control && (!open || !hearing))) && <span className={`jv-label ${control && phase === 'idle' && !hearing && !pause.mute ? 'warn' : ''}`}>{label}</span>}
+        {phase === 'speak' && (
+          <button className="jv-stop" onClick={stopTalking} title="Замолчать (Esc или скажите «стоп»)">
+            <Square size={13} /> Стоп
+          </button>
+        )}
+        {control && phase !== 'speak' && (
+          <span className="jv-pausebar">
+            <button className={`jv-pbtn ${pause.mute ? 'on' : ''}`} onClick={toggleMute} title={pause.mute ? 'Включить микрофон' : 'Выключить микрофон — Джарвис перестанет слушать'} aria-label={pause.mute ? 'Включить микрофон' : 'Выключить микрофон'}>
+              {pause.mute ? <MicOff size={15} /> : <Mic size={15} />}
+            </button>
+            <button
+              className={`jv-pbtn ${pause.sleep ? 'on' : ''}`}
+              onClick={() => (pause.sleep ? resumeRef.current() : (setPause({ sleep: true }), stopVoice()))}
+              title={pause.sleep ? 'Продолжить работу' : 'Пауза: не отвечать и не объявлять, пока не скажете «продолжаем работу»'}
+              aria-label={pause.sleep ? 'Продолжить' : 'Пауза'}
+            >
+              <Pause size={15} />
+            </button>
+          </span>
+        )}
         <button
           ref={orb}
           className="jv-orb"

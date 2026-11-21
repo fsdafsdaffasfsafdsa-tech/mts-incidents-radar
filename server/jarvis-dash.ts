@@ -186,7 +186,7 @@ const BLOCK_WORDS: [RegExp, BlockId][] = [
   [/цифр|статист/, 'stats'],
   [/четыре групп|групп/, 'groups'],
   [/в работе|у команд|таблиц/, 'work'],
-  [/требует|действи|срочн/, 'action'],
+  [/требует|действи|срочн|распредел/, 'action'],
   [/сменяем|карусел/, 'rotate'],
 ];
 const findBlocks = (t: string) => BLOCK_WORDS.filter(([re]) => re.test(t)).map(([, b]) => b);
@@ -205,7 +205,7 @@ export function dashRules(t: string, c: DashCtx | null, run: (a: Record<string, 
   if (/(создай|придумай|собери|сделай)( мне)? (новый |свой )?блок/.test(t)) return ok(run({ op: '__block', prompt: t, character: false }), 'Собираю новый блок через ChatGPT, через несколько секунд он появится на стене.');
   if (/(придумай|нарисуй|сделай|создай|оформи).*(дизайн|оформлени|стил|в цветах|в духе)/.test(t) && !style) return ok(run({ op: '__design', prompt: t }), 'Придумываю оформление через ChatGPT, сэр. Через несколько секунд стена изменится.');
   if (/раскладк|режим|вид стены/.test(t)) {
-    const p = /четыре групп|групп/.test(t) ? 'groups' : /ии.?центр|помощник/.test(t) ? 'ai' : /критичн/.test(t) ? 'critical' : /ноч/.test(t) ? 'night' : /карт/.test(t) ? 'map' : /кейс|три экрана|основн/.test(t) ? 'case' : null;
+    const p = /базов.*(издалек|стен)/.test(t) ? 'base-wall' : /базов.*(монитор|рядом)/.test(t) ? 'base-work' : /базов/.test(t) ? 'base' : /четыре групп|групп/.test(t) ? 'groups' : /ии.?центр|помощник/.test(t) ? 'ai' : /критичн/.test(t) ? 'critical' : /ноч/.test(t) ? 'night' : /карт/.test(t) ? 'map' : /кейс|три экрана|основн/.test(t) ? 'case' : null;
     if (p) return ok(run({ op: 'preset', preset: p }), `Раскладка «${PRESET_NAME[p as PresetId]}», сэр.`);
   }
   if (/(все группы|сними фильтр|убери фильтр|покажи вс[её]|все инциденты)/.test(t)) return ok(run({ op: 'filter', group: 'all' }), 'Показываю все группы, сэр.');

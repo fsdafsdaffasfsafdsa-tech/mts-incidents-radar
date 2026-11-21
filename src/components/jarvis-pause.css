@@ -1,0 +1,63 @@
+/* Джарвис: пауза, выключенный микрофон, «Стоп» во время речи */
+.jv-pausebar {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.jv-pbtn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.jv-pbtn:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+.jv-pbtn.on {
+  background: var(--warn);
+  color: #1b1405;
+}
+.jv-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--p1);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  animation: pop 0.2s ease-out;
+}
+.jv-stop svg {
+  fill: currentColor;
+}
+/* пауза и выключенный микрофон — шар тусклый, без «живого» индикатора */
+.jv-sleep .jv-orb,
+.jv-mute .jv-orb {
+  filter: grayscale(0.85) brightness(0.8);
+  opacity: 0.75;
+}
+.jv-sleep .jv-live,
+.jv-mute .jv-live {
+  display: none;
+}
+.jv-sleep .jv-label,
+.jv-mute .jv-label {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}

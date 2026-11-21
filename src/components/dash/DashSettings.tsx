@@ -8,9 +8,11 @@ import { DASH_STYLES, type DashStyle } from '../../../shared/dashStyles';
 import { DEFAULT_DASH, applyDashOp, dashEvent, presetItems, setDash, useDash } from '../../lib/dashLayout';
 import { applyDesign, askDesign, type DesignTurn } from '../../lib/dashDesign';
 import { PersonaPicker, jarvisPrefs, setJarvisPref } from '../Jarvis';
+import { demoRecur } from '../../store';
 
 export function DashSettings({ onClose }: { onClose: () => void }) {
   const d = useDash();
+  const [demo, setDemo] = useState<string>('');
   return (
     <div className="dset-wrap" onClick={onClose}>
       <aside className="dset" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Настройки дашборда">
@@ -194,17 +196,39 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
           <label className="dset-check">
             <input type="checkbox" checked={d.sound} onChange={(e) => setDash({ sound: e.target.checked })} /> Звук тревоги
           </label>
+          <p className="dset-hint">
+            Три уровня: <b>срочно</b> — на весь экран, звук и голос помощника (новый критический, «решили, а жалобы снова», ИИ предлагает «Наивысший», критический не берут); <b>внимание</b> — полосой сверху (срок близко, не берут, напоминание); <b>инфо</b> — тихой строкой (решён, передан, взяли в работу).
+          </p>
           <div className="dset-row">
             <span>Проверить:</span>
             <button className="dset-btn" onClick={() => dashEvent({ type: 'test-alarm', kind: 'crit' })}>
-              Критический
+              Срочно: критический
             </button>
-            <button className="dset-btn" onClick={() => dashEvent({ type: 'test-alarm', kind: 'resolved' })}>
-              Решён
+            <button className="dset-btn" onClick={() => dashEvent({ type: 'test-alarm', kind: 'recur' })}>
+              Срочно: снова жалобы
             </button>
-            <button className="dset-btn" onClick={() => dashEvent({ type: 'test-alarm', kind: 'coord' })}>
-              На координаторах
+            <button className="dset-btn" onClick={() => dashEvent({ type: 'test-alarm', kind: 'slaHigh' })}>
+              Внимание: срок близко
             </button>
+            <button className="dset-btn" onClick={() => dashEvent({ type: 'test-alarm', kind: 'resolvedCrit' })}>
+              Критический решён
+            </button>
+          </div>
+          <div className="dset-row">
+            <span>Показ:</span>
+            <button
+              className="dset-btn"
+              disabled={demo === 'run'}
+              onClick={() => {
+                setDemo('run');
+                demoRecur()
+                  .then(() => setDemo('Команда закрыла инцидент, сбой продолжается — через полминуты на стене появится «Решили, а жалобы снова идут»'))
+                  .catch((e: unknown) => setDemo(e instanceof Error ? e.message : String(e)));
+              }}
+            >
+              Решили, а жалобы снова идут
+            </button>
+            {demo && demo !== 'run' && <small className="dset-hint">{demo}</small>}
           </div>
         </section>
 

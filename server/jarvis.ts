@@ -17,7 +17,7 @@ import { RULES } from './complaints.ts';
 import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
 import { myShiftWork } from '../shared/shift.ts';
 import type { DashOp } from '../shared/dash.ts';
-import { dashSnapshot, fmtShort } from '../shared/dash.ts';
+import { dashSnapshot, fmtShort, isRecurring } from '../shared/dash.ts';
 import { personaById } from '../shared/personas.ts';
 import { BLOCK_TOOL, DASH_NOTE, DASH_TOOL, DESIGN_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
 
@@ -267,6 +267,12 @@ const pinLine = (i: Incident, now: number) =>
 function caseLines(point: Point, now: number): string[] {
   const v = caseView(point, now);
   const out: string[] = [];
+  const recur = [...point.incidents.values()].filter((i) => isRecurring(i, now));
+  if (recur.length)
+    out.push(
+      'РЕШИЛИ, А ЖАЛОБЫ СНОВА ИДУТ (проблема не устранена — предложить вернуть в работу):',
+      ...recur.map((i) => `- id=${i.id}; «${i.title}»; решала ${i.recur?.team ?? 'команда'} ${fmtShort(now - (i.resolvedAt ?? now))} назад; после решения жалоб: ${i.recur?.count ?? 0}`),
+    );
   if (v.above.length) out.push('Срочнее самого срочного критического (короткий срок важнее уровня):', ...v.above.map((x) => `- ${shortLine(x.inc, now)}; почему: ${x.att.reason}`));
   if (v.forgotten.length) out.push('«Не забыть» — важные некритические, на которые никто не смотрел 20+ минут:', ...v.forgotten.map((x) => `- ${shortLine(x.inc, now)}; без внимания ${fmtShort(x.idle)}`));
   out.push(v.pinned.length ? 'Избранное смены (закрепили дежурные, с заметками):' : 'Избранное смены пусто.', ...v.pinned.map((i) => `- ${pinLine(i, now)}`));
@@ -414,6 +420,8 @@ class Exec {
         return `${v('Добавляю в избранное', 'Добавил в избранное')} «${t(a.id)}»`;
       case 'unpin_incident':
         return `${v('Убираю из избранного', 'Убрал из избранного')} «${t(a.id)}»`;
+      case 'reopen_incident':
+        return `${v('Возвращаю в работу', 'Вернул в работу')} «${t(a.id)}»`;
       case 'dashboard':
         return v('Перестраиваю видеостену', 'Перестроил видеостену');
       case 'design_dashboard':
@@ -610,6 +618,14 @@ class Exec {
         this.done.push(`Добавил в избранное «${inc.title}»${m ? `, напомню через ${m} мин` : ''}`);
         return 'ok';
       }
+      case 'reopen_incident': {
+        this.control();
+        const inc = this.inc(a.id);
+        p.reopen(inc.id, this.me.name);
+        this.actions.push({ type: 'open', id: inc.id });
+        this.done.push(`Вернул в работу «${inc.title}»${inc.teamId ? ` — команде «${teamName(inc.teamId)}»` : ''}`);
+        return 'ok';
+      }
       case 'unpin_incident': {
         this.control();
         const inc = this.inc(a.id);
@@ -680,6 +696,7 @@ const CONTROL_TOOLS = [
   fn('create_from_cluster', 'Создать инцидент из подозрительного всплеска жалоб', { key: { type: 'string' } }, ['key']),
   fn('pin_incident', 'Добавить инцидент в избранное смены (или изменить заметку): заметку и напоминание видит вся смена', { ...ID, note: { type: 'string', description: 'короткая заметка для смены' }, remind_min: { type: 'number', description: 'через сколько минут напомнить; 0 — без напоминания' } }, ['id']),
   fn('unpin_incident', 'Убрать инцидент из избранного смены', ID, ['id']),
+  fn('reopen_incident', 'Вернуть в работу решённый инцидент, по которому снова идут жалобы (той же команде)', ID, ['id']),
 ];
 
 const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощник дежурного координирующего пункта ИТ. Пункт получает жалобы абонентов, собирает инциденты и передаёт их в ~900 команд.
@@ -695,6 +712,8 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 - «Выдай», «давай», «передавай», «да, отдай» после твоего предложения — выполни именно то, что предложил.
 - «Он», «его», «этот» — инцидент в фокусе разговора или открытый на экране.
 - Главная мысль кейса: за критическими не потерять важные некритические. «Что я упускаю?», «что забыл?» — по разделу «Не забыть»; «что важнее критического?» — по разделу «Срочнее критического» (короткий срок у высокого может быть важнее критического). Спрашивают про общую обстановку — коротко упомяни и их, если есть.
+- Строки-события в истории — то, что ты сам только что объявил (срочное на стене). Ответ дежурного относится к этому инциденту: «беру», «взял», «взял в задачу» — take_incident; «верни», «да, верни в работу» про «жалобы снова идут» — reopen_incident; «подтверждаю» про «Наивысший» — answer_p1 confirm=true; «принял» — коротко подтверди.
+- «Решили, а жалобы снова идут» — проблема не устранена: предложи вернуть в работу той же команде (reopen_incident).
 - «Что в избранном?» — по разделу «Избранное смены»: что закреплено и какие заметки. «Закрепи», «в избранное», «напомни через N минут» — pin_incident с заметкой со слов дежурного; «убери из избранного» — unpin_incident.
 - Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.
 - Пометки «(Сделано: …)» в истории — действия, которые уже выполнены на самом деле. Не оспаривай их и не повторяй без просьбы.`;
@@ -816,7 +835,14 @@ function rules(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined)
     const r = tryRun('route_incident', { id: i.id });
     return say(r.startsWith('!') ? `Не вышло: ${r.slice(1)}.` : `Готово, сэр. ${ex.done.at(-1)}.`);
   }
-  if (/возьми|беру|забер/.test(text)) {
+  const fi = ex.focus ? point.incidents.get(ex.focus) : undefined;
+  if (/верни|вернуть|переоткр|снова в работу|возобнов/.test(text) || (/^(да|давай|ага|конечно)([\s,.!]|$)/.test(text) && fi && isRecurring(fi, now))) {
+    const i = (fi && fi.status === 'resolved' ? fi : undefined) ?? [...point.incidents.values()].find((x) => isRecurring(x, now));
+    if (!i) return say('Нет решённого инцидента, по которому снова идут жалобы, сэр.');
+    const r = tryRun('reopen_incident', { id: i.id });
+    return say(r.startsWith('!') ? `Не вышло: ${r.slice(1)}.` : `Вернул в работу, сэр: «${i.title}»${i.teamId ? ` — команде «${teamName(i.teamId)}»` : ''}.`);
+  }
+  if (/возьми|беру|берем|забер|взял|на себя|в задачу/.test(text)) {
     const i = focus();
     if (!i) return say('Какой инцидент взять, сэр?');
     const r = tryRun('take_incident', { id: i.id });

@@ -21,6 +21,7 @@ import type {
   TeamRequest,
 } from '../shared/types';
 import { configureSound, play, unlockAudio, type Cue, type SoundPack } from './lib/sound';
+import { RECUR_MIN } from '../shared/dash';
 import { themeById } from './lib/themes';
 import { DEFAULT_HOTKEYS, type HotAction } from './lib/hotkeys';
 
@@ -361,7 +362,10 @@ function onIncident(prev: Incident | undefined, inc: Incident) {
     return;
   }
   if (isPoint()) {
-    if (!prev && inc.status === 'coordinators') {
+    if (prev && inc.status === 'resolved' && (inc.recur?.count ?? 0) >= RECUR_MIN && (prev.recur?.count ?? 0) < RECUR_MIN) {
+      toast({ kind: 'p1', title: 'Решили, а жалобы снова идут', body: `${inc.title} · после решения ${inc.recur!.count} жалоб — вернуть в работу`, incidentId: inc.id, ttl: 20000 });
+      cue('p1');
+    } else if (!prev && inc.status === 'coordinators') {
       const p1 = inc.priority === 'P1';
       toast({ kind: p1 ? 'p1' : 'coord', title: inc.origin === 'complaints' ? 'ИИ собрал жалобы в инцидент' : 'Новый инцидент на пункте', body: inc.title, incidentId: inc.id, ttl: p1 ? 15000 : 7000 });
       cue(p1 ? 'p1' : 'coord');
@@ -553,6 +557,10 @@ export const itsmLink = (id: string) => (state.config?.itsmUrl ?? '/itsm/{id}').
 /** Избранное смены: закрепить инцидент с заметкой и напоминанием (видно всем дежурным). */
 export const pinIncident = (id: string, note: string, remindMin: number | null) => post(`/api/incidents/${encodeURIComponent(id)}/pin`, { note, remindMin }).catch(() => undefined);
 export const unpinIncident = (id: string) => post(`/api/incidents/${encodeURIComponent(id)}/unpin`).catch(() => undefined);
+/** Решили, а жалобы снова идут — вернуть в работу той же команде. */
+export const reopenIncident = (id: string) => quiet(post(`/api/incidents/${encodeURIComponent(id)}/reopen`));
+/** Демо: команда закрывает инцидент из жалоб, а жалобы продолжаются. */
+export const demoRecur = () => post('/api/demo/scenario', { step: 'recur' });
 /** Дежурный посмотрел инцидент — «Не забыть» перестаёт его подсовывать. */
 export const markSeen = (id: string) => {
   if (state.me?.role === 'coordinator') void post(`/api/incidents/${encodeURIComponent(id)}/seen`).catch(() => undefined);
