@@ -9,7 +9,9 @@ import { Directory } from './components/Directory';
 import { CriticalBanner, Toasts } from './components/Alerts';
 import { Login } from './components/Login';
 import { QuickSearch } from './components/QuickSearch';
-import { StandaloneWall } from './components/dash/Dashboard';
+import { DashHome, StandaloneWall } from './components/dash/Dashboard';
+import { setWorkOpen, useWorkOpen } from './lib/dashLayout';
+import { startPrefsSync, stopPrefsSync } from './lib/userPrefs';
 import { Hotkeys } from './components/Hotkeys';
 import { Settings } from './components/Settings';
 import { Alarm, ForecastWatch } from './components/Alarm';
@@ -24,6 +26,15 @@ export function App() {
   const connected = useStore((s) => s.connected);
   const everConnected = useStore((s) => s.everConnected);
   const loaded = useStore((s) => s.teams.length > 0);
+  const workOpen = useWorkOpen();
+  const tab = useStore((s) => s.tab);
+  // Вошёл (или сменился) дежурный — начинаем с дашборда.
+  useEffect(() => setWorkOpen(false), [me?.login]);
+  // Настройки закреплены за сотрудником: подтягиваем при входе, сохраняем при изменении.
+  useEffect(() => {
+    if (me?.role === 'coordinator') void startPrefsSync(me.login);
+    else stopPrefsSync();
+  }, [me?.login, me?.role]);
 
   useEffect(() => {
     void checkAuth();
@@ -50,6 +61,15 @@ export function App() {
   const atPoint = me.role === 'coordinator';
   // Отдельное окно для экрана стены: адрес с ?wall — только видеостена, без шапки.
   if (atPoint && loaded && new URLSearchParams(location.search).has('wall')) return <StandaloneWall />;
+  // После входа дежурный видит дашборд; всё рабочее место (вкладки, карточки, справочник) — по кнопке.
+  if (atPoint && loaded && !workOpen)
+    return (
+      <>
+        <DashHome />
+        <Settings />
+        <Jarvis />
+      </>
+    );
 
   return (
     <div className={`app role-${me.role} view-${view}`}>
@@ -74,7 +94,7 @@ export function App() {
           <TeamScreen />
         )}
       </div>
-      <Toasts />
+      {!(atPoint && tab === 'wall') && <Toasts />}
       <QuickSearch />
       <Settings />
       <Hotkeys />

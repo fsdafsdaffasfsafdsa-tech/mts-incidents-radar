@@ -24,10 +24,14 @@ export interface DashStyle {
   card?: DashCard;
   radius?: number; // px
   glow?: boolean; // мягкое свечение у критических и цифр
+  deco?: 'snow'; // украшения: снег и гирлянда (новогодняя тема)
+  custom?: boolean; // придумано ИИ по описанию
 }
 
 export const DASH_STYLES: DashStyle[] = [
-  { id: 'brand', name: 'Фирменный красный', words: ['фирменн', 'красн'], dark: false, bg: '#eef1f6', panel: '#ffffff', panel2: '#f5f7fa', line: '#e1e6ee', text: '#1d2433', muted: '#6b7689', accent: '#e30611', crit: '#e30611', high: '#f07a1a', mid: '#c79a00', low: '#3d7bff', ok: '#13a36b', warn: '#e88a00', radius: 14 },
+  { id: 'mts', name: 'МТС', words: ['мтс', 'фирменн', 'красн'], dark: false, bg: '#f2f3f7', panel: '#ffffff', panel2: '#f7f8fa', line: '#e2e5eb', text: '#1d2023', muted: '#626c77', accent: '#ff0032', crit: '#ff0032', high: '#fa8a00', mid: '#e5b800', low: '#007cff', ok: '#00b956', warn: '#fa8a00', radius: 16 },
+  { id: 'mts-dark', name: 'МТС тёмный', words: ['мтс тёмн', 'мтс темн', 'тёмный мтс', 'темный мтс'], dark: true, bg: '#1d2023', panel: '#2c3135', panel2: '#343a40', line: '#434a51', text: '#fafafa', muted: '#a3abb5', accent: '#ff0032', crit: '#ff0032', high: '#ff9a1f', mid: '#f9d23c', low: '#45b6fe', ok: '#26cd58', warn: '#ff9a1f', radius: 16 },
+  { id: 'newyear', name: 'Новогодний', words: ['новогодн', 'новый год', 'праздничн', 'ёлк', 'елк', 'зимн'], dark: true, bg: 'radial-gradient(1200px 600px at 20% -10%,#123a4a,transparent 60%),radial-gradient(900px 500px at 90% 110%,#3a0f1f,transparent 60%),#07141c', panel: 'rgba(10,32,42,.86)', panel2: 'rgba(16,46,58,.82)', line: 'rgba(255,214,120,.22)', text: '#f5f8ff', muted: '#a9c2cc', accent: '#ffd166', crit: '#ff4d5e', high: '#ff9a4a', mid: '#ffd166', low: '#6fc3ff', ok: '#4ade80', warn: '#ffb84a', card: 'glass', radius: 18, glow: true, deco: 'snow' },
   { id: 'graphite', name: 'Графит', words: ['графит', 'серый'], dark: true, bg: '#121418', panel: '#1b1e24', panel2: '#22262e', line: '#2c313b', text: '#eef1f6', muted: '#8b94a6', accent: '#ff4d5e', crit: '#ff4d5e', high: '#ff9640', mid: '#f2c94c', low: '#6c9bff', ok: '#33c48d', warn: '#ffb020', radius: 14 },
   { id: 'midnight', name: 'Полночь', words: ['полноч', 'синий ноч', 'тёмно-син', 'темно-син'], dark: true, bg: 'linear-gradient(160deg,#0b1020,#0e1630 60%,#0b1020)', panel: '#121a33', panel2: '#18224a', line: '#243163', text: '#e8edff', muted: '#8e9bc9', accent: '#5b8cff', crit: '#ff4a6b', high: '#ff9a4a', mid: '#ffd166', low: '#5b8cff', ok: '#3ddc97', warn: '#ffb347', radius: 16, glow: true },
   { id: 'mission', name: 'Центр управления', words: ['центр управлен', 'цуп', 'миссия', 'космическ центр'], dark: true, bg: 'radial-gradient(1200px 600px at 50% -10%,#0d2236,#05080d 70%)', panel: 'rgba(11,18,32,.92)', panel2: '#0f1a2e', line: '#1b3150', text: '#d8f1ff', muted: '#6f93b3', accent: '#39d0ff', crit: '#ff3b5c', high: '#ff9e3d', mid: '#ffe066', low: '#39d0ff', ok: '#2ee6a6', warn: '#ffb020', font: 'mono', card: 'outline', radius: 6, glow: true },

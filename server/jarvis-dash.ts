@@ -11,6 +11,7 @@ export interface DashCtx {
   style: string;
   filter: DashGroup | null;
   density: 'normal' | 'large';
+  locked?: boolean;
 }
 const blockIds = BLOCKS.map((b) => b.id);
 const presetIds = PRESETS.map((p) => p.id);
@@ -27,6 +28,7 @@ export function parseDashCtx(x: unknown): DashCtx | null {
     style: typeof o.style === 'string' ? o.style : '',
     filter: typeof o.filter === 'string' && (groupIds as string[]).includes(o.filter) ? (o.filter as DashGroup) : null,
     density: o.density === 'large' ? 'large' : 'normal',
+    locked: o.locked === true,
   };
 }
 
@@ -56,11 +58,20 @@ export const DASH_TOOL = {
   },
 };
 
-export const DASH_NOTE = `Видеостену (дашборд координатора) перестраивай инструментом dashboard — это главный экран пункта. Примеры: «поменяй местами левый и правый блоки» → op=swap, position=left, position2=right; «покажи только критические» → op=filter, group=crit; «покажи все» → group=all; «добавь карту» → op=show, block=map; «убери ленту» → op=hide, block=events; «замени справа на историю передач» → op=replace, position=right, block=transfers; «сделай неон» → op=style; «крупнее» → op=density, value=large; «покажи крупно самый срочный» → op=focus, id=top; «раскладка четыре группы» → op=preset; «верни как было» → op=reset; «настройки дашборда» → op=settings. После действия скажи одной короткой фразой, что изменилось на стене.`;
+export const DESIGN_TOOL = {
+  type: 'function',
+  function: {
+    name: 'design_dashboard',
+    description: 'Придумать новое оформление видеостены по описанию словами (ChatGPT): «сделай в цветах моря», «строго и по-деловому», «новогоднее с золотом». Для готовых стилей из списка используй dashboard op=style.',
+    parameters: { type: 'object', properties: { prompt: { type: 'string', description: 'описание оформления словами человека' } }, required: ['prompt'] },
+  },
+};
+
+export const DASH_NOTE = `Видеостену (дашборд координатора) перестраивай инструментом dashboard — это главный экран пункта. Примеры: «поменяй местами левый и правый блоки» → op=swap, position=left, position2=right; «покажи только критические» → op=filter, group=crit; «покажи все» → group=all; «добавь карту» → op=show, block=map; «убери ленту» → op=hide, block=events; «замени справа на историю передач» → op=replace, position=right, block=transfers; «сделай неон» → op=style; «крупнее» → op=density, value=large; «покажи крупно самый срочный» → op=focus, id=top; «раскладка четыре группы» → op=preset; «верни как было» → op=reset; «настройки дашборда» → op=settings. Если просят своё оформление словами, которого нет в списке стилей, — design_dashboard с описанием. После действия скажи одной короткой фразой, что изменилось на стене.`;
 
 export function dashContextLine(c: DashCtx | null): string {
   if (!c) return '';
-  return `Видеостена: раскладка «${PRESET_NAME[c.preset as PresetId] ?? 'своя'}», колонки слева направо: ${c.columns.map((b) => BLOCK_NAME[b]).join(', ') || '—'}; стиль «${dashStyleById(c.style).name}»${c.filter ? `; фильтр: только «${GROUP_NAME[c.filter]}»` : ''}${c.density === 'large' ? '; крупный шрифт' : ''}.`;
+  return `${c.locked ? 'Интерфейс закреплён (менять стену нельзя). ' : ''}Видеостена: раскладка «${PRESET_NAME[c.preset as PresetId] ?? 'своя'}», колонки слева направо: ${c.columns.map((b) => BLOCK_NAME[b]).join(', ') || '—'}; стиль «${dashStyleById(c.style).name}»${c.filter ? `; фильтр: только «${GROUP_NAME[c.filter]}»` : ''}${c.density === 'large' ? '; крупный шрифт' : ''}.`;
 }
 
 function pos(v: unknown, c: DashCtx | null, fallback: number): number {
@@ -76,6 +87,7 @@ function pos(v: unknown, c: DashCtx | null, fallback: number): number {
 /** Аргументы инструмента → команда для стены и что сделано человеческим языком. */
 export function toDashOp(a: Record<string, unknown>, c: DashCtx | null, point: Point): { cmd: DashOp; done: string } {
   const op = String(a.op ?? '');
+  if (c?.locked && op !== 'focus' && op !== 'settings') throw new Error('интерфейс закреплён за сотрудником — сначала открепите его в настройках дашборда');
   const block = (v: unknown) => {
     const b = String(v ?? '') as BlockId;
     if (!blockIds.includes(b)) throw new Error('нет такого блока');
@@ -172,6 +184,7 @@ export function dashRules(t: string, c: DashCtx | null, run: (a: Record<string, 
   if (/прежн|стар(ую|ая) стен|как раньше/.test(t)) return ok(run({ op: 'preset', preset: 'legacy' }), 'Включил прежнюю стену, сэр.');
   const style = findDashStyle(t);
   if (style && (/стил|оформлен/.test(t) || ((aboutWall || onWall) && /сделай|включи|поставь/.test(t)))) return ok(run({ op: 'style', style: style.id }), `Стиль «${style.name}», сэр.`);
+  if (/(придумай|нарисуй|сделай|создай|оформи).*(дизайн|оформлени|стил|в цветах|в духе)/.test(t) && !style) return ok(run({ op: '__design', prompt: t }), 'Придумываю оформление через ChatGPT, сэр. Через несколько секунд стена изменится.');
   if (/раскладк|режим|вид стены/.test(t)) {
     const p = /четыре групп|групп/.test(t) ? 'groups' : /ии.?центр|помощник/.test(t) ? 'ai' : /критичн/.test(t) ? 'critical' : /ноч/.test(t) ? 'night' : /карт/.test(t) ? 'map' : /кейс|три экрана|основн/.test(t) ? 'case' : null;
     if (p) return ok(run({ op: 'preset', preset: p }), `Раскладка «${PRESET_NAME[p as PresetId]}», сэр.`);

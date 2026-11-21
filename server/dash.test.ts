@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Incident } from '../shared/types.ts';
 import { attention, dashSnapshot, groupsOf, transferCount, transfers, type BlockId } from '../shared/dash.ts';
-import { dashRules } from './jarvis-dash.ts';
+import { dashRules, toDashOp } from './jarvis-dash.ts';
+import { contrast, toStyle } from './design.ts';
+import { PERSONAS, personaById } from '../shared/personas.ts';
 import { DASH_STYLES, findDashStyle } from '../shared/dashStyles.ts';
 import { Point } from './point.ts';
 import { RAW } from './catalog.ts';
@@ -97,6 +99,34 @@ test('Джарвис без модели понимает команды сте�
   assert.deepEqual(said('раскладка четыре группы').got, { op: 'preset', preset: 'groups' });
   assert.deepEqual(said('верни прежнюю стену').got, { op: 'preset', preset: 'legacy' });
   assert.equal(said('кому передать этот инцидент').reply, null, 'обычные вопросы не перехватывает');
+});
+
+test('дизайн от ChatGPT: опасное отбрасывается, текст остаётся читаемым', () => {
+  const st = toStyle({ name: 'Море', dark: true, bg: 'url(https://evil.example/x.png)', panel: '#0b2a3a', text: '#0c2b3b', accent: 'red;background:url(x)', crit: '#ff3344', snow: true, radius: 99 });
+  assert.notEqual(st.bg.includes('url'), true, 'url() не пропускаем');
+  assert.equal(st.accent.includes('url'), false);
+  assert.equal(st.crit, '#ff3344');
+  assert.ok((contrast(st.text, st.panel) ?? 0) >= 4.5, 'тёмный текст на тёмной панели заменён на читаемый');
+  assert.equal(st.deco, 'snow');
+  assert.equal(st.radius, 24);
+  assert.ok(st.custom && st.id.startsWith('ai-'));
+  const g = toStyle({ dark: false, bg: 'linear-gradient(135deg, #ffffff 0%, rgba(200,220,255,0.8) 100%)' });
+  assert.ok(g.bg.startsWith('linear-gradient'), 'градиент из цветов можно');
+});
+
+test('персонажи: у каждого свой голос, имя для пробуждения и картинка', () => {
+  assert.ok(PERSONAS.length >= 4);
+  for (const p of PERSONAS) {
+    assert.ok(p.voice && p.avatar.startsWith('/personas/') && p.wake.length, p.id);
+  }
+  assert.equal(new Set(PERSONAS.map((p) => p.voice)).size, PERSONAS.length, 'голоса разные');
+  assert.equal(personaById('нет такого').id, 'jarvis');
+});
+
+test('закреплённую стену Джарвис не перестраивает', () => {
+  const p = new Point();
+  assert.throws(() => toDashOp({ op: 'style', style: 'neon' }, { preset: 'case', columns: ['action'], style: 'graphite', filter: null, density: 'normal', locked: true }, p), /закреплён/);
+  assert.equal(toDashOp({ op: 'focus', id: '' }, { preset: 'case', columns: ['action'], style: 'graphite', filter: null, density: 'normal', locked: true }, p).cmd.op, 'focus');
 });
 
 test('стилей больше двадцати, у всех разные id, голосом находятся по названию', () => {

@@ -1,14 +1,16 @@
 // Дашборд координатора — видеостена по кейсу. Видно с расстояния; блоки, стиль и поведение настраиваются
 // в «Настройках дашборда» или голосом через Джарвиса. Прежняя стена — раскладка «Прежняя стена».
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, BellRing, Bot, CheckCircle2, Expand, MonitorUp, Settings2, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, ArrowRight, BellRing, Bot, CheckCircle2, Expand, LayoutGrid, MonitorUp, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import type { FeedEvent, Incident } from '../../../shared/types';
-import { BLOCK_NAME, DASH_GROUPS, GROUP_NAME, PRESET_NAME, dashSnapshot, fmtShort, groupsOf, riskOf, transferCount, transfers, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
-import { dashStyleById, type DashStyle } from '../../../shared/dashStyles';
+import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, type DashColumn, fmtShort, groupsOf, riskOf, transferCount, transfers, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
+import type { DashStyle } from '../../../shared/dashStyles';
+import { personaById } from '../../../shared/personas';
 import { openIncident, setTab, teamName, useStore } from '../../store';
 import { fmtClock } from '../../lib/format';
 import { useNow } from '../../lib/hooks';
-import { openWallWindow, setDash, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
+import { applyDashOp, currentStyle, getDash, openWallWindow, openWork, setDash, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
+import { BLOCK_OPTS } from './blockOpts';
 import { Jarvis, jarvisAsk, jarvisPrefs, jarvisReady } from '../Jarvis';
 import { RFMap } from '../RFMap';
 import { Spark } from '../kit';
@@ -17,6 +19,9 @@ import { DashSettings } from './DashSettings';
 import './dash.css';
 
 const MIN = 60_000;
+type Opts = Record<string, boolean | number> | undefined;
+const ob = (o: Opts, k: string, def = true) => (typeof o?.[k] === 'boolean' ? (o[k] as boolean) : def);
+const on = (o: Opts, k: string, def: number) => (typeof o?.[k] === 'number' ? (o[k] as number) : def);
 const PRIO: Record<Incident['priority'], string> = { P1: 'Критический', P2: 'Высокий', P3: 'Средний', P4: 'Низкий' };
 const shortId = (id: string) => id.replace(/^INC0*/, 'INC ');
 const who = (i: Incident) =>
@@ -24,6 +29,13 @@ const who = (i: Incident) =>
 const frac = (i: Incident, now: number) => Math.min(1, Math.max(0, (now - i.createdAt) / Math.max(MIN, i.slaDeadline - i.createdAt)));
 const leftText = (i: Incident, now: number) => (i.slaDeadline - now > 0 ? fmtShort(i.slaDeadline - now) : `−${fmtShort(now - i.slaDeadline)}`);
 
+/** Текст на кнопке цвета акцента: тёмный на светлом акценте (золото, жёлтый), белый — на тёмном. */
+function onColor(c: string): string {
+  const m = /^#([0-9a-f]{6})/i.exec(c) ?? null;
+  const r = m ? [0, 2, 4].map((k) => parseInt(m[1].slice(k, k + 2), 16)) : (/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(c)?.slice(1, 4).map(Number) ?? [255, 49, 80]);
+  const l = (0.2126 * r[0] + 0.7152 * r[1] + 0.0722 * r[2]) / 255;
+  return l > 0.62 ? '#14161a' : '#ffffff';
+}
 function styleVars(s: DashStyle): React.CSSProperties {
   const v: Record<string, string> = {
     '--d-bg': s.bg,
@@ -40,23 +52,31 @@ function styleVars(s: DashStyle): React.CSSProperties {
     '--d-ok': s.ok,
     '--d-warn': s.warn,
     '--d-radius': `${s.radius ?? 12}px`,
+    '--d-on-accent': onColor(s.accent),
   };
   return v as React.CSSProperties;
 }
 
 /** Переход по клику: в ITSM, если адрес задан; иначе — карточка в приложении (или крупно на отдельной стене). */
 function useOpen(standalone: boolean, focus: (id: string) => void) {
+  // standalone — отдельное окно стены (рабочего места там нет); на главном экране клик открывает рабочее место.
   const itsmUrl = useStore((s) => s.config?.itsmUrl ?? null);
   return useCallback(
     (i: Incident) => {
       if (itsmUrl) window.open(itsmUrl.replace('{id}', encodeURIComponent(i.id)), '_blank', 'noopener');
       else if (!standalone) {
+        openWork();
         setTab(i.status === 'coordinators' ? 'inbox' : 'teams');
         openIncident(i.id);
       } else focus(i.id);
     },
     [itsmUrl, standalone, focus],
   );
+}
+
+/** Главный экран дежурного после входа: дашборд на весь экран, рабочее место — по кнопке. */
+export function DashHome() {
+  return <Dashboard home />;
 }
 
 /** Отдельное окно стены (адрес с ?wall): дашборд на весь экран и, если включено, Джарвис. */
@@ -70,33 +90,58 @@ export function StandaloneWall() {
   );
 }
 
-export function Dashboard({ standalone = false }: { standalone?: boolean }) {
+export function Dashboard({ standalone = false, home = false }: { standalone?: boolean; home?: boolean }) {
   const d = useDash();
   const [settings, setSettings] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [designing, setDesigning] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ on: boolean; k: number | null }>({ on: false, k: null });
   useDashEvents(
     useCallback((e) => {
       if (e.type === 'settings') setSettings(e.open);
       if (e.type === 'focus') setFocusId(e.id);
+      if (e.type === 'designing') setDesigning(e.text);
+      if (e.type === 'edit') setEditing({ on: e.on, k: e.k ?? null });
     }, []),
   );
   if (d.preset === 'legacy')
     return (
       <div className="dash-legacy">
-        <WallPage standalone={standalone} />
-        <button className="dash-gear legacy" onClick={() => setSettings(true)} title="Настройки дашборда">
-          <Settings2 size={16} /> Дашборд
-        </button>
+        <WallPage standalone={standalone || home} />
+        <span className="dash-gear-row">
+          {home && <WorkButton />}
+          <button className="dash-gear" onClick={() => setSettings(true)} title="Настройки дашборда">
+            <Settings2 size={16} /> Дашборд
+          </button>
+        </span>
         {settings && <DashSettings onClose={() => setSettings(false)} />}
       </div>
     );
-  return <DashWall d={d} standalone={standalone} settings={settings} setSettings={setSettings} focusId={focusId} setFocusId={setFocusId} />;
+  return (
+    <>
+      <DashWall d={d} standalone={standalone} home={home} settings={settings} setSettings={setSettings} focusId={focusId} setFocusId={setFocusId} editing={d.locked ? { on: false, k: null } : editing} setEditing={setEditing} />
+      {designing && (
+        <div className="dash-designing" role="status">
+          <Sparkles size={16} /> ChatGPT придумывает оформление: «{designing.length > 70 ? `${designing.slice(0, 68)}…` : designing}»
+        </div>
+      )}
+    </>
+  );
 }
 
-function DashWall({ d, standalone, settings, setSettings, focusId, setFocusId }: { d: DashLayout; standalone: boolean; settings: boolean; setSettings: (v: boolean) => void; focusId: string | null; setFocusId: (v: string | null) => void }) {
+/** Открыть всё рабочее место: вкладки, карточки инцидентов, справочник, смену. */
+function WorkButton() {
+  return (
+    <button className="dash-work" onClick={openWork} title="Вкладки, карточки инцидентов, справочник, смена — всё рабочее место">
+      <LayoutGrid size={17} /> Рабочее место
+    </button>
+  );
+}
+
+function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocusId, editing, setEditing }: { d: DashLayout; standalone: boolean; home: boolean; settings: boolean; setSettings: (v: boolean) => void; focusId: string | null; setFocusId: (v: string | null) => void; editing: { on: boolean; k: number | null }; setEditing: (v: { on: boolean; k: number | null }) => void }) {
   const incidents = useStore((s) => s.incidents);
   const now = useNow(1000);
-  const style = dashStyleById(d.style);
+  const style = currentStyle(d);
   const snap = useMemo(() => dashSnapshot(incidents.values(), now, { filter: d.filter, onlyFile: d.onlyFile }), [incidents, now, d.filter, d.onlyFile]);
   const open = useOpen(standalone, setFocusId);
   const alerts = useAlerts(incidents, d);
@@ -107,15 +152,16 @@ function DashWall({ d, standalone, settings, setSettings, focusId, setFocusId }:
     return () => document.removeEventListener('fullscreenchange', f);
   }, []);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && (setFocusId(null), alerts.dismiss());
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && (setFocusId(null), alerts.dismiss(), setEditing({ on: false, k: null }));
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [alerts, setFocusId]);
+  }, [alerts, setFocusId, setEditing]);
   const ctx: BlockCtx = { snap, now, d, style, open, standalone };
   const inWall = new Set(d.columns.map((c) => c.block));
+  const colsRef = useRef<HTMLDivElement>(null);
   return (
     <div
-      className={`dash ${standalone ? 'standalone' : ''} ${alerts.top?.kind === 'crit' ? 'dash-alarm' : ''}`}
+      className={`dash ${standalone || home ? 'standalone' : ''} ${home ? 'home' : ''} ${alerts.top?.kind === 'crit' ? 'dash-alarm' : ''}`}
       data-dark={style.dark ? '1' : '0'}
       data-card={style.card ?? 'solid'}
       data-font={style.font ?? 'sans'}
@@ -123,22 +169,56 @@ function DashWall({ d, standalone, settings, setSettings, focusId, setFocusId }:
       data-density={d.density}
       style={styleVars(style)}
     >
-      {d.counters && <DashHeader snap={snap} now={now} d={d} />}
-      <div className="dash-cols" style={{ gridTemplateColumns: d.columns.map((c) => `minmax(0, ${c.width}fr)`).join(' ') }}>
+      {style.deco === 'snow' && <Snow />}
+      {d.counters ? <DashHeader snap={snap} now={now} d={d} home={home} garland={style.deco === 'snow'} /> : home && <span className="dash-work-float"><WorkButton /></span>}
+      {alerts.list.length > 0 && <AlertStrip list={alerts.list} now={now} onClose={alerts.dismiss} onOpen={(id) => setFocusId(id)} />}
+      {editing.on && (
+        <div className="dash-editbar">
+          <b>Изменение блоков</b>
+          <span>тяните границу между блоками · нажмите на блок — его настройки</span>
+          <span className="db-sp" />
+          <button disabled={d.columns.length >= 4} onClick={() => setDash({ preset: 'custom', columns: [...d.columns, { block: (['events', 'transfers', 'stats', 'assistant', 'map', 'groups', 'work', 'action'] as BlockId[]).find((b) => !inWall.has(b)) ?? 'events', width: 1 }] })}>
+            + Колонка
+          </button>
+          <button className="on" onClick={() => setEditing({ on: false, k: null })}>
+            Готово
+          </button>
+        </div>
+      )}
+      <div ref={colsRef} className={`dash-cols ${editing.on ? 'editing' : ''}`} style={{ gridTemplateColumns: d.columns.map((c) => `minmax(0, ${c.width}fr)`).join(' ') }}>
         {d.columns.map((c, k) => (
-          <section key={`${k}-${c.block}`} className={`dash-col b-${c.block}`}>
-            <Block id={c.block} ctx={ctx} skip={inWall} />
+          <section
+            key={`${k}-${c.block}`}
+            className={`dash-col b-${c.block} ${editing.on ? 'edit' : ''} ${editing.k === k ? 'sel' : ''}`}
+            style={c.scale && c.scale !== 1 ? { fontSize: `${c.scale}em` } : undefined}
+            onClickCapture={
+              editing.on
+                ? (e) => {
+                    if ((e.target as Element).closest('.dce')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setEditing({ on: true, k });
+                  }
+                : undefined
+            }
+          >
+            <Block id={c.block} ctx={ctx} skip={inWall} o={c.opts} />
+            {editing.on && <ColBar k={k} n={d.columns.length} c={c} onEdit={() => setEditing({ on: true, k })} />}
+            {editing.on && k < d.columns.length - 1 && <Splitter k={k} colsRef={colsRef} />}
+            {editing.on && editing.k === k && <BlockEditor k={k} c={c} onClose={() => setEditing({ on: true, k: null })} />}
           </section>
         ))}
       </div>
       {d.ticker && <DashTicker />}
-      {alerts.top && <Banner a={alerts.top} more={alerts.list.length - 1} now={now} onClose={alerts.dismiss} onOpen={() => setFocusId(alerts.top!.inc.id)} />}
       {focusId && <FocusCard id={focusId} now={now} onClose={() => setFocusId(null)} />}
       {settings && <DashSettings onClose={() => setSettings(false)} />}
       {!full && (
         <div className="dash-tools">
           <button onClick={() => setSettings(true)} title="Блоки, стиль, тревоги, Джарвис">
-            <Settings2 size={15} /> Настройки дашборда
+            <Settings2 size={15} /> Настройки
+          </button>
+          <button className={editing.on ? 'on' : ''} disabled={d.locked} onClick={() => setEditing({ on: !editing.on, k: null })} title={d.locked ? 'Интерфейс закреплён — открепите в настройках' : 'Тянуть границы между блоками, настраивать каждый блок'}>
+            <SlidersHorizontal size={15} /> Изменить блоки
           </button>
           {!standalone && (
             <button onClick={openWallWindow} title="Открыть в отдельном окне — перенести на экран стены">
@@ -154,8 +234,20 @@ function DashWall({ d, standalone, settings, setSettings, focusId, setFocusId }:
   );
 }
 
+/** Новогодняя тема: тихий снег поверх стены (не мешает читать и кликать). */
+const FLAKES = Array.from({ length: 46 }, (_, k) => ({ left: (k * 37) % 100, size: 3 + ((k * 13) % 6), dur: 9 + ((k * 7) % 11), delay: -((k * 1.7) % 18), drift: ((k % 5) - 2) * 18 }));
+function Snow() {
+  return (
+    <div className="dash-snow" aria-hidden>
+      {FLAKES.map((f, k) => (
+        <i key={k} style={{ left: `${f.left}%`, width: f.size, height: f.size, animationDuration: `${f.dur}s`, animationDelay: `${f.delay}s`, ['--drift' as string]: `${f.drift}px` }} />
+      ))}
+    </div>
+  );
+}
+
 // ─── шапка: часы и счётчики четырёх групп ─────────────────────────────────
-function DashHeader({ snap, now, d }: { snap: DashSnapshot; now: number; d: DashLayout }) {
+function DashHeader({ snap, now, d, home, garland }: { snap: DashSnapshot; now: number; d: DashLayout; home?: boolean; garland?: boolean }) {
   const c = snap.counts;
   const chip = (g: DashGroup, tone: string) => (
     <button key={g} className={`dh-chip g-${g} ${tone} ${c[g] ? 'on' : ''} ${d.filter === g ? 'sel' : ''}`} onClick={() => setDash({ filter: d.filter === g ? null : g })} title={`${DASH_GROUPS.find((x) => x.id === g)!.hint}. Нажмите — показать только эту группу`}>
@@ -165,15 +257,24 @@ function DashHeader({ snap, now, d }: { snap: DashSnapshot; now: number; d: Dash
   );
   return (
     <header className="dash-head">
+      {garland && (
+        <span className="dh-garland" aria-hidden>
+          {Array.from({ length: 28 }, (_, k) => (
+            <i key={k} style={{ animationDelay: `${(k % 7) * 0.35}s` }} />
+          ))}
+        </span>
+      )}
       <div className="dh-title">
         <span className="dh-dot" />
         <div>
-          <b>Координирующий пункт ИТ</b>
-          <span>
-            видеостена · {d.preset === 'custom' ? 'своя раскладка' : PRESET_NAME[d.preset]}
-            {d.filter ? ` · только «${GROUP_NAME[d.filter]}»` : ''}
-            {d.onlyFile ? ' · только выгрузка ITSM' : ''}
-          </span>
+          <b>Координирующий пункт</b>
+          {(d.filter || d.onlyFile) && (
+            <span>
+              {d.filter ? `только «${GROUP_NAME[d.filter]}»` : ''}
+              {d.filter && d.onlyFile ? ' · ' : ''}
+              {d.onlyFile ? 'только ITSM' : ''}
+            </span>
+          )}
         </div>
       </div>
       <div className="dh-chips">
@@ -182,23 +283,21 @@ function DashHeader({ snap, now, d }: { snap: DashSnapshot; now: number; d: Dash
         {chip('high', '')}
         {chip('research', '')}
         <span className="dh-sep" />
-        <span className={`dh-mini ${c.threat ? 'warn' : ''}`}>
-          <b className="num">{c.threat}</b> срок под угрозой
+        <span className={`dh-mini ${c.threat ? 'warn' : ''}`} title="Срок под угрозой: меньше 30 минут или уже прошёл">
+          <b className="num">{c.threat}</b> срок
         </span>
-        <span className={`dh-mini ${c.notTaken ? 'warn' : ''}`}>
-          <b className="num">{c.notTaken}</b> не берут 10+ мин
+        <span className={`dh-mini ${c.notTaken ? 'warn' : ''}`} title="Команда не берёт больше 10 минут">
+          <b className="num">{c.notTaken}</b> не берут
         </span>
-        <span className={`dh-mini ${c.pingpong ? 'warn' : ''}`}>
-          <b className="num">{c.pingpong}</b> повторные передачи
-        </span>
-        <span className="dh-mini ok">
-          <b className="num">{c.doneHour}</b> решено за час
+        <span className="dh-mini ok" title="Решено за последний час">
+          <b className="num">{c.doneHour}</b> решено
         </span>
       </div>
       <div className="dh-clock">
         <b className="num">{fmtClock(now)}</b>
         <span>{new Date(now).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })} · МСК</span>
       </div>
+      {home && <WorkButton />}
     </header>
   );
 }
@@ -212,22 +311,22 @@ interface BlockCtx {
   open: (i: Incident) => void;
   standalone: boolean;
 }
-function Block({ id, ctx, skip }: { id: BlockId; ctx: BlockCtx; skip: Set<BlockId> }) {
+function Block({ id, ctx, skip, o }: { id: BlockId; ctx: BlockCtx; skip: Set<BlockId>; o?: Opts }) {
   switch (id) {
     case 'action':
-      return <ActionBlock ctx={ctx} />;
+      return <ActionBlock ctx={ctx} o={o} />;
     case 'work':
-      return <WorkBlock ctx={ctx} />;
+      return <WorkBlock ctx={ctx} o={o} />;
     case 'groups':
-      return <GroupsBlock ctx={ctx} />;
+      return <GroupsBlock ctx={ctx} o={o} />;
     case 'assistant':
-      return <AssistantBlock ctx={ctx} />;
+      return <AssistantBlock ctx={ctx} o={o} />;
     case 'transfers':
-      return <TransfersBlock ctx={ctx} />;
+      return <TransfersBlock ctx={ctx} o={o} />;
     case 'stats':
-      return <StatsBlock ctx={ctx} />;
+      return <StatsBlock ctx={ctx} o={o} />;
     case 'events':
-      return <EventsBlock />;
+      return <EventsBlock o={o} />;
     case 'map':
       return (
         <div className="db db-map">
@@ -238,7 +337,7 @@ function Block({ id, ctx, skip }: { id: BlockId; ctx: BlockCtx; skip: Set<BlockI
         </div>
       );
     case 'rotate':
-      return <RotateBlock ctx={ctx} skip={skip} />;
+      return <RotateBlock ctx={ctx} skip={skip} o={o} />;
   }
 }
 
@@ -282,12 +381,12 @@ function useFitPager(total: number, sec: number) {
   const page = Math.floor(start / Math.max(1, fit));
   return { box, start, fit, pages, page, paged: total > fit };
 }
-function PagerFoot({ p, total, sec, label }: { p: ReturnType<typeof useFitPager>; total: number; sec: number; label: string }) {
+function PagerFoot({ p, total }: { p: ReturnType<typeof useFitPager>; total: number; sec?: number; label?: string }) {
   if (!p.paged) return null;
   return (
     <div className="db-foot">
-      <span>
-        {label} {p.start + 1}–{Math.min(total, p.start + p.fit)} из {total} · листается каждые {sec} с
+      <span className="num">
+        {p.start + 1}–{Math.min(total, p.start + p.fit)} из {total}
       </span>
       <span className="db-dots">
         {Array.from({ length: Math.min(12, p.pages) }, (_, k) => (
@@ -313,50 +412,35 @@ function GroupTags({ i, skip }: { i: Incident; skip?: DashGroup }) {
 }
 
 /** Карточка инцидента: продукт, когда возник, кто решает, статус, срок — и почему требует внимания. */
-function IncCard({ i, att, now, big, onClick, off }: { i: Incident; att?: Attention; now: number; big?: boolean; onClick: () => void; off?: boolean }) {
+function IncCard({ i, att, now, big, onClick, off, detail = false }: { i: Incident; att?: Attention; now: number; big?: boolean; onClick: () => void; off?: boolean; detail?: boolean }) {
   const t = transferCount(i);
-  const risk = i.priority === 'P2' ? riskOf(i, now) : null;
   const left = i.slaDeadline - now;
   return (
-    <button className={`dc p-${i.priority} ${big ? 'big' : ''} ${att ? `t-${att.tone}` : ''} ${off ? 'off' : ''}`} onClick={onClick} title="Открыть в ITSM" aria-hidden={off || undefined} tabIndex={off ? -1 : undefined}>
+    <button className={`dc p-${i.priority} ${big ? 'big' : ''} ${att ? `t-${att.tone}` : ''} ${off ? 'off' : ''}`} onClick={onClick} title={`${i.title}\n${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}\n${who(i)}`} aria-hidden={off || undefined} tabIndex={off ? -1 : undefined}>
       <span className="dc-bar" />
       <span className="dc-main">
         <span className="dc-top">
           <span className={`dc-prio p-${i.priority}`}>{PRIO[i.priority]}</span>
-          <span className="dc-id num">{shortId(i.id)}</span>
+          {att && <span className={`dc-why t-${att.tone}`}>{att.reason}</span>}
           <GroupTags i={i} />
-          {t > 0 && (
-            <span className={`dc-tr ${t >= 2 ? 'warn' : ''}`} title="Передач между командами">
+          {t >= 2 && (
+            <span className="dc-tr warn" title="Передач между командами">
               <ArrowLeftRight size={12} /> {t}
             </span>
           )}
         </span>
         <b className="dc-title">{i.title}</b>
-        <span className="dc-meta">
-          <span>{i.productName || i.service}</span>
-          <span>
-            возник {fmtClock(i.createdAt)} · {fmtShort(now - i.createdAt)} назад
-          </span>
+        <span className="dc-line">
+          <b className="dc-who">{who(i)}</b> · {i.productName || i.service} · {fmtClock(i.createdAt)} · {i.stateText}
         </span>
-        <span className="dc-meta">
-          <span className="dc-who">{who(i)}</span>
-          <span className="dc-state">{i.stateText}</span>
-        </span>
-        {att && <span className={`dc-why t-${att.tone}`}>{att.reason}</span>}
-        {i.status === 'coordinators' && i.ai?.teamId && (
+        {detail && i.status === 'coordinators' && i.ai?.teamId && (
           <span className="dc-ai">
-            <Sparkles size={12} /> ИИ: передать в «{teamName(i.ai.teamId)}»
-          </span>
-        )}
-        {risk && risk.score >= 55 && (
-          <span className="dc-ai dc-risk">
-            <Sparkles size={12} /> риск стать критическим {risk.score}%{risk.reasons[0] ? ` — ${risk.reasons[0]}` : ''}
+            <Sparkles size={12} /> ИИ: в «{teamName(i.ai.teamId)}»
           </span>
         )}
       </span>
       <span className={`dc-sla ${left < 30 * MIN ? 'hot' : ''}`}>
-        <small>{left > 0 ? 'до срока' : 'срок прошёл'}</small>
-        <b className="num">{left > 0 ? fmtShort(left) : fmtShort(-left)}</b>
+        <b className="num">{left > 0 ? fmtShort(left) : `−${fmtShort(-left)}`}</b>
         <span className="dc-sla-bar">
           <i style={{ width: `${frac(i, now) * 100}%` }} />
         </span>
@@ -365,53 +449,57 @@ function IncCard({ i, att, now, big, onClick, off }: { i: Incident; att?: Attent
   );
 }
 
-function ActionBlock({ ctx }: { ctx: BlockCtx }) {
+function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now, d } = ctx;
   const crit = snap.action.filter((x) => x.inc.priority === 'P1');
   const rest = snap.action.filter((x) => x.inc.priority !== 'P1');
-  const p = useFitPager(rest.length, d.pageSec);
+  const p = useFitPager(rest.length, on(o, 'page', d.pageSec));
+  const detail = ob(o, 'ai', false);
   return (
-    <div className="db db-action">
-      <BlockHead title={d.filter ? `Требует действия · ${GROUP_NAME[d.filter]}` : 'Требует действия сейчас'} count={snap.action.length} icon={<BellRing size={18} />} />
-      {snap.resolvedCrit.map((i) => (
-        <div key={i.id} className="dc-resolved">
-          <CheckCircle2 size={18} />
-          <span>
-            <b>Критический решён</b> · {i.title} · за {fmtShort((i.resolvedAt ?? now) - i.createdAt)}
-          </span>
-          <span className="num">{fmtShort(now - (i.resolvedAt ?? now))} назад</span>
-        </div>
-      ))}
+    <div className={`db db-action ${ob(o, 'compact', false) ? 'compact' : ''}`}>
+      <BlockHead title={d.filter ? GROUP_NAME[d.filter] : 'Требует действия'} count={snap.action.length} icon={<BellRing size={18} />} />
+      {ob(o, 'resolved') &&
+        snap.resolvedCrit.map((i) => (
+          <div key={i.id} className="dc-resolved">
+            <CheckCircle2 size={18} />
+            <span>
+              <b>Решён</b> · {i.title}
+            </span>
+            <span className="num">за {fmtShort((i.resolvedAt ?? now) - i.createdAt)}</span>
+          </div>
+        ))}
       {crit.length > 0 && (
         <div className="db-crit">
           {crit.map(({ inc, att }) => (
-            <IncCard key={inc.id} i={inc} att={att} now={now} big onClick={() => ctx.open(inc)} />
+            <IncCard key={inc.id} i={inc} att={att} now={now} big detail={detail} onClick={() => ctx.open(inc)} />
           ))}
         </div>
       )}
-      {!snap.action.length && !snap.resolvedCrit.length && <div className="db-empty">Ничего не требует действия — всё под контролем</div>}
+      {!snap.action.length && !snap.resolvedCrit.length && <div className="db-empty">Всё под контролем</div>}
       <div className="db-list" ref={p.box}>
         {rest.slice(p.start).map(({ inc, att }, k) => (
-          <IncCard key={inc.id} i={inc} att={att} now={now} onClick={() => ctx.open(inc)} off={k >= p.fit} />
+          <IncCard key={inc.id} i={inc} att={att} now={now} detail={detail} onClick={() => ctx.open(inc)} off={k >= p.fit} />
         ))}
       </div>
-      <PagerFoot p={p} total={rest.length} sec={d.pageSec} label="показаны" />
+      <PagerFoot p={p} total={rest.length} />
     </div>
   );
 }
 
-function WorkBlock({ ctx }: { ctx: BlockCtx }) {
+function WorkBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now, d } = ctx;
-  const p = useFitPager(snap.work.length, d.pageSec);
+  const p = useFitPager(snap.work.length, on(o, 'page', d.pageSec));
+  const c = { time: ob(o, 'cTime'), sla: ob(o, 'cSla'), tr: ob(o, 'cTr'), team: ob(o, 'cTeam') };
+  const tpl = ['minmax(0, 2.4fr)', c.time && '5.4em', c.sla && '7em', c.tr && '3em', c.team && 'minmax(0, 1.4fr)'].filter(Boolean).join(' ');
   return (
     <div className="db db-work">
       <BlockHead title="В работе у команд" count={snap.work.length} />
-      <div className="dw-row dw-h">
+      <div className="dw-row dw-h" style={{ gridTemplateColumns: tpl }}>
         <span>Инцидент</span>
-        <span>В работе</span>
-        <span>До срока</span>
-        <span>Передач</span>
-        <span>Команда · статус</span>
+        {c.time && <span>В работе</span>}
+        {c.sla && <span>До срока</span>}
+        {c.tr && <span title="Передач между командами">⇄</span>}
+        {c.team && <span>Команда</span>}
       </div>
       <div className="db-list" ref={p.box}>
         {snap.work.slice(p.start).map((i, n) => {
@@ -420,52 +508,54 @@ function WorkBlock({ ctx }: { ctx: BlockCtx }) {
           const t = transferCount(i);
           const hops = transfers(i);
           return (
-            <button key={i.id} className={`dw-row p-${i.priority} ${n >= p.fit ? 'off' : ''}`} onClick={() => ctx.open(i)} aria-hidden={n >= p.fit || undefined} tabIndex={n >= p.fit ? -1 : undefined}>
+            <button
+              key={i.id}
+              className={`dw-row p-${i.priority} ${n >= p.fit ? 'off' : ''}`}
+              style={{ gridTemplateColumns: tpl }}
+              onClick={() => ctx.open(i)}
+              title={`${i.title}\n${i.productName || i.service} · ${i.stateText}\n${i.assigneeName ?? 'исполнитель не назначен'}`}
+              aria-hidden={n >= p.fit || undefined}
+              tabIndex={n >= p.fit ? -1 : undefined}
+            >
               <span className="dw-inc">
                 <span className={`dw-p p-${i.priority}`}>{i.priority}</span>
-                <span>
-                  <b>{i.title}</b>
-                  <small>{i.productName || i.service}</small>
+                <b>{i.title}</b>
+              </span>
+              {c.time && (
+                <span className={`dw-time num ${w !== null && w > 10 * MIN ? 'warn' : ''}`} title={w !== null ? 'команда ещё не взяла' : 'в работе'}>
+                  {fmtShort(w ?? now - since)}
                 </span>
-              </span>
-              <span className={`dw-time ${w !== null && w > 10 * MIN ? 'warn' : ''}`}>
-                <b className="num">{fmtShort(w ?? now - since)}</b>
-                <small>{w !== null ? 'не взяли' : i.status === 'in_progress' ? 'в работе' : 'у команды'}</small>
-              </span>
-              <span className={`dw-sla ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>
-                <b className="num">{leftText(i, now)}</b>
-                <span className="dc-sla-bar">
-                  <i style={{ width: `${frac(i, now) * 100}%` }} />
+              )}
+              {c.sla && (
+                <span className={`dw-sla ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>
+                  <b className="num">{leftText(i, now)}</b>
+                  <span className="dc-sla-bar">
+                    <i style={{ width: `${frac(i, now) * 100}%` }} />
+                  </span>
                 </span>
-              </span>
-              <span className={`num dw-tr ${t >= 2 ? 'warn' : ''}`}>
-                <ArrowLeftRight size={13} /> {t}
-              </span>
-              <span className="dw-team">
-                <b>{hops.at(-1)?.team ?? teamName(i.teamId)}</b>
-                <small>{i.assigneeName ?? '—'} · {i.stateText}</small>
-              </span>
+              )}
+              {c.tr && <span className={`num dw-tr ${t >= 2 ? 'warn' : ''}`}>{t}</span>}
+              {c.team && <b className="dw-team">{hops.at(-1)?.team ?? teamName(i.teamId)}</b>}
             </button>
           );
         })}
-        {!snap.work.length && <div className="db-empty">У команд сейчас ничего нет</div>}
+        {!snap.work.length && <div className="db-empty">У команд пусто</div>}
       </div>
-      <PagerFoot p={p} total={snap.work.length} sec={d.pageSec} label="показаны" />
+      <PagerFoot p={p} total={snap.work.length} />
     </div>
   );
 }
 
-function GroupsBlock({ ctx }: { ctx: BlockCtx }) {
+function GroupsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now } = ctx;
   return (
     <div className="db db-groups">
-      {DASH_GROUPS.map((g) => (
-        <div key={g.id} className={`dg g-${g.id}`}>
+      {DASH_GROUPS.filter((g) => ob(o, `g_${g.id}`)).map((g) => (
+        <div key={g.id} className={`dg g-${g.id}`} title={g.hint}>
           <div className="dg-head">
             <b>{g.label}</b>
             <span className="num">{snap.byGroup[g.id].length}</span>
           </div>
-          <small className="dg-hint">{g.hint}</small>
           <div className="dg-list">
             {g.id === 'crit' &&
               snap.resolvedCrit.map((i) => (
@@ -473,27 +563,21 @@ function GroupsBlock({ ctx }: { ctx: BlockCtx }) {
                   <CheckCircle2 size={14} />
                   <span>
                     <b>{i.title}</b>
-                    <small>решён {fmtShort(now - (i.resolvedAt ?? now))} назад</small>
+                    <small>решён</small>
                   </span>
                 </div>
               ))}
             {snap.byGroup[g.id].map((i) => (
-              <button key={i.id} className={`dg-row p-${i.priority}`} onClick={() => ctx.open(i)}>
+              <button key={i.id} className={`dg-row p-${i.priority}`} onClick={() => ctx.open(i)} title={`${i.productName || i.service} · ${i.stateText}`}>
                 <span className="dc-bar" />
                 <span>
                   <b>{i.title}</b>
-                  <small>
-                    {i.productName || i.service} · {who(i)}
-                  </small>
-                  <small>
-                    {i.stateText} · <GroupTags i={i} skip={g.id} />
-                  </small>
+                  <small>{who(i)}</small>
                 </span>
                 <span className={`num dg-left ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>{leftText(i, now)}</span>
               </button>
             ))}
-            {!snap.byGroup[g.id].length && g.id !== 'crit' && <div className="db-empty small">пусто</div>}
-            {!snap.byGroup.crit.length && !snap.resolvedCrit.length && g.id === 'crit' && <div className="db-empty small">критических нет</div>}
+            {!snap.byGroup[g.id].length && !(g.id === 'crit' && snap.resolvedCrit.length) && <div className="db-empty small">нет</div>}
           </div>
         </div>
       ))}
@@ -530,18 +614,32 @@ function useBrief() {
 }
 // Разговор с помощником живёт вне блока: Джарвис может переставить сам блок, и разговор не должен пропасть.
 let assistLog: { q: string; a: string }[] = [];
-const HINTS = ['Покажи только критические', 'Поменяй местами левый и правый блоки', 'Покажи крупно самый срочный', 'Стиль «Центр управления»', 'Добавь карту', 'Раскладка «Четыре группы»'];
-function AssistantBlock({ ctx }: { ctx: BlockCtx }) {
+let assistBusy = false;
+const assistSubs = new Set<() => void>();
+const assistEmit = () => assistSubs.forEach((f) => f());
+const HINTS = ['Покажи только критические', 'Поменяй местами левый и правый блоки', 'Покажи крупно самый срочный', 'Стиль «Центр управления»', 'Добавь карту', 'Раскладка «Четыре группы»', 'Сделай новогоднее оформление с золотом'];
+function AssistantBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now } = ctx;
   const brief = useBrief();
   const [text, setText] = useState('');
-  const [log, setLogState] = useState(assistLog);
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((n) => n + 1);
+    assistSubs.add(f);
+    return () => void assistSubs.delete(f);
+  }, []);
+  const log = assistLog;
+  const busy = assistBusy;
   const setLog = (f: (l: typeof assistLog) => typeof assistLog) => {
     assistLog = f(assistLog);
-    setLogState(assistLog);
+    assistEmit();
   };
-  const [busy, setBusy] = useState(false);
+  const setBusy = (v: boolean) => {
+    assistBusy = v;
+    assistEmit();
+  };
   const ready = jarvisReady();
+  const persona = personaById(jarvisPrefs.persona);
   const risks = useMemo(
     () =>
       snap.action
@@ -564,14 +662,17 @@ function AssistantBlock({ ctx }: { ctx: BlockCtx }) {
   };
   return (
     <div className="db db-ai">
-      <BlockHead title="ИИ-помощник" icon={<Bot size={18} />} right={<span className={`db-live ${ready && jarvisPrefs.control ? 'on' : ''}`}>{ready ? (jarvisPrefs.control ? 'Джарвис слушает' : 'Джарвис — по кнопке') : 'Джарвис выключен'}</span>} />
-      <div className="da-brief">
-        <small>
-          <Sparkles size={12} /> Главное сейчас{brief?.llm ? ' · ИИ' : ''}
-        </small>
-        <p>{brief?.text ?? (snap.action[0] ? `Главное — «${snap.action[0].inc.title}»: ${snap.action[0].att.reason.toLowerCase()}.` : 'Срочного нет — всё под контролем.')}</p>
+      <BlockHead title={`${persona.name} · ИИ-помощник`} icon={<Bot size={18} />} right={<span className={`db-live ${ready && jarvisPrefs.control ? 'on' : ''}`}>{ready ? (jarvisPrefs.control ? 'слушает' : 'по кнопке') : 'выключен'}</span>} />
+      <div className="da-brief da-char" style={{ ['--pc' as string]: persona.color }}>
+        <img className={`da-ava ${busy ? 'busy' : ''}`} src={persona.avatar} alt={persona.name} onError={(e) => ((e.currentTarget.style.display = 'none'))} />
+        <div className="da-bubble">
+          <small>
+            <Sparkles size={12} /> Главное сейчас{brief?.llm ? ' · ИИ' : ''}
+          </small>
+          <p>{brief?.text ?? (snap.action[0] ? `Главное — «${snap.action[0].inc.title}»: ${snap.action[0].att.reason.toLowerCase()}.` : 'Срочного нет — всё под контролем.')}</p>
+        </div>
       </div>
-      {risks.length > 0 && (
+      {ob(o, 'risks') && risks.length > 0 && (
         <div className="da-sec">
           <small>Риск стать критическим</small>
           {risks.map(({ i, r }) => (
@@ -585,7 +686,7 @@ function AssistantBlock({ ctx }: { ctx: BlockCtx }) {
           ))}
         </div>
       )}
-      {route.length > 0 && (
+      {ob(o, 'route') && route.length > 0 && (
         <div className="da-sec">
           <small>Кому передать (на координаторах)</small>
           {route.map((i) => (
@@ -599,7 +700,7 @@ function AssistantBlock({ ctx }: { ctx: BlockCtx }) {
           ))}
         </div>
       )}
-      {ready ? (
+      {!ob(o, 'ask') ? null : ready ? (
         <div className="da-ask">
           {log.map((x, k) => (
             <div key={k} className="da-log">
@@ -630,8 +731,9 @@ function AssistantBlock({ ctx }: { ctx: BlockCtx }) {
   );
 }
 
-function TransfersBlock({ ctx }: { ctx: BlockCtx }) {
-  const { snap, now } = ctx;
+function TransfersBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
+  const { snap } = ctx;
+  const count = on(o, 'count', 6);
   const list = useMemo(
     () =>
       snap.action
@@ -639,8 +741,8 @@ function TransfersBlock({ ctx }: { ctx: BlockCtx }) {
         .concat(snap.work)
         .filter((i, k, a) => a.indexOf(i) === k && transfers(i).length > 0)
         .sort((a, b) => transferCount(b) - transferCount(a) || Number(b.priority < a.priority) - Number(a.priority < b.priority))
-        .slice(0, 6),
-    [snap],
+        .slice(0, count),
+    [snap, count],
   );
   return (
     <div className="db db-tr">
@@ -666,17 +768,13 @@ function TransfersBlock({ ctx }: { ctx: BlockCtx }) {
                 return (
                   <span key={k} className="dt-step">
                     <i>→</i>
-                    <span className={`dt-hop ${again ? 'again' : ''} ${k === hops.length - 1 ? 'last' : ''}`}>
+                    <span className={`dt-hop ${again ? 'again' : ''} ${k === hops.length - 1 ? 'last' : ''}`} title={fmtClock(h.at)}>
                       {h.team}
-                      <small className="num">{fmtClock(h.at)}</small>
                     </span>
                   </span>
                 );
               })}
             </span>
-            <small className="dt-now">
-              сейчас: {who(i)} · до срока {leftText(i, now)}
-            </small>
           </button>
         );
       })}
@@ -684,7 +782,7 @@ function TransfersBlock({ ctx }: { ctx: BlockCtx }) {
   );
 }
 
-function StatsBlock({ ctx }: { ctx: BlockCtx }) {
+function StatsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now } = ctx;
   const incidents = useStore((s) => s.incidents);
   const complaints = useStore((s) => s.complaints);
@@ -712,6 +810,7 @@ function StatsBlock({ ctx }: { ctx: BlockCtx }) {
   return (
     <div className="db db-stats">
       <BlockHead title="Смена в цифрах" />
+      {ob(o, 'tiles') && (
       <div className="ds-grid">
         <div className="ds-k">
           <b className="num">{c.open}</b>
@@ -738,10 +837,13 @@ function StatsBlock({ ctx }: { ctx: BlockCtx }) {
           <span>жалоб в минуту</span>
         </div>
       </div>
-      <div className="ds-spark">
-        <small>Жалобы за час, по 5 минут</small>
-        <Spark values={k.series} width={320} height={48} />
-      </div>
+      )}
+      {ob(o, 'spark') && (
+        <div className="ds-spark" title="Жалобы за час, по 5 минут">
+          <Spark values={k.series} width={320} height={48} />
+        </div>
+      )}
+      {ob(o, 'bars') && (
       <div className="ds-bars">
         {DASH_GROUPS.map((g) => (
           <div key={g.id} className={`ds-bar g-${g.id}`}>
@@ -751,45 +853,46 @@ function StatsBlock({ ctx }: { ctx: BlockCtx }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }
 
 const KIND_TEXT: Partial<Record<FeedEvent['kind'], string>> = { p1: 'Критический', coordinators: 'На координаторах', resolved: 'Решён', routed: 'Передан', escalated: 'Эскалация', sla_breach: 'Срок прошёл', sla_warning: 'Срок близко', priority_up: 'Уровень выше', created: 'Новый', assigned: 'Назначен', in_progress: 'Взяли' };
-function EventsBlock() {
+function EventsBlock({ o }: { o?: Opts }) {
   const feed = useStore((s) => s.feed);
   const incidents = useStore((s) => s.incidents);
   return (
     <div className="db db-events">
       <BlockHead title="Лента событий" />
       <div className="de-list">
-        {feed.slice(0, 18).map((e) => (
-          <div key={e.id} className={`de k-${e.kind}`}>
+        {feed.slice(0, on(o, 'count', 18)).map((e) => (
+          <div key={e.id} className={`de k-${e.kind}`} title={e.text}>
             <b className="num">{fmtClock(e.at)}</b>
             <span>
-              <em>{KIND_TEXT[e.kind] ?? e.text}</em> {incidents.get(e.incidentId)?.title ?? ''}
-              <small>{e.text}</small>
+              <em>{KIND_TEXT[e.kind] ?? 'Событие'}</em> {incidents.get(e.incidentId)?.title ?? e.text}
             </span>
           </div>
         ))}
-        {!feed.length && <div className="db-empty">Событий пока нет</div>}
+        {!feed.length && <div className="db-empty">Событий нет</div>}
       </div>
     </div>
   );
 }
 
 const ROTATION: BlockId[] = ['assistant', 'transfers', 'stats', 'events'];
-function RotateBlock({ ctx, skip }: { ctx: BlockCtx; skip: Set<BlockId> }) {
-  const items = ROTATION.filter((b) => !skip.has(b));
+function RotateBlock({ ctx, skip, o }: { ctx: BlockCtx; skip: Set<BlockId>; o?: Opts }) {
+  const items = ROTATION.filter((b) => !skip.has(b) && ob(o, `r_${b}`));
+  const sec = on(o, 'sec', ctx.d.rotateSec);
   const list = items.length ? items : ROTATION;
   const [k, setK] = useState(0);
   // Пока на панель смотрят мышью или печатают Джарвису — не листаем.
   const [hold, setHold] = useState(false);
   useEffect(() => {
     if (hold) return;
-    const t = setInterval(() => setK((x) => x + 1), ctx.d.rotateSec * 1000);
+    const t = setInterval(() => setK((x) => x + 1), sec * 1000);
     return () => clearInterval(t);
-  }, [ctx.d.rotateSec, hold]);
+  }, [sec, hold]);
   const cur = list[k % list.length];
   return (
     <div
@@ -900,33 +1003,158 @@ function useAlerts(incidents: Map<string, Incident>, d: DashLayout) {
     const t = setInterval(() => setList((l) => l.filter((a) => a.until > Date.now())), 1000);
     return () => clearInterval(t);
   }, [list.length]);
-  const dismiss = useCallback(() => setList((l) => l.slice(1)), []);
+  const dismiss = useCallback((key?: string) => setList((l) => (key ? l.filter((a) => a.key !== key) : l.slice(1))), []);
   return useMemo(() => ({ list, top: list[0] ?? null, dismiss }), [list, dismiss]);
 }
 
-function Banner({ a, more, now, onClose, onOpen }: { a: Alert; more: number; now: number; onClose: () => void; onOpen: () => void }) {
-  const i = a.inc;
-  const title = a.kind === 'crit' ? 'Новый критический инцидент' : a.kind === 'resolved' ? 'Критический инцидент решён' : 'Назначен на координаторов — передать в команду';
+/** Уведомления стены — полосой между шапкой и блоками: ничего не закрывают, до трёх сразу, сами уходят. */
+const ALERT_TITLE = { crit: 'Новый критический', resolved: 'Критический решён', coord: 'Передать в команду' };
+function AlertStrip({ list, now, onClose, onOpen }: { list: Alert[]; now: number; onClose: (key?: string) => void; onOpen: (id: string) => void }) {
   return (
-    <div className={`dash-banner k-${a.kind}`} role="alert">
-      <div className="dbn-in" onClick={onOpen}>
-        <span className="dbn-icon">{a.kind === 'resolved' ? <CheckCircle2 size={34} /> : <BellRing size={34} />}</span>
-        <span className="dbn-text">
-          <small>
-            {title}
-            {a.test ? ' · проверка' : ''}
-          </small>
-          <b>{i.title}</b>
-          <span>
-            {i.productName || i.service} · {a.kind === 'resolved' ? `решён за ${fmtShort((i.resolvedAt ?? now) - i.createdAt)}` : `${who(i)} · до срока ${leftText(i, now)}`}
-            {a.kind === 'coord' && i.ai?.teamId ? ` · ИИ советует «${teamName(i.ai.teamId)}»` : ''}
-          </span>
-        </span>
-        {more > 0 && <span className="dbn-more">ещё {more}</span>}
-      </div>
-      <button className="dbn-x" onClick={onClose} aria-label="Скрыть">
-        <X size={20} />
+    <div className="dash-alerts" role="alert">
+      {list.slice(0, 3).map((a) => {
+        const i = a.inc;
+        return (
+          <div key={a.key} className={`dal k-${a.kind}`}>
+            <button className="dal-in" onClick={() => onOpen(i.id)} title="Показать крупно">
+              {a.kind === 'resolved' ? <CheckCircle2 size={20} /> : <BellRing size={20} />}
+              <span className="dal-t">
+                <small>
+                  {ALERT_TITLE[a.kind]}
+                  {a.test ? ' · проверка' : ''}
+                </small>
+                <b>{i.title}</b>
+              </span>
+              <span className="dal-r num">{a.kind === 'resolved' ? `за ${fmtShort((i.resolvedAt ?? now) - i.createdAt)}` : leftText(i, now)}</span>
+            </button>
+            <button className="dal-x" onClick={() => onClose(a.key)} aria-label="Скрыть">
+              <X size={15} />
+            </button>
+            <i className="dal-life" style={{ animationDuration: `${ALERT_MS[a.kind]}ms` }} />
+          </div>
+        );
+      })}
+      {list.length > 3 && <span className="dal-more">ещё {list.length - 3}</span>}
+    </div>
+  );
+}
+
+// ─── «Изменить блоки»: панель колонки, граница-ползунок, настройки блока ───
+function ColBar({ k, n, c, onEdit }: { k: number; n: number; c: DashColumn; onEdit: () => void }) {
+  return (
+    <div className="dce dce-bar">
+      <button className="dce-name" onClick={onEdit} title="Настройки этого блока">
+        <SlidersHorizontal size={14} /> {BLOCK_NAME[c.block]}
       </button>
+      <button disabled={k === 0} onClick={() => applyDashOp({ op: 'swap', a: k, b: k - 1 })} aria-label="Левее">
+        <ArrowLeft size={14} />
+      </button>
+      <button disabled={k === n - 1} onClick={() => applyDashOp({ op: 'swap', a: k, b: k + 1 })} aria-label="Правее">
+        <ArrowRight size={14} />
+      </button>
+      <button disabled={n <= 1} onClick={() => setDash((d) => ({ preset: 'custom', columns: d.columns.filter((_, x) => x !== k) }))} aria-label="Убрать блок">
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+}
+
+/** Граница между колонками: тянешь мышью — колонки делят место. */
+function Splitter({ k, colsRef }: { k: number; colsRef: React.RefObject<HTMLDivElement | null> }) {
+  const down = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const secs = colsRef.current?.querySelectorAll<HTMLElement>(':scope > .dash-col');
+    if (!secs || !secs[k + 1]) return;
+    const a = secs[k].getBoundingClientRect().width;
+    const b = secs[k + 1].getBoundingClientRect().width;
+    const start = getDash().columns.map((c) => ({ ...c }));
+    const fa = start[k].width;
+    const fb = start[k + 1].width;
+    const x0 = e.clientX;
+    let raf = 0;
+    const move = (ev: PointerEvent) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const dx = Math.max(-a + 140, Math.min(b - 140, ev.clientX - x0));
+        const total = fa + fb;
+        let na = (total * (a + dx)) / (a + b);
+        na = Math.max(0.6, Math.min(3, Math.min(total - 0.6, na)));
+        const cols = start.map((c, x) => (x === k ? { ...c, width: +na.toFixed(2) } : x === k + 1 ? { ...c, width: +(total - na).toFixed(2) } : c));
+        setDash({ preset: 'custom', columns: cols });
+      });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.classList.remove('dash-resizing');
+    };
+    document.body.classList.add('dash-resizing');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return <div className="dce dce-split" onPointerDown={down} title="Тяните, чтобы поменять ширину" role="separator" aria-orientation="vertical" />;
+}
+
+/** Настройки одного блока: что в нём, ширина, размер текста и его собственные переключатели. */
+function BlockEditor({ k, c, onClose }: { k: number; c: DashColumn; onClose: () => void }) {
+  const set = (patch: Partial<DashColumn>) => setDash((d) => ({ preset: 'custom', columns: d.columns.map((x, n) => (n === k ? { ...x, ...patch } : x)) }));
+  const setOpt = (key: string, v: boolean | number) => set({ opts: { ...(c.opts ?? {}), [key]: v } });
+  const scale = c.scale ?? 1;
+  return (
+    <div className="dce dce-pop" onPointerDown={(e) => e.stopPropagation()}>
+      <header>
+        <b>{BLOCK_NAME[c.block]}</b>
+        <button onClick={onClose} aria-label="Закрыть">
+          <X size={16} />
+        </button>
+      </header>
+      <label>
+        Что в блоке
+        <select value={c.block} onChange={(e) => applyDashOp({ op: 'replace', at: k, block: e.target.value as BlockId })}>
+          {BLOCKS.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>
+          Ширина <b className="num">{c.width.toFixed(1)}</b>
+        </span>
+        <input type="range" min={0.6} max={3} step={0.05} value={c.width} onChange={(e) => set({ width: +e.target.value })} />
+      </label>
+      <label>
+        <span>
+          Размер текста <b className="num">{Math.round(scale * 100)}%</b>
+        </span>
+        <input type="range" min={0.7} max={1.6} step={0.05} value={scale} onChange={(e) => set({ scale: +e.target.value })} />
+      </label>
+      {(BLOCK_OPTS[c.block] ?? []).map((o) =>
+        o.type === 'bool' ? (
+          <label key={o.key} className="dce-check">
+            <input type="checkbox" checked={ob(c.opts, o.key, o.def as boolean)} onChange={(e) => setOpt(o.key, e.target.checked)} /> {o.label}
+          </label>
+        ) : (
+          <label key={o.key}>
+            <span>
+              {o.label}{' '}
+              <b className="num">
+                {on(c.opts, o.key, o.def as number)}
+                {o.unit ?? ''}
+              </b>
+            </span>
+            <input type="range" min={o.min} max={o.max} step={o.step ?? 1} value={on(c.opts, o.key, o.def as number)} onChange={(e) => setOpt(o.key, +e.target.value)} />
+          </label>
+        ),
+      )}
+      <footer>
+        <button onClick={() => set({ opts: undefined, scale: 1 })}>Сбросить блок</button>
+        <button className="on" onClick={onClose}>
+          Готово
+        </button>
+      </footer>
     </div>
   );
 }

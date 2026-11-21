@@ -1,9 +1,12 @@
 // «Настройки дашборда»: раскладка блоков (готовая или своя), стиль из 26, тревоги, Джарвис и поведение.
 // Всё сохраняется в этом браузере и сразу доходит до окна стены.
-import { ArrowLeft, ArrowRight, Minus, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, ArrowRight, Lock, Plus, RotateCcw, Sparkles, Trash2, Unlock, X } from 'lucide-react';
 import { BLOCKS, DASH_GROUPS, PRESETS, type BlockId, type DashGroup } from '../../../shared/dash';
-import { DASH_STYLES } from '../../../shared/dashStyles';
+import { DASH_STYLES, type DashStyle } from '../../../shared/dashStyles';
 import { DEFAULT_DASH, applyDashOp, dashEvent, setDash, useDash } from '../../lib/dashLayout';
+import { applyDesign, askDesign, type DesignTurn } from '../../lib/dashDesign';
+import { PersonaPicker, jarvisPrefs, setJarvisPref } from '../Jarvis';
 
 export function DashSettings({ onClose }: { onClose: () => void }) {
   const d = useDash();
@@ -19,6 +22,31 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
             <X size={18} />
           </button>
         </header>
+
+        <section>
+          <div className={`dset-lock ${d.locked ? 'on' : ''}`}>
+            {d.locked ? <Lock size={18} /> : <Unlock size={18} />}
+            <span style={{ flex: 1 }}>
+              <b>{d.locked ? 'Интерфейс закреплён за вами' : 'Закрепить интерфейс за мной'}</b>
+              <small>Раскладка, стиль, персонаж и голос хранятся в вашей учётной записи — на любом компьютере после входа будет так же. Пока закреплено, Джарвис и случайные нажатия ничего не меняют.</small>
+            </span>
+            <button className={`dset-btn ${d.locked ? 'on' : ''}`} onClick={() => setDash({ locked: !d.locked })}>
+              {d.locked ? 'Открепить' : 'Закрепить'}
+            </button>
+          </div>
+        </section>
+
+        <fieldset className="dset-body" disabled={d.locked}>
+        <section>
+          <h3>Персонаж ИИ-помощника</h3>
+          <PersonaPicker compact />
+          <label className="dset-check">
+            <input type="checkbox" defaultChecked={jarvisPrefs.work} onChange={(e) => setJarvisPref('work', e.target.checked)} /> Показывать работу Джарвиса: по шагам, что он делает на сайте прямо сейчас
+          </label>
+          <label className="dset-check">
+            <input type="checkbox" defaultChecked={jarvisPrefs.speak} onChange={(e) => setJarvisPref('speak', e.target.checked)} /> Отвечать голосом (у каждого персонажа свой)
+          </label>
+        </section>
 
         <section>
           <h3>Готовые раскладки</h3>
@@ -46,15 +74,10 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
                       </option>
                     ))}
                   </select>
-                  <span className="dset-w" title="Ширина колонки">
-                    <button onClick={() => setCols(cols.map((x, n) => (n === k ? { ...x, width: Math.max(0.6, +(x.width - 0.2).toFixed(1)) } : x)))} aria-label="Уже">
-                      <Minus size={13} />
-                    </button>
+                  <label className="dset-w" title="Ширина колонки">
+                    <input type="range" min={0.6} max={3} step={0.05} value={c.width} onChange={(e) => setCols(cols.map((x, n) => (n === k ? { ...x, width: +e.target.value } : x)))} aria-label={`Ширина колонки ${k + 1}`} />
                     <b className="num">{c.width.toFixed(1)}</b>
-                    <button onClick={() => setCols(cols.map((x, n) => (n === k ? { ...x, width: Math.min(3, +(x.width + 0.2).toFixed(1)) } : x)))} aria-label="Шире">
-                      <Plus size={13} />
-                    </button>
-                  </span>
+                  </label>
                   <button disabled={k === 0} onClick={() => applyDashOp({ op: 'swap', a: k, b: k - 1 })} aria-label="Левее">
                     <ArrowLeft size={14} />
                   </button>
@@ -64,13 +87,33 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
                   <button disabled={cols.length <= 1} onClick={() => setCols(cols.filter((_, n) => n !== k))} aria-label="Убрать колонку">
                     <Trash2 size={14} />
                   </button>
-                  <small className="dset-hint">{BLOCKS.find((b) => b.id === c.block)?.hint}</small>
+                  <small className="dset-hint">
+                    {BLOCKS.find((b) => b.id === c.block)?.hint}{' '}
+                    <button
+                      className="dset-link"
+                      onClick={() => {
+                        dashEvent({ type: 'edit', on: true, k });
+                        onClose();
+                      }}
+                    >
+                      Настроить блок на стене →
+                    </button>
+                  </small>
                 </div>
               ))}
             </div>
             <div className="dset-row">
               <button className="dset-btn" disabled={cols.length >= 4} onClick={() => setCols([...cols, { block: BLOCKS.find((b) => !cols.some((c) => c.block === b.id))?.id ?? 'events', width: 1 }])}>
                 <Plus size={14} /> Добавить колонку
+              </button>
+              <button
+                className="dset-btn on"
+                onClick={() => {
+                  dashEvent({ type: 'edit', on: true });
+                  onClose();
+                }}
+              >
+                Изменить блоки прямо на стене
               </button>
               <label className="dset-check">
                 <input type="checkbox" checked={d.counters} onChange={(e) => setDash({ counters: e.target.checked })} /> Шапка со счётчиками групп
@@ -84,9 +127,18 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
 
         <section>
           <h3>
-            Стиль <small>{DASH_STYLES.length} оформлений</small>
+            Стиль <small>{DASH_STYLES.length} оформлений{d.customStyles.length ? ` + ${d.customStyles.length} ваших` : ''}</small>
           </h3>
+          <DesignBox />
           <div className="dset-styles">
+            {[...d.customStyles].reverse().map((s) => (
+              <span key={s.id} style={{ display: 'grid' }}>
+                <StyleSwatch s={s} on={d.style === s.id} />
+                <button className="dset-del" onClick={() => applyDashOp({ op: 'removeStyle', id: s.id })}>
+                  убрать
+                </button>
+              </span>
+            ))}
             {DASH_STYLES.map((s) => (
               <button key={s.id} className={d.style === s.id ? 'on' : ''} onClick={() => setDash({ style: s.id })} title={s.name}>
                 <span className="dset-sw" style={{ background: s.bg }}>
@@ -177,12 +229,137 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
           </p>
         </section>
 
+        </fieldset>
         <footer className="dset-f">
           <button className="dset-btn" onClick={() => setDash({ ...DEFAULT_DASH, columns: DEFAULT_DASH.columns.map((c) => ({ ...c })) })}>
             <RotateCcw size={14} /> Вернуть всё по умолчанию
           </button>
         </footer>
       </aside>
+    </div>
+  );
+}
+
+function StyleSwatch({ s, on }: { s: DashStyle; on: boolean }) {
+  return (
+    <button className={on ? 'on' : ''} onClick={() => setDash({ style: s.id })} title={s.name}>
+      <span className="dset-sw" style={{ background: s.bg }}>
+        <i style={{ background: s.panel, borderColor: s.line }}>
+          <em style={{ background: s.crit }} />
+          <em style={{ background: s.high }} />
+          <em style={{ background: s.low }} />
+        </i>
+        <i style={{ background: s.panel, borderColor: s.line }}>
+          <u style={{ background: s.text }} />
+          <u style={{ background: s.muted }} />
+        </i>
+      </span>
+      <span>
+        {s.custom ? '✦ ' : ''}
+        {s.name}
+      </span>
+    </button>
+  );
+}
+
+/** Дизайн по описанию: ChatGPT придумывает стиль сразу или сначала задаёт уточняющие вопросы. */
+// Разговор с ChatGPT о дизайне не пропадает, если закрыть и снова открыть настройки.
+const keep = { mode: 'quick' as 'quick' | 'ask', chat: [] as DesignTurn[], options: [] as string[] };
+function useKept<K extends keyof typeof keep>(k: K) {
+  const [v, set] = useState(keep[k]);
+  return [v, (x: (typeof keep)[K] | ((p: (typeof keep)[K]) => (typeof keep)[K])) => {
+    const next = typeof x === 'function' ? (x as (p: (typeof keep)[K]) => (typeof keep)[K])(keep[k]) : x;
+    keep[k] = next;
+    set(next);
+  }] as const;
+}
+function DesignBox() {
+  const [text, setText] = useState('');
+  const [mode, setMode] = useKept('mode');
+  const [chat, setChat] = useKept('chat');
+  const [options, setOptions] = useKept('options');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const send = async (msg: string) => {
+    if (!msg.trim() || busy) return;
+    setBusy(true);
+    setErr('');
+    setOptions([]);
+    const history = chat;
+    setChat((c) => [...c, { role: 'user', content: msg }]);
+    setText('');
+    try {
+      const r = await askDesign(msg, mode, history);
+      if (r.kind === 'question') {
+        setChat((c) => [...c, { role: 'assistant', content: r.question }]);
+        setOptions(r.options);
+      } else {
+        applyDesign(r);
+        setChat((c) => [...c, { role: 'assistant', content: `Готово: «${r.style.name}». ${r.note}` }]);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="dset-design">
+      <div className="dset-row">
+        <Sparkles size={15} />
+        <b>Дизайн по описанию — ChatGPT</b>
+        <span style={{ flex: 1 }} />
+        <button className={`dset-btn ${mode === 'quick' ? 'on' : ''}`} onClick={() => setMode('quick')} title="Сразу делает оформление по одному описанию">
+          Одним запросом
+        </button>
+        <button className={`dset-btn ${mode === 'ask' ? 'on' : ''}`} onClick={() => setMode('ask')} title="Сначала задаст 1–2 уточняющих вопроса">
+          С уточнениями
+        </button>
+      </div>
+      {chat.length > 0 && (
+        <div className="dset-chat">
+          {chat.map((m, k) => (
+            <div key={k} className={`dset-msg ${m.role}`}>
+              {m.content}
+            </div>
+          ))}
+        </div>
+      )}
+      {options.length > 0 && (
+        <div className="dset-opts">
+          {options.map((o) => (
+            <button key={o} className="dset-btn" onClick={() => void send(o)} disabled={busy}>
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={chat.length ? 'Ответьте или уточните…' : 'Например: строго и по-деловому, тёмно-синий с бирюзой, крупные цифры. Или: новогодняя стена с золотом и снегом.'}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void send(text);
+        }}
+        disabled={busy}
+      />
+      <div className="dset-row">
+        <button className="dset-btn on" onClick={() => void send(text)} disabled={busy || !text.trim()}>
+          <Sparkles size={14} /> {busy ? 'ChatGPT думает…' : chat.length ? 'Отправить' : 'Придумать оформление'}
+        </button>
+        {chat.length > 0 && (
+          <button
+            className="dset-btn"
+            onClick={() => {
+              setChat([]);
+              setOptions([]);
+            }}
+            disabled={busy}
+          >
+            Заново
+          </button>
+        )}
+        {err && <span className="dset-err">{err}</span>}
+      </div>
     </div>
   );
 }

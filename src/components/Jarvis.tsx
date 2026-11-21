@@ -4,13 +4,15 @@
 //   «Голос Джарвиса» — отвечает вслух живым голосом (говорящие модели OpenRouter, ключ на сервере), объявляет критические.
 // Разговор помнит, о каком инциденте речь: «объясни», «кому дать?», «выдай» — без номеров.
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Check, Lock, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
+import { Activity, Check, Loader2, Lock, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
 import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
 import type { DashOp } from '../../shared/dash';
-import { applyDashOp, dashSummary, getDash, wallWindowOpen } from '../lib/dashLayout';
+import { PERSONAS, inGender, personaById } from '../../shared/personas';
+import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, wallWindowOpen } from '../lib/dashLayout';
 
 type Phase = 'idle' | 'listen' | 'think' | 'speak';
 type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean; done?: string[]; event?: boolean };
+type Step = { id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string };
 type Action =
   | { type: 'open'; id: string }
   | { type: 'tab'; tab: string }
@@ -20,7 +22,8 @@ type Action =
   | { type: 'team'; name: string }
   | { type: 'show'; what: string }
   | { type: 'report' }
-  | { type: 'dash'; cmd: DashOp };
+  | { type: 'dash'; cmd: DashOp }
+  | { type: 'design'; prompt: string };
 interface Status {
   llm: boolean;
   tts: boolean;
@@ -44,6 +47,8 @@ export const jarvisPrefs = {
   speak: readLocal<boolean>('radar.jarvis.speak', true), // голос Джарвиса
   announce: readLocal<boolean>('radar.jarvis.announce', true), // объявлять критические голосом
   voice: readLocal<string>('radar.jarvis.voice2', 'mm-guy'), // новый набор голосов: прежний «Адам» не прижился
+  persona: readLocal<string>('radar.jarvis.persona', 'jarvis'), // персонаж: имя, характер, голос, картинка
+  work: readLocal<boolean>('radar.jarvis.work', true), // показывать, что он делает на сайте прямо сейчас
   scenario: false, // идёт сценарий для жюри: Джарвис действует и говорит, микрофон молчит (не сохраняется)
 };
 /** Сценарий для жюри включает режим «сценарий» (не сохраняется в настройках). */
@@ -56,6 +61,11 @@ export function setJarvisPref<K extends keyof typeof jarvisPrefs>(k: K, v: (type
   jarvisPrefs[k] = v;
   writeLocal(`radar.jarvis.${k === 'voice' ? 'voice2' : k}`, v);
   listeners.forEach((f) => f());
+}
+/** Подписка на изменения настроек Джарвиса (для сохранения в учётной записи). */
+export function subscribeJarvisPrefs(f: () => void) {
+  listeners.add(f);
+  return () => void listeners.delete(f);
 }
 function usePrefs() {
   const [, force] = useState(0);
@@ -339,7 +349,18 @@ class Ear {
   }
 }
 const ear = new Ear();
-const WAKE = /(?:^|\s)(джарвис|жарвис|джервис|джарвиз|джавис|jarvis)[,.!?\s]*/i;
+// Зовут по имени персонажа или по-старому «Джарвис».
+let wakeFor = '';
+let wakeRe = /$^/;
+function wake() {
+  if (wakeFor !== jarvisPrefs.persona) {
+    wakeFor = jarvisPrefs.persona;
+    const words = [...new Set([...personaById(jarvisPrefs.persona).wake, ...PERSONAS[0].wake])].sort((a, b) => b.length - a.length);
+    wakeRe = new RegExp(`(?:^|\\s)(${words.join('|')})[,.!?\\s]*`, 'i');
+  }
+  return wakeRe;
+}
+const WAKE = { test: (t: string) => wake().test(t), exec: (t: string) => wake().exec(t) };
 const afterWake = (t: string) => {
   const m = WAKE.exec(t);
   return m ? t.slice(m.index + m[0].length).trim() : t.trim();
@@ -414,6 +435,7 @@ function runActions(actions: Action[]) {
     switch (a.type) {
       case 'open':
         if (getState().incidents.has(a.id)) {
+          openWork(); // карточка — в рабочем месте
           openIncident(a.id);
           revealRow();
         }
@@ -426,12 +448,22 @@ function runActions(actions: Action[]) {
         void import('../lib/shiftReport').then((m) => m.downloadShiftReport());
         break;
       case 'dash':
-        // Стена в отдельном окне получит изменение сама; иначе показываем её здесь.
-        if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && getState().tab !== 'wall') setTab('wall');
+        // Стена в отдельном окне получит изменение сама; иначе возвращаемся на главный экран — дашборд.
+        if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && isWorkOpen() && getState().tab !== 'wall') closeWork();
         setTimeout(() => applyDashOp(a.cmd), 60);
         break;
+      case 'design':
+        if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && isWorkOpen() && getState().tab !== 'wall') closeWork();
+        void import('../lib/dashDesign').then((m) => m.designNow(a.prompt));
+        break;
       case 'tab':
+        // «Видеостена» — это главный экран; любая другая вкладка открывает рабочее место.
+        if (a.tab === 'wall') {
+          closeWork();
+          break;
+        }
         if (TABS.includes(a.tab)) {
+          openWork();
           setTab(a.tab);
           flash(`.stab[data-tab="${a.tab}"]`);
         }
@@ -447,6 +479,7 @@ function runActions(actions: Action[]) {
         setSkin(a.id);
         break;
       case 'team':
+        openWork();
         openTeamInDirectory(a.name);
         break;
     }
@@ -459,6 +492,8 @@ export function Jarvis() {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [lines, setLines] = useState<Line[]>([]);
+  const [steps, setSteps] = useState<Step[]>([]); // «Работа Джарвиса»: что он делает прямо сейчас
+  const [stepsAt, setStepsAt] = useState(0);
   const [heard, setHeard] = useState('');
   const [text, setText] = useState('');
   const [status, setStatus] = useState<Status | null>(null);
@@ -565,16 +600,35 @@ export function Jarvis() {
     setPhase('think');
     try {
       const s = getState();
+      const live = jarvisPrefs.work;
+      if (live) {
+        setSteps([{ id: 'hear', text: `Услышал: «${question.length > 60 ? `${question.slice(0, 58)}…` : question}»`, state: 'done' }]);
+        setStepsAt(Date.now());
+      }
       const r = await fetch('/api/jarvis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history, dash: dashSummary(), dashControl: getDash().jarvisEdit }),
+        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history, dash: dashSummary(), dashControl: getDash().jarvisEdit, persona: jarvisPrefs.persona, stream: live }),
       });
-      const data = (await r.json()) as { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
-      if (!r.ok) throw new Error(data.error ?? 'нет ответа');
+      type Reply = { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
+      let data: Reply;
+      if (live && r.ok && r.body && (r.headers.get('Content-Type') ?? '').includes('event-stream')) {
+        // Поток: шаги показываем сразу, действия выполняем сразу — экран меняется, пока он ещё думает.
+        data = await readStream(r.body, (e) => {
+          if (e.type === 'step')
+            // «Думаю» — пока идёт работа; «ответ готов» — в конце списка, после всех шагов.
+            setSteps((list) => (e.id === 'think' && e.state !== 'run' ? [...list.filter((x) => x.id !== 'think'), e] : list.some((x) => x.id === e.id) ? list.map((x) => (x.id === e.id ? { ...x, ...e } : x)) : [...list, e]));
+          else if (e.type === 'actions') runActions(e.actions);
+        });
+        setSteps((list) => list.map((x) => (x.state === 'run' ? { ...x, state: 'done' } : x)));
+        setStepsAt(Date.now());
+      } else {
+        data = (await r.json()) as Reply;
+        if (!r.ok) throw new Error(data.error ?? 'нет ответа');
+        runActions(data.actions ?? []);
+      }
       if (data.focus) focus.current = data.focus;
       setLines((l) => [...l, { role: 'assistant', content: data.reply, llm: data.llm, done: data.done }]);
-      runActions(data.actions ?? []);
       // Джарвис показывает изменение в карточке — сворачиваем окно, чтобы оно его не закрывало
       // (ответ виден подписью у шара; окно — по клику на шар).
       if (data.actions?.some((a) => a.type === 'show') && window.innerWidth < 2200) setOpen(false);
@@ -746,14 +800,16 @@ export function Jarvis() {
                 : 'Скажите «Джарвис, …»';
   const last = [...lines].reverse().find((l) => l.role === 'assistant');
   const suggest = control ? SUGGEST_CONTROL : SUGGEST_CHAT;
+  const persona = personaById(prefs.persona);
+  const workVisible = prefs.work && steps.length > 0 && (phase === 'think' || Date.now() - stepsAt < 7000);
 
   return (
     <div className={`jv jv-${phase} ${awaiting && (hearing || !control) ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>
       {open && (
         <div className="jv-panel" role="dialog" aria-label="Джарвис — голосовой помощник">
           <div className="jv-head">
-            <Bot size={16} />
-            <b>Джарвис</b>
+            <img className="jv-ava" src={persona.avatar} alt="" onError={(e) => ((e.currentTarget.style.display = 'none'))} />
+            <b>{persona.name}</b>
             <span className={`jv-mode ${status?.llm ? 'on' : ''}`} title={status?.llm ? `Думает: ${status.model}. Говорит: живой голос через OpenRouter` : 'Без ключа OpenRouter: команды по правилам и голос браузера'}>
               {status?.llm ? 'Claude + живой голос' : 'по правилам'}
             </span>
@@ -781,6 +837,9 @@ export function Jarvis() {
             <button className={`jv-flag ${prefs.speak ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
               {prefs.speak ? <Volume2 size={12} /> : <VolumeX size={12} />}
               {prefs.speak ? 'голос' : 'без голоса'}
+            </button>
+            <button className={`jv-flag ${prefs.work ? 'on' : ''}`} onClick={() => setJarvisPref('work', !prefs.work)} title="Показывать, что Джарвис делает на сайте прямо сейчас">
+              <Activity size={12} /> {prefs.work ? 'работа видна' : 'работа скрыта'}
             </button>
           </div>
           <div className="jv-log" ref={log}>
@@ -853,6 +912,22 @@ export function Jarvis() {
         </div>
       )}
       {!open && heard && <div className="jv-sub user">{heard}</div>}
+      {workVisible && (
+        <div className="jv-work" role="status" aria-live="polite">
+          <div className="jv-work-h">
+            <Activity size={13} /> {persona.name} за работой
+          </div>
+          {steps.map((x) => (
+            <div key={x.id} className={`jv-step ${x.state}`}>
+              <span className="jv-step-i">{x.state === 'run' ? <Loader2 size={13} /> : x.state === 'done' ? <Check size={13} /> : <X size={13} />}</span>
+              <span>
+                {inGender(x.text, persona)}
+                {x.note && <small>{x.note}</small>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="jv-dock">
         {(phase !== 'idle' || awaiting || (control && (!open || !hearing))) && <span className={`jv-label ${control && phase === 'idle' && !hearing ? 'warn' : ''}`}>{label}</span>}
         <button
@@ -869,6 +944,7 @@ export function Jarvis() {
           <span className="jv-core" />
           <span className="jv-ring r1" />
           <span className="jv-ring r2" />
+          {prefs.persona !== 'jarvis' || persona.avatar ? <img className="jv-face" src={persona.avatar} alt="" onError={(e) => ((e.currentTarget.style.display = 'none'))} /> : null}
           <span className="jv-ico">
             <Mic size={18} />
           </span>
@@ -890,6 +966,17 @@ export function JarvisSettings() {
         Джарвис — голосовой помощник
         <span className={`jv-mode ${status?.llm ? 'on' : ''}`}>{status?.llm ? 'Claude + живой голос' : 'по правилам, голос браузера'}</span>
       </h3>
+
+      <PersonaPicker />
+
+      <div className={`jv-opt ${prefs.work ? 'on' : ''}`}>
+        <label className="jv-switch">
+          <input type="checkbox" checked={prefs.work} onChange={(e) => setJarvisPref('work', e.target.checked)} />
+          <span className="jv-knob" />
+          <b>Показывать работу Джарвиса</b>
+        </label>
+        <p className="muted">Пока он отвечает, у шара видно по шагам, что он делает на сайте: смотрит инцидент, открывает вкладку, передаёт команде, перестраивает стену. Изменения на экране появляются сразу, не дожидаясь ответа.</p>
+      </div>
 
       <div className={`jv-opt ${prefs.control ? 'on' : ''}`}>
         <label className="jv-switch">
@@ -926,7 +1013,7 @@ export function JarvisSettings() {
             className="btn btn-sm"
             onClick={() => {
               unlockJarvisAudio();
-              void say('Добрый вечер, сэр. Все системы пункта в норме.');
+              void say(personaById(prefs.persona).hello);
             }}
           >
             Прослушать
@@ -938,4 +1025,57 @@ export function JarvisSettings() {
       </div>
     </section>
   );
+}
+
+/** Выбор персонажа ИИ: имя, характер, голос и картинка меняются вместе. */
+export function PersonaPicker({ compact = false }: { compact?: boolean }) {
+  const prefs = usePrefs();
+  return (
+    <div className={`persona-pick ${compact ? 'compact' : ''}`}>
+      {PERSONAS.map((p) => (
+        <button
+          key={p.id}
+          className={`persona ${prefs.persona === p.id ? 'on' : ''}`}
+          style={{ ['--pc' as string]: p.color }}
+          onClick={() => {
+            setJarvisPref('persona', p.id);
+            setJarvisPref('voice', p.voice);
+            unlockJarvisAudio();
+            if (jarvisPrefs.speak) void say(p.hello, { voice: p.voice });
+          }}
+          title={`${p.name}: ${p.title}`}
+        >
+          <img src={p.avatar} alt="" onError={(e) => ((e.currentTarget.style.visibility = 'hidden'))} />
+          <b>{p.name}</b>
+          {!compact && <small>{p.title}</small>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+type StreamEvent = { type: 'step'; id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string } | { type: 'actions'; actions: Action[] } | ({ type: 'reply' } & { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean }) | { type: 'error'; error: string };
+/** Читает поток событий ответа: шаги и действия — сразу, в конце — сам ответ. */
+async function readStream(body: ReadableStream<Uint8Array>, on: (e: Exclude<StreamEvent, { type: 'reply' } | { type: 'error' }>) => void) {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let final: Extract<StreamEvent, { type: 'reply' }> | null = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let cut: number;
+    while ((cut = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, cut).trim();
+      buf = buf.slice(cut + 2);
+      if (!chunk.startsWith('data:')) continue;
+      const e = JSON.parse(chunk.slice(5)) as StreamEvent;
+      if (e.type === 'reply') final = e;
+      else if (e.type === 'error') throw new Error(e.error);
+      else on(e);
+    }
+  }
+  if (!final) throw new Error('ответ оборвался');
+  return final;
 }

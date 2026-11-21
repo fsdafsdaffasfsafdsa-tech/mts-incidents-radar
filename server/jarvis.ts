@@ -17,7 +17,8 @@ import { RULES } from './complaints.ts';
 import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
 import { myShiftWork } from '../shared/shift.ts';
 import type { DashOp } from '../shared/dash.ts';
-import { DASH_NOTE, DASH_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
+import { personaById } from '../shared/personas.ts';
+import { DASH_NOTE, DASH_TOOL, DESIGN_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
 
 const MIN = 60_000;
 export const key = () => process.env.OPENROUTER_API_KEY || '';
@@ -47,7 +48,8 @@ export type ClientAction =
   | { type: 'team'; name: string }
   | { type: 'show'; what: Show } // прокрутить карточку к разделу, который изменился, и подсветить
   | { type: 'report' } // собрать и скачать отчёт смены в PDF
-  | { type: 'dash'; cmd: DashOp }; // перестроить видеостену (дашборд)
+  | { type: 'dash'; cmd: DashOp } // перестроить видеостену (дашборд)
+  | { type: 'design'; prompt: string }; // придумать оформление стены по описанию (ChatGPT, в браузере)
 export type Show = 'top' | 'who' | 'route' | 'level' | 'p1' | 'signal' | 'chat' | 'decide';
 export interface JarvisAsk {
   text: string;
@@ -58,8 +60,15 @@ export interface JarvisAsk {
   short?: boolean; // сценарий для жюри: ещё короче
   dash?: DashCtx | null; // что сейчас на видеостене
   dashControl?: boolean; // в настройках дашборда разрешено перестраивать стену
+  persona?: string | null; // персонаж ИИ: имя, характер и голос
   history: { role: 'user' | 'assistant'; content: string }[];
 }
+/** Что Джарвис делает прямо сейчас — для окна «Работа Джарвиса» (поток событий во время ответа). */
+export type JarvisEvent =
+  | { type: 'step'; id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string }
+  | { type: 'actions'; actions: ClientAction[] };
+export type Emit = (e: JarvisEvent) => void;
+
 export interface JarvisReply {
   reply: string;
   actions: ClientAction[];
@@ -313,8 +322,79 @@ class Exec {
     private mode: Mode,
     focus: string | null,
     private dash: { ctx: DashCtx | null; allowed: boolean } = { ctx: null, allowed: false },
+    private emit: Emit = () => undefined,
   ) {
     this.focus = focus;
+  }
+  private steps = 0;
+  /** Выполнить инструмент и рассказать окну «Работа Джарвиса», что делается: до, после и что поменялось на экране. */
+  run(name: string, a: Record<string, unknown>): string {
+    const id = `t${++this.steps}`;
+    const before = { actions: this.actions.length, done: this.done.length };
+    this.emit({ type: 'step', id, text: this.describe(name, a), state: 'run' });
+    try {
+      const out = this.exec(name, a);
+      const done = this.done.slice(before.done);
+      this.emit({ type: 'step', id, text: done.join('; ') || this.describe(name, a, true), state: 'done' });
+      const fresh = this.actions.slice(before.actions);
+      if (fresh.length) this.emit({ type: 'actions', actions: fresh });
+      return out;
+    } catch (err) {
+      this.emit({ type: 'step', id, text: this.describe(name, a), state: 'fail', note: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+  }
+  /** Человеческим языком: «Смотрю инцидент …», «Открываю вкладку …». */
+  private describe(name: string, a: Record<string, unknown>, past = false): string {
+    const t = (id: unknown) => (typeof id === 'string' ? this.point.incidents.get(id)?.title : undefined) ?? 'инцидент';
+    const v = (now: string, was: string) => (past ? was : now);
+    switch (name) {
+      case 'get_incident':
+        return `${v('Смотрю', 'Посмотрел')} «${t(a.id)}»`;
+      case 'find_incidents':
+        return `${v('Ищу', 'Нашёл')} инциденты: «${String(a.query ?? '')}»`;
+      case 'who_is_on_duty':
+        return v('Смотрю, кто на смене', 'Посмотрел, кто на смене');
+      case 'shift_summary':
+        return v('Собираю итоги смены', 'Собрал итоги смены');
+      case 'suggest_assignee':
+        return `${v('Подбираю команду для', 'Подобрал команду для')} «${t(a.id)}»`;
+      case 'switch_tab':
+        return `${v('Открываю', 'Открыл')} вкладку ${TAB_NAMES[String(a.tab)] ?? ''}`;
+      case 'open_incident':
+        return `${v('Открываю', 'Открыл')} «${t(a.id)}»`;
+      case 'shift_report':
+        return v('Собираю отчёт смены в PDF', 'Собрал отчёт смены');
+      case 'open_settings':
+        return v('Открываю настройки', 'Открыл настройки');
+      case 'set_theme':
+        return v('Меняю тему экрана', 'Сменил тему экрана');
+      case 'replay':
+        return v('Запускаю перемотку карты', 'Запустил перемотку');
+      case 'open_team':
+        return `${v('Ищу в справочнике', 'Нашёл в справочнике')} «${String(a.team ?? '')}»`;
+      case 'take_incident':
+        return `${v('Беру на вас', 'Взял на вас')} «${t(a.id)}»`;
+      case 'assign_coordinator':
+        return `${v('Поручаю', 'Поручил')} «${t(a.id)}» — ${String(a.person ?? '')}`;
+      case 'route_incident':
+        return `${v('Передаю команде', 'Передал команде')} «${t(a.id)}»`;
+      case 'set_level':
+        return `${v('Меняю уровень', 'Сменил уровень')} «${t(a.id)}»`;
+      case 'answer_p1':
+        return `${v('Отвечаю на предложение «Наивысшего»', 'Ответил на предложение «Наивысшего»')}: «${t(a.id)}»`;
+      case 'notify_lead':
+        return `${v('Указываю руководителю', 'Указал руководителю')} по «${t(a.id)}»`;
+      case 'add_comment':
+        return `${v('Пишу в переписку', 'Написал в переписку')} «${t(a.id)}»`;
+      case 'create_from_cluster':
+        return v('Создаю инцидент из всплеска жалоб', 'Создал инцидент из всплеска');
+      case 'dashboard':
+        return v('Перестраиваю видеостену', 'Перестроил видеостену');
+      case 'design_dashboard':
+        return v('Придумываю оформление стены', 'Придумал оформление стены');
+    }
+    return v('Работаю', 'Сделал');
   }
   private inc(id: unknown) {
     const inc = typeof id === 'string' ? this.point.incidents.get(id) : undefined;
@@ -326,7 +406,7 @@ class Exec {
     if (this.mode !== 'control') throw new Error('управление экраном выключено в настройках — можно только отвечать');
   }
 
-  run(name: string, a: Record<string, unknown>): string {
+  private exec(name: string, a: Record<string, unknown>): string {
     const p = this.point;
     switch (name) {
       // ── узнать ──
@@ -373,6 +453,15 @@ class Exec {
         this.actions.push({ type: 'dash', cmd });
         this.done.push(done);
         return 'ok';
+      }
+      case 'design_dashboard': {
+        if (!this.dash.allowed && this.mode !== 'control') throw new Error('перестраивать дашборд Джарвису не разрешено — включите это в настройках дашборда');
+        if (this.dash.ctx?.locked) throw new Error('интерфейс закреплён за сотрудником — сначала открепите его в настройках дашборда');
+        const prompt = String(a.prompt ?? '').trim();
+        if (!prompt) throw new Error('опишите, каким сделать оформление');
+        this.actions.push({ type: 'design', prompt });
+        this.done.push(`Стена: ChatGPT придумывает оформление «${prompt.slice(0, 60)}»`);
+        return 'оформление придумывается и появится на стене через несколько секунд';
       }
       case 'shift_report':
         this.control();
@@ -552,22 +641,28 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 - «Он», «его», «этот» — инцидент в фокусе разговора или открытый на экране.
 - Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.
 - Пометки «(Сделано: …)» в истории — действия, которые уже выполнены на самом деле. Не оспаривай их и не повторяй без просьбы.`;
+/** Системная подсказка под выбранного персонажа: имя, обращение и характер. */
+function systemFor(id: string | null | undefined) {
+  const p = personaById(id);
+  return SYSTEM.replace('Ты — Джарвис,', `Ты — ${p.name},`).replace('- обращайся «сэр»;', `${p.address ? `- обращайся «${p.address}»;` : '- обращайся на «вы», без «сэр»;'}\n- характер: говори ${p.style};`);
+}
 const CONTROL_NOTE = `Режим «Джарвис управляет экраном» включён: ты можешь открывать вкладки, инциденты, настройки, менять тему, запускать перемотку, брать, поручать, передавать, менять уровень и писать в переписку. Когда объясняешь инцидент — обязательно открой его на экране (open_incident). «Открой вкладку и объясни ситуацию» — открой вкладку и самый важный инцидент на ней, потом объясни.`;
 const CHAT_NOTE = `Режим только ответов: ты ничего не открываешь и не меняешь. Если просят действие — скажи, что для этого нужно включить «Джарвис управляет экраном» в настройках.`;
 
 type Msg = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_calls?: unknown[]; tool_call_id?: string };
 
-async function llm(point: Point, me: Me, q: JarvisAsk): Promise<JarvisReply> {
+async function llm(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined): Promise<JarvisReply> {
   const dashOk = q.mode === 'control' || !!q.dashControl;
-  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId, { ctx: q.dash ?? null, allowed: !!q.dashControl });
+  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId, { ctx: q.dash ?? null, allowed: !!q.dashControl }, emit);
   const msgs: Msg[] = [
-    { role: 'system', content: `${SYSTEM}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}${dashOk ? `\n${DASH_NOTE}` : ''}${q.short ? '\nСейчас показ для жюри: отвечай особенно коротко — одна-две фразы, до 25 слов, без поправок к прошлым ответам.' : ''}` },
+    { role: 'system', content: `${systemFor(q.persona)}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}${dashOk ? `\n${DASH_NOTE}` : ''}${q.short ? '\nСейчас показ для жюри: отвечай особенно коротко — одна-две фразы, до 25 слов, без поправок к прошлым ответам.' : ''}` },
     { role: 'system', content: `Данные пункта сейчас:\n${contextText(point, me, q)}` },
     ...q.history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }) as Msg),
     { role: 'user', content: q.text.slice(0, 500) },
   ];
-  const tools = [...INFO_TOOLS, ...(q.mode === 'control' ? CONTROL_TOOLS : []), ...(dashOk ? [DASH_TOOL] : [])];
+  const tools = [...INFO_TOOLS, ...(q.mode === 'control' ? CONTROL_TOOLS : []), ...(dashOk ? [DASH_TOOL, DESIGN_TOOL] : [])];
   let nudged = false;
+  emit({ type: 'step', id: 'think', text: 'Думаю над ответом', state: 'run' });
   for (let round = 0; round < 6; round++) {
     // Размышления у модели на OpenRouter обязательны — держим их на минимуме (голосу важна скорость),
     // а лимит с запасом, чтобы на сам ответ всегда хватало (иначе текст выходил пустым).
@@ -578,7 +673,10 @@ async function llm(point: Point, me: Me, q: JarvisAsk): Promise<JarvisReply> {
     if (process.env.JARVIS_DEBUG) console.log('Джарвис ←', JSON.stringify(m).slice(0, 600));
     if (!m.tool_calls?.length) {
       const reply = (m.content ?? '').trim();
-      if (reply) return { reply, actions: ex.actions, done: ex.done, focus: ex.focus, llm: true };
+      if (reply) {
+        emit({ type: 'step', id: 'think', text: 'Ответ готов', state: 'done' });
+        return { reply, actions: ex.actions, done: ex.done, focus: ex.focus, llm: true };
+      }
       // Модель промолчала — просим сказать вслух; если снова молчит, отвечаем сами.
       if (!nudged) {
         nudged = true;
@@ -586,7 +684,7 @@ async function llm(point: Point, me: Me, q: JarvisAsk): Promise<JarvisReply> {
         continue;
       }
       if (ex.done.length) return { reply: `Сделано, сэр: ${ex.done.join(', ')}.`, actions: ex.actions, done: ex.done, focus: ex.focus, llm: true };
-      const r2 = rules(point, me, { ...q, focusId: ex.focus });
+      const r2 = rules(point, me, { ...q, focusId: ex.focus }, emit);
       return { ...r2, actions: [...ex.actions, ...r2.actions], done: [...ex.done, ...r2.done] };
     }
     msgs.push({ role: 'assistant', content: m.content ?? '', tool_calls: m.tool_calls });
@@ -620,10 +718,10 @@ const TAB_WORDS: [RegExp, string][] = [
   [/смен[ауы] пункта|график/, 'shift'],
 ];
 
-function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
+function rules(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined): JarvisReply {
   const text = norm(q.text);
   const now = Date.now();
-  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId, { ctx: q.dash ?? null, allowed: !!q.dashControl });
+  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId, { ctx: q.dash ?? null, allowed: !!q.dashControl }, emit);
   const say = (reply: string): JarvisReply => ({ reply, actions: ex.actions, done: ex.done, focus: ex.focus, llm: false });
   const focus = () => (ex.focus ? point.incidents.get(ex.focus) : undefined) ?? findIncidents(point, text, 1)[0];
   const tryRun = (name: string, a: Record<string, unknown>) => {
@@ -639,7 +737,7 @@ function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
   };
 
   // Команды видеостене: «покажи только критические», «поменяй местами блоки», «сделай неон»…
-  const dashReply = dashRules(text, q.dash ?? null, (a) => tryRun('dashboard', a), q.tab === 'wall');
+  const dashReply = dashRules(text, q.dash ?? null, (a) => (a.op === '__design' ? tryRun('design_dashboard', { prompt: a.prompt }) : tryRun('dashboard', a)), q.tab === 'wall');
   if (dashReply) return say(dashReply);
   if (/кому .*(дать|переда|отда|поруч)|кто .*(возьм|подойд)/.test(text)) {
     const i = focus();
@@ -730,15 +828,16 @@ function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
   return say('Я понял не всё, сэр. Спросите «что горит», «кому дать?» или скажите «открой входящие».');
 }
 
-export async function ask(point: Point, me: Me, q: JarvisAsk): Promise<JarvisReply> {
+export async function ask(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined): Promise<JarvisReply> {
   if (key()) {
     try {
-      return await llm(point, me, q);
+      return await llm(point, me, q, emit);
     } catch (err) {
       console.error('Джарвис: модель недоступна, отвечаю по правилам —', err instanceof Error ? err.message : err);
+      emit({ type: 'step', id: 'think', text: 'Модель не ответила — делаю по правилам', state: 'fail' });
     }
   }
-  return rules(point, me, q);
+  return rules(point, me, q, emit);
 }
 
 /**

@@ -83,22 +83,21 @@ export function attention(i: Incident, now: number): Attention | null {
   const left = i.slaDeadline - now;
   const w = waitingTake(i, now);
   const t = transferCount(i);
-  const leftTxt = left > 0 ? `до срока ${fmtShort(left)}` : 'срок прошёл';
   if (i.priority === 'P1') {
-    if (i.status === 'coordinators') return { score: 1000, reason: `Критический на координаторах — передать · ${leftTxt}`, tone: 'crit' };
-    if (w !== null) return { score: 980, reason: `Критический ждёт принятия ${fmtShort(w)} · ${leftTxt}`, tone: 'crit' };
-    return { score: 950, reason: `Критический в работе · ${leftTxt}`, tone: 'crit' };
+    if (i.status === 'coordinators') return { score: 1000, reason: 'Передать в команду', tone: 'crit' };
+    if (w !== null) return { score: 980, reason: `Не приняли ${fmtShort(w)}`, tone: 'crit' };
+    return { score: 950, reason: 'В работе', tone: 'crit' };
   }
-  if (i.status === 'coordinators') return { score: 800 + (i.priority === 'P2' ? 50 : 0) + (isResearch(i) ? 10 : 0), reason: isResearch(i) ? 'Исследование назначено на координаторов — передать' : 'Назначен на координаторов — передать в команду', tone: 'warn' };
-  if (i.p1Proposal) return { score: 760, reason: 'ИИ предлагает поднять до «Наивысшего»', tone: 'warn' };
-  if (left < 30 * MIN) return { score: 700 + Math.min(60, Math.round(-left / MIN)), reason: left > 0 ? `Срок через ${fmtShort(left)}` : `Срок прошёл ${fmtShort(-left)} назад`, tone: 'warn' };
-  if (w !== null && w > NOT_TAKEN_MIN * MIN) return { score: 600, reason: `Команда не берёт ${fmtShort(w)}`, tone: 'warn' };
-  if (t >= 2) return { score: 500 + t, reason: `${t} передачи между командами`, tone: 'warn' };
+  if (i.status === 'coordinators') return { score: 800 + (i.priority === 'P2' ? 50 : 0) + (isResearch(i) ? 10 : 0), reason: 'Передать в команду', tone: 'warn' };
+  if (i.p1Proposal) return { score: 760, reason: 'ИИ: поднять до «Наивысшего»', tone: 'warn' };
+  if (left < 30 * MIN) return { score: 700 + Math.min(60, Math.round(-left / MIN)), reason: left > 0 ? 'Срок близко' : 'Просрочен', tone: 'warn' };
+  if (w !== null && w > NOT_TAKEN_MIN * MIN) return { score: 600, reason: 'Не берут', tone: 'warn' };
+  if (t >= 2) return { score: 500 + t, reason: `${t} передачи`, tone: 'warn' };
   if (i.priority === 'P2') {
     const r = riskOf(i, now);
-    return { score: 400 + r.score, reason: r.score >= 60 ? `Высокий — риск стать критическим ${r.score}%` : 'Высокий приоритет', tone: 'info' };
+    return { score: 400 + r.score, reason: r.score >= 60 ? `Риск ${r.score}%` : 'Высокий', tone: 'info' };
   }
-  if (isResearch(i)) return { score: 300, reason: 'Исследование ситуации — разбор причин', tone: 'info' };
+  if (isResearch(i)) return { score: 300, reason: 'Разбор причин', tone: 'info' };
   return null;
 }
 
@@ -171,6 +170,8 @@ export const BLOCK_NAME: Record<BlockId, string> = Object.fromEntries(BLOCKS.map
 export interface DashColumn {
   block: BlockId;
   width: number; // доля ширины, 1–3
+  scale?: number; // размер текста блока, 0.7–1.6
+  opts?: Record<string, boolean | number>; // собственные настройки блока
 }
 export type PresetId = 'case' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
 export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashColumn[]; filter?: DashGroup | null; density?: 'normal' | 'large' }[] = [
@@ -198,4 +199,6 @@ export type DashOp =
   | { op: 'focus'; id: string | null }
   | { op: 'toggle'; what: 'counters' | 'ticker' | 'onlyFile' | 'sound'; on: boolean }
   | { op: 'settings'; open: boolean }
+  | { op: 'customStyle'; style: import('./dashStyles.ts').DashStyle; preset?: PresetId | null; density?: 'normal' | 'large' | null }
+  | { op: 'removeStyle'; id: string }
   | { op: 'reset' };

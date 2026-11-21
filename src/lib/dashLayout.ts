@@ -3,7 +3,7 @@
 // перестраивает стену на соседнем экране.
 import { useEffect, useState } from 'react';
 import { BLOCKS, PRESETS, type BlockId, type DashColumn, type DashGroup, type DashOp, type PresetId } from '../../shared/dash';
-import { DASH_STYLE_IDS } from '../../shared/dashStyles';
+import { DASH_STYLE_IDS, dashStyleById, type DashStyle } from '../../shared/dashStyles';
 
 export interface DashLayout {
   preset: PresetId | 'custom';
@@ -20,6 +20,8 @@ export interface DashLayout {
   sound: boolean; // звук тревоги
   jarvis: boolean; // шар Джарвиса на отдельном экране стены
   jarvisEdit: boolean; // Джарвис может перестраивать стену
+  customStyles: DashStyle[]; // придуманные ChatGPT по описанию
+  locked: boolean; // интерфейс закреплён: Джарвис и случайные нажатия ничего не меняют
 }
 
 const KEY = 'radar.dash.v1';
@@ -39,14 +41,17 @@ export const DEFAULT_DASH: DashLayout = {
   sound: true,
   jarvis: true,
   jarvisEdit: true,
+  customStyles: [],
+  locked: false,
 };
 
 const blockIds = new Set(BLOCKS.map((b) => b.id));
 function clean(x: Partial<DashLayout> | null): DashLayout {
   const d = { ...DEFAULT_DASH, ...(x ?? {}) };
-  d.columns = (Array.isArray(d.columns) ? d.columns : DEFAULT_DASH.columns).filter((c) => blockIds.has(c.block)).map((c) => ({ block: c.block, width: clamp(Number(c.width) || 1, 0.6, 3) })).slice(0, MAX_COLS);
+  d.columns = (Array.isArray(d.columns) ? d.columns : DEFAULT_DASH.columns).filter((c) => blockIds.has(c.block)).map((c) => ({ block: c.block, width: clamp(Number(c.width) || 1, 0.6, 3), ...(c.scale ? { scale: clamp(Number(c.scale) || 1, 0.7, 1.6) } : {}), ...(c.opts && typeof c.opts === 'object' ? { opts: Object.fromEntries(Object.entries(c.opts).filter(([, v]) => typeof v === 'boolean' || typeof v === 'number')) } : {}) })).slice(0, MAX_COLS);
   if (!d.columns.length && d.preset !== 'legacy') d.columns = DEFAULT_DASH.columns.map((c) => ({ ...c }));
-  if (!DASH_STYLE_IDS.includes(d.style)) d.style = DEFAULT_DASH.style;
+  d.customStyles = (Array.isArray(d.customStyles) ? d.customStyles : []).filter((s) => s && typeof s.id === 'string' && s.custom).slice(-12);
+  if (!DASH_STYLE_IDS.includes(d.style) && !d.customStyles.some((s) => s.id === d.style)) d.style = DEFAULT_DASH.style;
   d.rotateSec = clamp(d.rotateSec, 8, 120);
   d.pageSec = clamp(d.pageSec, 6, 60);
   return d;
@@ -83,6 +88,12 @@ if (typeof window !== 'undefined')
     emit();
   });
 
+/** Подписка на любые изменения настроек стены (для сохранения в учётной записи). */
+export function subscribeDash(f: () => void) {
+  subs.add(f);
+  return () => void subs.delete(f);
+}
+
 export function useDash(): DashLayout {
   const [, force] = useState(0);
   useEffect(() => {
@@ -94,7 +105,7 @@ export function useDash(): DashLayout {
 }
 
 // ─── что-то разовое: крупно показать инцидент, открыть настройки, проверить тревогу ───
-type Ev = { type: 'focus'; id: string | null } | { type: 'settings'; open: boolean } | { type: 'test-alarm'; kind: 'crit' | 'resolved' | 'coord' };
+type Ev = { type: 'focus'; id: string | null } | { type: 'settings'; open: boolean } | { type: 'test-alarm'; kind: 'crit' | 'resolved' | 'coord' } | { type: 'designing'; text: string | null } | { type: 'edit'; on: boolean; k?: number | null };
 const evSubs = new Set<(e: Ev) => void>();
 const CH = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('radar.dash') : null;
 CH?.addEventListener('message', (m) => evSubs.forEach((f) => f(m.data as Ev)));
@@ -112,6 +123,7 @@ export function useDashEvents(f: (e: Ev) => void) {
 /** Применить действие (от Джарвиса или из настроек). Возвращает, что получилось, — человеческим языком. */
 export function applyDashOp(o: DashOp): string {
   const d = state;
+  if (d.locked && o.op !== 'focus' && o.op !== 'settings') return 'интерфейс закреплён — сначала открепите его в настройках дашборда';
   const cols = d.columns.map((c) => ({ ...c }));
   const custom = (columns: DashColumn[], extra: Partial<DashLayout> = {}) => setDash({ preset: 'custom', columns, ...extra });
   switch (o.op) {
@@ -147,7 +159,7 @@ export function applyDashOp(o: DashOp): string {
       if (!cols[at]) return 'нет такой колонки';
       const dup = cols.findIndex((c) => c.block === o.block);
       if (dup >= 0 && dup !== at) [cols[dup], cols[at]] = [cols[at], cols[dup]];
-      else cols[at] = { block: o.block, width: cols[at].width };
+      else cols[at] = { block: o.block, width: cols[at].width, scale: cols[at].scale };
       custom(cols);
       return 'заменил блок';
     }
@@ -161,8 +173,16 @@ export function applyDashOp(o: DashOp): string {
     case 'filter':
       setDash({ filter: o.group });
       return o.group ? 'фильтр по группе' : 'показываю все группы';
+    case 'customStyle': {
+      const list = [...d.customStyles.filter((s) => s.id !== o.style.id), { ...o.style, custom: true }].slice(-12);
+      setDash({ customStyles: list, style: o.style.id, ...(o.preset ? (() => { const p = PRESETS.find((x) => x.id === o.preset); return p && p.columns.length ? { preset: p.id, columns: p.columns.map((c) => ({ ...c })) } : {}; })() : {}), ...(o.density ? { density: o.density } : {}) });
+      return `свой стиль «${o.style.name}»`;
+    }
+    case 'removeStyle':
+      setDash({ customStyles: d.customStyles.filter((s) => s.id !== o.id), ...(d.style === o.id ? { style: DEFAULT_DASH.style } : {}) });
+      return 'убрал стиль';
     case 'style':
-      if (!DASH_STYLE_IDS.includes(o.style)) return 'нет такого стиля';
+      if (!DASH_STYLE_IDS.includes(o.style) && !d.customStyles.some((s) => s.id === o.style)) return 'нет такого стиля';
       setDash({ style: o.style });
       return 'сменил стиль';
     case 'density':
@@ -183,6 +203,27 @@ export function applyDashOp(o: DashOp): string {
   }
 }
 
+// ─── главный экран: после входа — дашборд, рабочее место открывается по кнопке ───
+let workOpen = false;
+const workSubs = new Set<() => void>();
+export const isWorkOpen = () => workOpen;
+export function setWorkOpen(v: boolean) {
+  if (workOpen === v) return;
+  workOpen = v;
+  workSubs.forEach((f) => f());
+}
+export const openWork = () => setWorkOpen(true);
+export const closeWork = () => setWorkOpen(false);
+export function useWorkOpen() {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((n) => n + 1);
+    workSubs.add(f);
+    return () => void workSubs.delete(f);
+  }, []);
+  return workOpen;
+}
+
 // ─── отдельное окно стены (на экране над рабочими местами) ───
 let wallWin: Window | null = null;
 export function openWallWindow() {
@@ -190,8 +231,11 @@ export function openWallWindow() {
 }
 export const wallWindowOpen = () => !!wallWin && !wallWin.closed;
 
+/** Стиль стены: готовый или придуманный ChatGPT. */
+export const currentStyle = (d: DashLayout) => d.customStyles.find((s) => s.id === d.style) ?? dashStyleById(d.style);
+
 /** Коротко для Джарвиса: что сейчас на стене. */
 export function dashSummary() {
   const d = state;
-  return { preset: d.preset, columns: d.columns.map((c) => c.block as BlockId), style: d.style, filter: d.filter, density: d.density };
+  return { preset: d.preset, columns: d.columns.map((c) => c.block as BlockId), style: d.style, filter: d.filter, density: d.density, locked: d.locked };
 }

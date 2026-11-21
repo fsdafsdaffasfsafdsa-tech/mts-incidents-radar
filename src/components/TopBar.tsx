@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Clapperboard, FileJson, FlaskConical, LogOut, Moon, Search, Settings2, Sun, Volume2, VolumeX } from 'lucide-react';
+import { Clapperboard, FileJson, FlaskConical, LogOut, MonitorPlay, Moon, Search, Settings2, Sun, Volume2, VolumeX } from 'lucide-react';
+import { closeWork } from '../lib/dashLayout';
 import { startScenario } from './Scenario';
 import { demoAuto, demoOutage, doLogout, setPalette, setSettings, teamName, toggleSound, toggleTheme, useStore } from '../store';
 import { fmtClockSec } from '../lib/format';
@@ -46,6 +47,12 @@ export function TopBar() {
         </svg>
         <div className="brand-name">{atPoint ? 'Координирующий пункт' : teamName(me?.teamId)}</div>
       </div>
+      {atPoint && (
+        <button className="tb-btn tb-home" onClick={closeWork} title="Главный экран — дашборд координатора">
+          <MonitorPlay size={15} />
+          <span>Дашборд</span>
+        </button>
+      )}
 
 
 

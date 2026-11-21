@@ -17,6 +17,7 @@ import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
 import { actorLine, ask as askJarvis, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
 import { parseDashCtx } from './jarvis-dash.ts';
+import { design as designDash } from './design.ts';
 import { reviewFor, reviewList } from './review.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -210,21 +211,53 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       pointOnly();
       const body = await readBody(req);
       const history = Array.isArray(body.history) ? (body.history as { role: string; content: string }[]).filter((h) => (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : [];
-      return json(
-        res,
-        200,
-        await askJarvis(point, me, {
-          text: str(body.text).slice(0, 500),
-          selectedId: str(body.selectedId) || null,
-          focusId: str(body.focusId) || null,
-          tab: str(body.tab) || null,
-          mode: body.mode === 'control' ? 'control' : 'chat',
-          short: body.short === true,
-          dash: parseDashCtx(body.dash),
-          dashControl: body.dashControl === true,
-          history: history as { role: 'user' | 'assistant'; content: string }[],
-        }),
-      );
+      const q = {
+        text: str(body.text).slice(0, 500),
+        selectedId: str(body.selectedId) || null,
+        focusId: str(body.focusId) || null,
+        tab: str(body.tab) || null,
+        mode: body.mode === 'control' ? ('control' as const) : ('chat' as const),
+        short: body.short === true,
+        dash: parseDashCtx(body.dash),
+        dashControl: body.dashControl === true,
+        persona: str(body.persona) || null,
+        history: history as { role: 'user' | 'assistant'; content: string }[],
+      };
+      if (body.stream !== true) return json(res, 200, await askJarvis(point, me, q));
+      // «Работа Джарвиса»: шаги и действия уходят в браузер сразу, как случаются (поток событий).
+      res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+      const send = (e: unknown) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+      try {
+        send({ type: 'reply', ...(await askJarvis(point, me, q, send)) });
+      } catch (err) {
+        send({ type: 'error', error: err instanceof Error ? err.message : String(err) });
+      }
+      return void res.end();
+    }
+    // ─── Настройки, закреплённые за сотрудником (стена, персонаж, голос) ───
+    if (p === '/api/prefs') {
+      pointOnly();
+      const k = `prefs:${me.login}`;
+      if (!post) {
+        const raw = getMeta(db, k);
+        return json(res, 200, { prefs: raw ? JSON.parse(raw) : null });
+      }
+      const body = await readBody(req);
+      const raw = JSON.stringify(body.prefs ?? null);
+      if (raw.length > 120_000) return json(res, 413, { error: 'слишком большие настройки' });
+      setMeta(db, k, raw);
+      return json(res, 200, { ok: true });
+    }
+    // ─── Видеостена: дизайн по описанию (ChatGPT) ───
+    if (p === '/api/dash/design' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      const history = Array.isArray(body.history) ? (body.history as { role: string; content: string }[]).filter((h) => (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : [];
+      try {
+        return json(res, 200, await designDash({ prompt: str(body.prompt).slice(0, 800), mode: body.mode === 'ask' ? 'ask' : 'quick', history: history as { role: 'user' | 'assistant'; content: string }[] }));
+      } catch (err) {
+        return json(res, 502, { error: err instanceof Error ? err.message : String(err) });
+      }
     }
     // ─── Видеостена: «главное сейчас» для ИИ-помощника ───
     if (p === '/api/dash/brief') {
