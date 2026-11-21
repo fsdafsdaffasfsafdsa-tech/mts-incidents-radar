@@ -1,6 +1,7 @@
 // Сервер координирующего пункта: вход, API для четырёх кабинетов, поток SSE, фронтенд на одном порту.
 // Разработка: Vite в middleware-режиме с HMR. Прод (--prod): раздаём собранный dist/.
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +32,9 @@ try {
 const PROD = process.argv.includes('--prod');
 const PORT = Number(process.env.PORT || 5190);
 // Пароль демо-учёток задаётся в .env (см. .env.example). Смена значения и перезапуск меняют пароль всем.
-const DEMO_PASSWORD = process.env.DEMO_PASSWORD || '1234';
+// Пароль демо-учёток — только из .env. Не задан — придумываем случайный и пишем его в консоль сервера.
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD || randomBytes(6).toString('base64url');
+if (!process.env.DEMO_PASSWORD) console.log(`  DEMO_PASSWORD не задан в .env — временный пароль демо-учёток: ${DEMO_PASSWORD}`);
 const ITSM_URL = process.env.ITSM_URL || null;
 const MODEL = 'point-1'; // версия модели данных: при смене состояние пересобирается
 
