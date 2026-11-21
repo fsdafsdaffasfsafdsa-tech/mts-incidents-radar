@@ -108,7 +108,9 @@ function browserVoice(text: string, id: number) {
     u.voice = ru.find((v) => /male|дмитрий|pavel|павел|online/i.test(v.name)) ?? ru[0] ?? null;
     u.rate = 1.05;
     u.pitch = 0.85;
-    u.onend = u.onerror = () => done();
+    // Голос браузера иногда не присылает «конец» — страхуемся таймером.
+    const guard = setTimeout(() => (speechSynthesis.cancel(), done()), Math.max(10_000, text.length * 120));
+    u.onend = u.onerror = () => (clearTimeout(guard), done());
     speechSynthesis.speak(u);
   });
 }
@@ -141,9 +143,11 @@ export async function say(text: string) {
           }
         }
         const played = await new Promise<boolean>((done) => {
-          a.onended = () => done(true);
-          a.onerror = () => done(false);
-          a.play().catch(() => done(false));
+          // Страховка: если браузер не сообщил о конце звука, не «зависаем» в режиме «говорю» (и не глохнем).
+          const guard = setTimeout(() => (a.pause(), done(true)), Math.max(12_000, t.length * 110));
+          a.onended = () => (clearTimeout(guard), done(true));
+          a.onerror = () => (clearTimeout(guard), done(false));
+          a.play().catch(() => (clearTimeout(guard), done(false)));
         });
         URL.revokeObjectURL(url);
         analyser = null;
@@ -196,10 +200,119 @@ type Rec = {
   onresult: ((e: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
   onend: (() => void) | null;
   onerror: ((e: { error: string }) => void) | null;
+  onstart?: (() => void) | null;
+  onaudiostart?: (() => void) | null;
+  onspeechstart?: (() => void) | null;
 };
 const W = window as unknown as { SpeechRecognition?: new () => Rec; webkitSpeechRecognition?: new () => Rec };
 const RecCtor = W.SpeechRecognition ?? W.webkitSpeechRecognition;
 export const canListen = !!RecCtor;
+
+type EarState = 'off' | 'starting' | 'on' | 'error';
+/**
+ * Постоянный слух для режима «управляет экраном».
+ * Браузер держит только одно распознавание за раз, поэтому новое запускаем лишь после того, как старое
+ * действительно завершилось (onend), — иначе запуск молча падает и Джарвис «глохнет».
+ * Сторож раз в 2 с поднимает слух, если браузер уронил его без onend или он завис без событий.
+ */
+class Ear {
+  private rec: Rec | null = null;
+  private running = false; // от start() до onend
+  private want = false;
+  private lastStart = 0;
+  private lastEvent = 0;
+  private abortAt = 0;
+  private fails = 0;
+  h: { result: (t: string, final: boolean) => void; state: (s: EarState, err?: string) => void } | null = null;
+
+  set(want: boolean) {
+    this.want = want;
+    if (want) this.kick();
+    else if (this.rec) this.abort();
+  }
+  private abort() {
+    this.abortAt = Date.now();
+    try {
+      this.rec?.abort();
+    } catch {
+      /* уже остановлен */
+    }
+  }
+  private kick() {
+    if (!this.want || this.running || !RecCtor) return;
+    const wait = 500 - (Date.now() - this.lastStart);
+    if (wait > 0) {
+      setTimeout(() => this.kick(), wait + 30);
+      return;
+    }
+    const r = new RecCtor();
+    r.lang = 'ru-RU';
+    r.continuous = true;
+    r.interimResults = true;
+    const touch = () => (this.lastEvent = Date.now());
+    r.onstart = () => {
+      touch();
+      this.fails = 0;
+      if (this.rec === r) this.h?.state('on');
+    };
+    r.onaudiostart = touch;
+    r.onspeechstart = touch;
+    r.onresult = (e) => {
+      touch();
+      if (this.rec !== r || !this.want) return;
+      for (let k = e.resultIndex; k < e.results.length; k++) this.h?.result(e.results[k][0].transcript, e.results[k].isFinal);
+    };
+    r.onerror = (e) => {
+      touch();
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
+        this.want = false;
+        this.h?.state('error', e.error);
+      } else if (e.error === 'network') this.fails++;
+    };
+    r.onend = () => {
+      if (this.rec === r) {
+        this.rec = null;
+        this.running = false;
+        this.abortAt = 0;
+      }
+      if (this.want) setTimeout(() => this.kick(), Math.min(5000, 250 * 2 ** this.fails));
+      else this.h?.state('off');
+    };
+    this.rec = r;
+    this.running = true;
+    this.lastStart = this.lastEvent = Date.now();
+    this.abortAt = 0;
+    this.h?.state('starting');
+    try {
+      r.start();
+    } catch {
+      this.rec = null;
+      this.running = false;
+      setTimeout(() => this.kick(), 1000);
+    }
+  }
+  /** Сторож. */
+  tick() {
+    if (!this.want) return;
+    if (!this.running) return this.kick();
+    const now = Date.now();
+    if (this.abortAt && now - this.abortAt > 2000) {
+      // остановка не дошла до onend — считаем завершённым и запускаем заново
+      this.rec = null;
+      this.running = false;
+      this.abortAt = 0;
+      return this.kick();
+    }
+    if (!this.abortAt && now - this.lastEvent > 10000) this.abort(); // завис без событий (обычно браузер сам закрывает тишину за ~8 с)
+  }
+  /** Человек нажал на шар — «говорю, а ты не слышишь»: если давно не было звука, перезапускаем сразу. */
+  nudge() {
+    if (!this.want) return;
+    if (!this.running) return this.kick();
+    if (!this.abortAt && Date.now() - this.lastEvent > 3000) this.abort();
+  }
+}
+const ear = new Ear();
 const WAKE = /(?:^|\s)(джарвис|жарвис|джервис|джарвиз|джавис|jarvis)[,.!?\s]*/i;
 const afterWake = (t: string) => {
   const m = WAKE.exec(t);
@@ -313,6 +426,8 @@ export function Jarvis() {
   const [note, setNote] = useState('');
   const [awaiting, setAwaiting] = useState(false); // ждёт продолжения без слова «Джарвис»
   const [micDenied, setMicDenied] = useState(false);
+  const [earState, setEarState] = useState<EarState>('off'); // что на самом деле с микрофоном
+  const busy = useRef(false); // уже отвечает — новые фразы не берём
   const rec = useRef<Rec | null>(null);
   const orb = useRef<HTMLButtonElement | null>(null);
   const log = useRef<HTMLDivElement | null>(null);
@@ -339,7 +454,16 @@ export function Jarvis() {
     followUntil.current = Date.now() + ms;
     setAwaiting(true);
     if (followTimer.current) clearTimeout(followTimer.current);
-    followTimer.current = window.setTimeout(() => setAwaiting(false), ms);
+    const check = () => {
+      // Окно продлевается, пока человек говорит, — закрываем, только когда время действительно вышло.
+      const left = followUntil.current - Date.now();
+      if (left > 50) followTimer.current = window.setTimeout(check, left);
+      else {
+        setAwaiting(false);
+        setHeard('');
+      }
+    };
+    followTimer.current = window.setTimeout(check, ms);
   }
 
   // Объявления о критических: строка в разговоре, тема разговора — этот инцидент.
@@ -380,7 +504,8 @@ export function Jarvis() {
 
   async function ask(q: string) {
     const question = afterWake(q) || q.trim();
-    if (!question) return;
+    if (!question || busy.current) return;
+    busy.current = true;
     setErr('');
     setHeard('');
     setAwaiting(false);
@@ -409,6 +534,8 @@ export function Jarvis() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setPhase('idle');
+    } finally {
+      busy.current = false;
     }
   }
   const askRef = useRef(ask);
@@ -461,65 +588,62 @@ export function Jarvis() {
 
   // Режим «управляет экраном»: слушаем всегда, пока Джарвис не думает и не говорит.
   // Фраза со словом «Джарвис» — команда; после ответа несколько секунд можно продолжать без него.
-  useEffect(() => {
-    if (!control || !RecCtor || micDenied || phase === 'think' || phase === 'speak' || phase === 'listen') return;
-    let alive = true;
-    let r: Rec | null = null;
-    const start = () => {
-      if (!alive) return;
-      r = new RecCtor();
-      r.lang = 'ru-RU';
-      r.continuous = true;
-      r.interimResults = true;
-      r.onresult = (e) => {
-        for (let k = e.resultIndex; k < e.results.length; k++) {
-          const t = e.results[k][0].transcript;
-          const live = Date.now() < followUntil.current;
-          if (!e.results[k].isFinal) {
-            if (live || WAKE.test(t)) setHeard(afterWake(t));
-            continue;
-          }
-          if (live) {
-            if (t.trim().length < 2) continue;
-            alive = false;
-            r?.abort();
-            void askRef.current(t);
-            return;
-          }
-          if (WAKE.test(t)) {
-            const rest = afterWake(t);
-            if (rest.length > 2) {
-              alive = false;
-              r?.abort();
-              setOpen(true);
-              void askRef.current(rest);
-              return;
-            }
-            setOpen(true);
-            setHeard('');
-            follow(); // «Джарвис» — и пауза: слушаем команду
-          } else setHeard('');
-        }
-      };
-      r.onerror = (e) => {
-        micError(e.error);
-        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') alive = false;
-      };
-      r.onend = () => setTimeout(start, 250);
-      rec.current = r;
-      try {
-        r.start();
-      } catch {
-        /* уже слушает */
+  function onHeard(t: string, final: boolean) {
+    if (busy.current || phase !== 'idle') return;
+    const now = Date.now();
+    const live = now < followUntil.current;
+    if (!final) {
+      if (live) {
+        setHeard(afterWake(t));
+        followUntil.current = Math.max(followUntil.current, now + 4000); // человек говорит — окно не закрываем
+        setAwaiting(true);
+      } else if (WAKE.test(t)) {
+        setOpen(true);
+        setHeard(afterWake(t));
+        follow(6000);
       }
+      return;
+    }
+    const said = t.trim();
+    if (live && said.length >= 2) return void askRef.current(said);
+    if (WAKE.test(said)) {
+      const rest = afterWake(said);
+      setOpen(true);
+      if (rest.length > 2) return void askRef.current(rest);
+      setHeard('');
+      return follow(); // «Джарвис» — и пауза: ждём команду
+    }
+    if (!live) setHeard('');
+  }
+  const onHeardRef = useRef(onHeard);
+  onHeardRef.current = onHeard;
+  useEffect(() => {
+    ear.h = {
+      result: (t, final) => onHeardRef.current(t, final),
+      state: (s, e) => {
+        setEarState(s);
+        if (s === 'error' && e) micError(e);
+      },
     };
-    start();
     return () => {
-      alive = false;
-      r?.abort();
-      if (rec.current === r) rec.current = null;
+      ear.h = null;
+      ear.set(false);
     };
-  }, [control, phase, micDenied]);
+  }, []);
+  useEffect(() => {
+    ear.set(!!RecCtor && control && !micDenied && phase === 'idle');
+  }, [control, micDenied, phase]);
+  // Сторож: раз в 2 с и при возвращении на вкладку поднимает слух, если браузер его уронил.
+  useEffect(() => {
+    if (!control) return;
+    const t = window.setInterval(() => ear.tick(), 2000);
+    const vis = () => document.visibilityState === 'visible' && ear.tick();
+    document.addEventListener('visibilitychange', vis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', vis);
+    };
+  }, [control]);
 
   // Нажали на шар или клавишу V.
   function press() {
@@ -532,7 +656,11 @@ export function Jarvis() {
     }
     setOpen(true);
     if (control) {
-      if (micDenied) setMicDenied(false); // попробовать ещё раз после разрешения микрофона
+      if (micDenied || earState === 'error') {
+        setMicDenied(false); // попробовать ещё раз после разрешения микрофона
+        setErr('');
+      }
+      ear.nudge(); // если слух упал или завис — перезапускаем сразу
       follow(); // слушает и так — просто ждём команду без слова «Джарвис»
     } else listenOnce();
   }
@@ -544,13 +672,31 @@ export function Jarvis() {
     return () => window.removeEventListener('radar:jarvis', f);
   }, []);
 
+  // Подпись — по настоящему состоянию микрофона, а не по таймеру.
+  const hearing = control ? earState === 'on' : phase === 'listen';
   const label =
-    phase === 'think' ? 'Думаю…' : phase === 'speak' ? 'Говорю… (нажмите, чтобы прервать)' : phase === 'listen' || awaiting ? 'Слушаю…' : control ? (micDenied ? 'Нет микрофона' : 'Скажите «Джарвис, …»') : canListen ? 'Нажмите и говорите' : 'Напишите вопрос';
+    phase === 'think'
+      ? 'Думаю…'
+      : phase === 'speak'
+        ? 'Говорю… (нажмите, чтобы прервать)'
+        : !control
+          ? phase === 'listen'
+            ? 'Слушаю…'
+            : canListen
+              ? 'Нажмите и говорите'
+              : 'Напишите вопрос'
+          : micDenied || earState === 'error'
+            ? 'Нет микрофона — нажмите'
+            : !hearing
+              ? 'Включаю микрофон…'
+              : awaiting
+                ? 'Слушаю…'
+                : 'Скажите «Джарвис, …»';
   const last = [...lines].reverse().find((l) => l.role === 'assistant');
   const suggest = control ? SUGGEST_CONTROL : SUGGEST_CHAT;
 
   return (
-    <div className={`jv jv-${phase} ${awaiting ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''}`}>
+    <div className={`jv jv-${phase} ${awaiting && (hearing || !control) ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>
       {open && (
         <div className="jv-panel" role="dialog" aria-label="Джарвис — голосовой помощник">
           <div className="jv-head">
@@ -656,7 +802,7 @@ export function Jarvis() {
       )}
       {!open && heard && <div className="jv-sub user">{heard}</div>}
       <div className="jv-dock">
-        {(phase !== 'idle' || awaiting || (control && !open)) && <span className="jv-label">{label}</span>}
+        {(phase !== 'idle' || awaiting || (control && (!open || !hearing))) && <span className={`jv-label ${control && phase === 'idle' && !hearing ? 'warn' : ''}`}>{label}</span>}
         <button
           ref={orb}
           className="jv-orb"

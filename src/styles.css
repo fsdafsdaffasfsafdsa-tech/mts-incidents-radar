@@ -8460,6 +8460,19 @@ body.desk-resizing {
 .jv-await .jv-orb {
   --jv: var(--p1);
 }
+/* микрофон ещё не слушает (включается или нет доступа) — шар тусклый, точка жёлтая */
+.jv-deaf .jv-orb {
+  --jv: var(--text-3);
+  filter: saturate(0.4);
+}
+.jv-deaf .jv-live {
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+}
+.jv-label.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
 .jv-control.jv-idle:not(.jv-await) .jv-orb {
   --jv: color-mix(in srgb, var(--coord) 70%, var(--ok));
 }
