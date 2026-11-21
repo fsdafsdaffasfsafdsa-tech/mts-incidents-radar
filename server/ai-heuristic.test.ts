@@ -1,7 +1,7 @@
 // Тесты координирующего пункта: справочник и графики, детектор жалоб, правила уровня, подбор команды, процессы, база.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { onDuty } from '../shared/schedule.ts';
+import { onDuty, setEternalShift } from '../shared/schedule.ts';
 import type { Complaint } from '../shared/types.ts';
 import { PEOPLE, POINT_ID, POINT_STAFF, TEAMS, isOn, membersOf, onShift, teamById } from './directory.ts';
 import { RULES, findClusters, isIncidentCluster, makeComplaint, nextAutoLevel, poissonTail, targetLevel } from './complaints.ts';
@@ -9,6 +9,9 @@ import { planPoint, routeTeams } from './ai-point.ts';
 import { Point } from './point.ts';
 import { hashPassword, seedUsers, verifyPassword } from './auth.ts';
 import { Persister, loadPoint, openDb } from './db.ts';
+
+// Здесь проверяем настоящие графики — «вечную смену» показа выключаем.
+setEternalShift(false);
 
 test('автоэскалация по таймерам и переписка в инциденте', () => {
   const p = new Point();

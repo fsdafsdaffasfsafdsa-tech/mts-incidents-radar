@@ -145,6 +145,8 @@ export interface Incident {
   comments?: IncidentComment[];
   // ─── свои поля Радара (ментор разрешил дополнять формат выгрузки) ───
   pin?: IncidentPin | null; // избранное смены: кто закрепил, заметка, напоминание
+  /** Вопрос команды пункту: «не наше — передайте» или «нужна помощь». Снимается, когда передали или решили. */
+  teamAsk?: { kind: 'transfer' | 'help'; teamName: string; text: string; at: number; aiTeamId?: string | null } | null;
   recur?: IncidentRecur | null; // решили, а жалобы снова идут
   attentionAt?: number | null; // когда дежурный последний раз смотрел инцидент
   attentionBy?: string | null;

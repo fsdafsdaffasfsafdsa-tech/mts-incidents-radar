@@ -7,6 +7,7 @@ import { CheckCircle2, Clapperboard, Flame, Inbox, RotateCcw, Send, Star, Timer,
 import type { Incident } from '../../../shared/types';
 import { isRecurring, waitingTake } from '../../../shared/dash';
 import { myShiftWork } from '../../../shared/shift';
+import { ETERNAL_SHIFT } from '../../../shared/schedule';
 import { getState, serverNow } from '../../store';
 import { fmtClock } from '../../lib/format';
 import { say, stopVoice } from '../Jarvis';
@@ -30,8 +31,10 @@ const left = (i: Incident, now: number) => {
 function buildScenes(): Scene[] {
   const st = getState();
   const now = serverNow();
-  const from = now - SHIFT;
   const all = [...st.incidents.values()];
+  // Смена «вечная» (shared/schedule.ts): передаём всё с её начала — с последней очистки, а не за 12 часов.
+  const first = all.reduce((m, i) => Math.min(m, i.createdAt), st.feed.reduce((m, e) => Math.min(m, e.at), now));
+  const from = (ETERNAL_SHIFT ? first : now - SHIFT) - 1;
   const me = st.me?.name ?? 'дежурный';
   const work = myShiftWork(all, me, from);
   const solved = all.filter((i) => i.status === 'resolved' && (i.resolvedAt ?? 0) > from).length;

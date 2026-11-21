@@ -27,7 +27,8 @@ export type AlertKind =
   | 'routed' // передан команде
   | 'taken' // команда взяла в работу
   | 'created' // новый некритический у команды
-  | 'levelDown'; // уровень понизили
+  | 'levelDown' // уровень понизили
+  | 'teamAsk'; // вопрос команды: «не наше — передайте» или «нужна помощь»
 
 export const ALERT_META: Record<AlertKind, { title: string; todo: string }> = {
   crit: { title: 'Новый критический', todo: 'Взять на себя и передать команде' },
@@ -48,6 +49,7 @@ export const ALERT_META: Record<AlertKind, { title: string; todo: string }> = {
   taken: { title: 'Взяли в работу', todo: '' },
   created: { title: 'Новый', todo: '' },
   levelDown: { title: 'Уровень ниже', todo: '' },
+  teamAsk: { title: 'Вопрос команды', todo: 'Ответить команде' },
 };
 
 /** Насколько громко: зависит от вида и уровня инцидента. */
@@ -68,6 +70,7 @@ export function levelOf(kind: AlertKind, inc: Incident): Level {
     case 'remind':
     case 'fav':
     case 'forgot':
+    case 'teamAsk':
       return 'attention';
     default:
       return 'info';
@@ -80,8 +83,9 @@ export interface Sig {
   pr: Incident['priority'];
   p1: boolean;
   recur: boolean;
+  ask: boolean;
 }
-export const sigOf = (i: Incident, now: number): Sig => ({ st: i.status, pr: i.priority, p1: !!i.p1Proposal, recur: isRecurring(i, now) });
+export const sigOf = (i: Incident, now: number): Sig => ({ st: i.status, pr: i.priority, p1: !!i.p1Proposal, recur: isRecurring(i, now), ask: !!i.teamAsk });
 
 export interface Found {
   kind: AlertKind;
@@ -114,7 +118,8 @@ export function detect(prev: Map<string, Sig> | null, all: Incident[], now: numb
     const p = prev?.get(i.id);
     if (prev && !p) {
       if (i.status !== 'resolved') {
-        if (s.pr === 'P1') found.push({ kind: 'crit', inc: i });
+        if (s.ask) found.push({ kind: 'teamAsk', inc: i, text: i.teamAsk?.text });
+        else if (s.pr === 'P1') found.push({ kind: 'crit', inc: i });
         else if (s.st === 'coordinators') found.push({ kind: 'coord', inc: i });
         else found.push({ kind: 'created', inc: i });
       }
@@ -123,6 +128,7 @@ export function detect(prev: Map<string, Sig> | null, all: Incident[], now: numb
       if (s.st === 'resolved' && p.st !== 'resolved') found.push({ kind: s.pr === 'P1' ? 'resolvedCrit' : 'resolved', inc: i });
       if (s.recur && !p.recur) found.push({ kind: 'recur', inc: i, text: recurText(i, now) });
       if (s.p1 && !p.p1 && s.st !== 'resolved') found.push({ kind: 'p1ask', inc: i, text: i.p1Proposal ?? undefined });
+      if (s.ask && !p.ask && s.st !== 'resolved') found.push({ kind: 'teamAsk', inc: i, text: i.teamAsk?.text });
       if (s.st === 'coordinators' && p.st !== 'coordinators' && s.pr !== 'P1') found.push({ kind: 'coord', inc: i, text: p.st === 'resolved' ? 'вернулся на пункт' : undefined });
       if (p.st === 'coordinators' && (s.st === 'assigned' || s.st === 'in_progress')) found.push({ kind: 'routed', inc: i, text: i.groupName ?? undefined });
       if (p.st === 'assigned' && s.st === 'in_progress') found.push({ kind: 'taken', inc: i, text: i.assigneeName ?? undefined });
@@ -198,6 +204,13 @@ export function voiceLine(kind: AlertKind, inc: Incident, now: number, teamOf: (
       return `${t} давно без внимания. Посмотрим?`;
     case 'fav':
       return `по избранному ${t} есть изменения.`;
+    case 'teamAsk': {
+      const a = inc.teamAsk;
+      const team = `команда «${short(a?.teamName ?? 'команда')}»`;
+      if (a?.kind === 'help') return `${team} просит помощи по ${t}: ${a.text}. Написать руководителю?`;
+      const to = a?.aiTeamId ? short(teamOf(a.aiTeamId)) : ai;
+      return `${team} просит передать ${t}: ${a?.text ?? 'не их зона'}. ${to ? `ИИ советует «${to}». Передать?` : 'Кому передадим?'}`;
+    }
     default:
       return `${ALERT_META[kind].title.toLowerCase()}: ${t}.`;
   }

@@ -2,21 +2,49 @@
 // ситуацию на сервере (server/show.ts) — стена, срочное окно, уведомления и Джарвис реагируют как вживую.
 // «Очистить» — пустая смена. Видео пересменки — кнопкой в шапке.
 import { useState } from 'react';
-import { ArrowUp, Brush, Inbox, Mail, MailWarning, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Zap, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Brush, Hand, Inbox, LifeBuoy, Mail, MailWarning, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Zap, type LucideIcon } from 'lucide-react';
 import { showAction } from '../../store';
 import { motionCalm, setMotionCalm } from './anim';
 
-const BTNS: { kind: string; icon: LucideIcon; label: string; tone: string }[] = [
-  { kind: 'crit', icon: Siren, label: 'Критический', tone: 'crit' },
-  { kind: 'recur', icon: RotateCcw, label: 'Снова жалобы', tone: 'crit' },
-  { kind: 'p1ask', icon: TrendingUp, label: 'ИИ: «Наивысший»', tone: 'crit' },
-  { kind: 'above', icon: ArrowUp, label: 'Важнее критич.', tone: 'high' },
-  { kind: 'sla', icon: Timer, label: 'Срок горит', tone: 'high' },
-  { kind: 'stuck', icon: UserX, label: 'Не берут', tone: 'high' },
-  { kind: 'pingpong', icon: Repeat, label: 'По кругу', tone: 'mid' },
-  { kind: 'coord', icon: Inbox, label: 'Распределить', tone: 'jv' },
-  { kind: 'mailCrit', icon: MailWarning, label: 'Письмо: сбой', tone: 'jv' },
-  { kind: 'mailAsk', icon: Mail, label: 'Письмо: не к нам', tone: 'jv' },
+type Btn = { kind: string; icon: LucideIcon; label: string; tone: string };
+// Четыре группы: инциденты, сроки, вопросы команд, почта.
+const GROUPS: { name: string; icon: LucideIcon; btns: Btn[] }[] = [
+  {
+    name: 'Инциденты',
+    icon: Siren,
+    btns: [
+      { kind: 'crit', icon: Siren, label: 'Критический', tone: 'crit' },
+      { kind: 'recur', icon: RotateCcw, label: 'Снова жалобы', tone: 'crit' },
+      { kind: 'p1ask', icon: TrendingUp, label: 'ИИ: «Наивысший»', tone: 'crit' },
+      { kind: 'coord', icon: Inbox, label: 'Распределить', tone: 'jv' },
+    ],
+  },
+  {
+    name: 'Сроки',
+    icon: Timer,
+    btns: [
+      { kind: 'sla', icon: Timer, label: 'Срок горит', tone: 'high' },
+      { kind: 'above', icon: ArrowUp, label: 'Важнее критич.', tone: 'high' },
+      { kind: 'stuck', icon: UserX, label: 'Не берут', tone: 'high' },
+    ],
+  },
+  {
+    name: 'Команды',
+    icon: Users,
+    btns: [
+      { kind: 'teamNotOurs', icon: Hand, label: 'Не наше', tone: 'mid' },
+      { kind: 'teamHelp', icon: LifeBuoy, label: 'Нужна помощь', tone: 'mid' },
+      { kind: 'pingpong', icon: Repeat, label: 'По кругу', tone: 'mid' },
+    ],
+  },
+  {
+    name: 'Почта',
+    icon: Mail,
+    btns: [
+      { kind: 'mailCrit', icon: MailWarning, label: 'Письмо: сбой', tone: 'jv' },
+      { kind: 'mailAsk', icon: Mail, label: 'Письмо: не к нам', tone: 'jv' },
+    ],
+  },
 ];
 
 export function ShowPanel() {
@@ -41,11 +69,18 @@ export function ShowPanel() {
   return (
     <div className="sp" role="toolbar" aria-label="Кнопки ситуаций">
       <div className="sp-grid">
-        {BTNS.map((b) => (
-          <span key={b.kind} role="button" tabIndex={0} className={`sp-btn t-${b.tone} ${busy === b.kind ? 'busy' : ''}`} onClick={() => act(b.kind)} title={b.label}>
-            <b.icon />
-            <small>{b.label}</small>
-          </span>
+        {GROUPS.map((g) => (
+          <div key={g.name} className="sp-grp" style={{ flexGrow: g.btns.length }} role="group" aria-label={g.name}>
+            <i className="sp-grp-name">
+              <g.icon /> {g.name}
+            </i>
+            {g.btns.map((b) => (
+              <span key={b.kind} role="button" tabIndex={0} className={`sp-btn t-${b.tone} ${busy === b.kind ? 'busy' : ''}`} onClick={() => act(b.kind)} title={b.label}>
+                <b.icon />
+                <small>{b.label}</small>
+              </span>
+            ))}
+          </div>
         ))}
       </div>
       <div className="sp-side">

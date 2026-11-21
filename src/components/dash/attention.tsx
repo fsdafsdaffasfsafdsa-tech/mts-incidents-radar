@@ -4,7 +4,7 @@
 //   «Внимание» — полосой сверху, мягкий звук, уходит сама;
 //   «Инфо»     — тихой строкой без звука.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BellRing, CheckCircle2, ExternalLink, Eye, Info, Mic, RotateCcw, Send, Siren, Star, Timer, UserCheck, X } from 'lucide-react';
+import { BellRing, CheckCircle2, ExternalLink, Eye, Info, MessageSquareShare, Mic, RotateCcw, Send, Siren, Star, Timer, UserCheck, X } from 'lucide-react';
 import { serviceIcon, shortPlace, splitTitle } from './wall2';
 import { timerText } from './blocks3';
 import type { Incident } from '../../../shared/types';
@@ -64,6 +64,16 @@ function chime(kind: 'urgent' | 'good' | 'soft') {
   }
 }
 
+/** Инцидент завёл сам дежурный (или Джарвис по его ответу) в последние 3 минуты, или последнее действие по нему — его, минуту назад. */
+function byMe(i: Incident, now: number) {
+  const me = getState().me?.name;
+  const h = i.history;
+  if (!me || !h?.length) return false;
+  if (h[0].actor === me && now - h[0].at < 3 * 60_000) return true;
+  const last = h[h.length - 1];
+  return last.actor === me && now - last.at < 60_000;
+}
+
 /** Следит за инцидентами и раскладывает события по уровням. На отдельном экране стены голосом не говорит. */
 export function useAttention(incidents: Map<string, Incident>, d: DashLayout, standalone: boolean) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -75,8 +85,10 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
   const favPrev = useRef<Map<string, string> | null>(null);
 
   const push = useCallback(
-    (list: Found[], test = false) => {
+    (all: Found[], test = false) => {
       const now = Date.now();
+      // Своё второй раз не объясняем: инцидент дежурный только что завёл или изменил сам (в том числе Джарвис по его ответу).
+      const list = test ? all : all.filter((f) => !byMe(f.inc, now));
       const fresh: Alert[] = [];
       const quiet: InfoItem[] = [];
       for (const f of list) {
@@ -116,7 +128,24 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
     favPrev.current = favs;
     if (found.length) push(found);
   }, [push]);
-  useEffect(scan, [incidents, scan]);
+  // Сервер шлёт изменения по шагам (создал → передал → команда спросила): смотрим, когда серия закончилась, — иначе
+  // стена ловит промежуточное «на распределении», и Джарвис рассказывает не то и дважды. Но не дольше 1,5 с ожидания.
+  const scanned = useRef(false);
+  const pendingSince = useRef(0);
+  useEffect(() => {
+    if (!scanned.current) {
+      scanned.current = true; // первый снимок — сразу: это точка отсчёта, он ничего не объявляет
+      return scan();
+    }
+    const now = Date.now();
+    if (!pendingSince.current) pendingSince.current = now;
+    const wait = Math.max(0, Math.min(400, pendingSince.current + 1500 - now));
+    const t = setTimeout(() => {
+      pendingSince.current = 0;
+      scan();
+    }, wait);
+    return () => clearTimeout(t);
+  }, [incidents, scan]);
 
   // По часам: состояния (срок на исходе, не берут), напоминания из избранного, «не забудьте»; срочное — пока актуально.
   const remindFired = useRef(new Set<string>());
@@ -313,7 +342,7 @@ export function UrgentOverlay({ list, incidents, now, onAck, onOpen }: { list: A
   );
 }
 
-const STRIP_ICON: Partial<Record<AlertKind, React.ReactNode>> = { resolvedCrit: <CheckCircle2 size={20} />, remind: <Star size={20} />, fav: <Star size={20} />, forgot: <Eye size={20} />, recur: <RotateCcw size={20} /> };
+const STRIP_ICON: Partial<Record<AlertKind, React.ReactNode>> = { resolvedCrit: <CheckCircle2 size={20} />, remind: <Star size={20} />, fav: <Star size={20} />, forgot: <Eye size={20} />, recur: <RotateCcw size={20} />, teamAsk: <MessageSquareShare size={20} /> };
 
 /** Полоса «Внимание» (и принятые срочные, пока ситуация не ушла). Пусто — тихая строка «Инфо». */
 export function AttentionStrip({ list, info, incidents, now, onClose, onOpen }: { list: Alert[]; info: InfoItem[]; incidents: Map<string, Incident>; now: number; onClose: (key: string) => void; onOpen: (i: Incident) => void }) {

@@ -7,7 +7,7 @@ import { routeTeams } from './ai-point.ts';
 import { POINT_ID, isOn, membersOf, teamById } from './directory.ts';
 
 const MIN = 60_000;
-export const SHOW_KINDS = ['crit', 'coord', 'recur', 'mailCrit', 'mailAsk', 'stuck', 'sla', 'pingpong', 'p1ask', 'above'] as const;
+export const SHOW_KINDS = ['crit', 'coord', 'recur', 'mailCrit', 'mailAsk', 'stuck', 'sla', 'pingpong', 'p1ask', 'above', 'teamNotOurs', 'teamHelp'] as const;
 export type ShowKind = (typeof SHOW_KINDS)[number];
 
 /** Режим показа: самотёк выключен (или снова включён). */
@@ -121,6 +121,31 @@ export function runShow(point: Point, mailbox: Mailbox, kind: ShowKind, actor: s
         i.p1Proposal = 'ИИ предлагает «Наивысший»: жалобы растут быстрее порога, сервис критичный — нужно подтверждение дежурного.';
       });
       return { text: `ИИ предлагает «Наивысший»: ${inc.title}`, id: inc.id };
+    }
+    case 'teamNotOurs': {
+      // Вопрос команды: «это не наше — передайте», ИИ сверил со справочником и советует, кому
+      const inc = point.scenarioIncident({ service: 'Домашний интернет', regionId: 'spb', n: 15, priority: 'P2' });
+      const team = teamFor(point, inc);
+      point.route(inc.id, team, actor);
+      const eng = engineer(team);
+      if (!eng) throw new Error('в команде нет сотрудников');
+      point.requestTransfer(inc.id, eng.id, null, 'Не наша зона: по логам проблема на стороне платформы авторизации');
+      return { text: `Команда просит передать: ${inc.title}`, id: inc.id };
+    }
+    case 'teamHelp': {
+      // Вопрос команды: взяли, но нужна помощь
+      const inc = point.scenarioIncident({ service: 'Мобильная связь', regionId: 'sam', n: 19, priority: 'P2' });
+      const team = teamFor(point, inc);
+      point.route(inc.id, team, actor);
+      const eng = engineer(team);
+      if (!eng) throw new Error('в команде нет сотрудников');
+      try {
+        point.take(inc.id, eng.id);
+      } catch {
+        /* уже у кого-то */
+      }
+      point.help(inc.id, eng.id, 'нет доступа к оборудованию узла, нужен инженер L2 по базовым станциям');
+      return { text: `Команда просит помощи: ${inc.title}`, id: inc.id };
     }
     case 'above': {
       // Важнее критического: у критического срок далеко, у высокого — через 12 минут

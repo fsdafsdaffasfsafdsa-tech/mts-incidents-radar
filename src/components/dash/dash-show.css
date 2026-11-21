@@ -18,9 +18,44 @@
   }
 }
 .sp-grid {
-  display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 0.5em;
+  display: flex;
+  gap: 0.7em;
+  padding-top: 0.55em; /* место под подписи групп */
+}
+.sp-grp {
+  /* группа кнопок в рамке, подпись — на рамке сверху */
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  gap: 0.4em;
+  min-width: 0;
+  padding: 0.6em 0.4em 0.4em;
+  border: 1px solid var(--d-line, #2b3650);
+  border-radius: calc(var(--d-radius, 12px) * 0.9);
+}
+.sp-grp > .sp-btn {
+  flex: 1 1 0;
+}
+.sp-grp-name {
+  position: absolute;
+  top: -0.7em;
+  left: 0.8em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0 0.45em;
+  background: var(--d-bg, #0f1522);
+  color: var(--d-muted, #b5c1d4);
+  font-size: 0.82em;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.sp-grp-name svg {
+  width: 1.05em;
+  height: 1.05em;
 }
 .sp-btn {
   --tc: var(--jv, #4e8cff);
@@ -657,5 +692,127 @@
   .dash-grid > .dash-col,
   .mx-tile.z-hot.on::after {
     animation: none !important;
+  }
+}
+
+/* ─── письмо открывается: клапан откидывается, лист выезжает, конверт уходит, строки проявляются ─── */
+.ml-detail {
+  animation: ml-card 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes ml-card {
+  from {
+    opacity: 0;
+    transform: scale(0.85) translateY(6%);
+  }
+}
+.ml-detail > :not(.ml-envelope) {
+  animation: ml-line 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+.ml-detail > header {
+  animation-delay: 0.7s;
+}
+.ml-detail > small {
+  animation-delay: 0.78s;
+}
+.ml-detail > .ml-body {
+  animation-delay: 0.86s;
+}
+.ml-detail > .ml-action {
+  animation-delay: 0.94s;
+}
+.ml-detail > footer {
+  animation-delay: 1.02s;
+}
+@keyframes ml-line {
+  from {
+    opacity: 0;
+    transform: translateY(0.9em);
+  }
+}
+.ml-envelope {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 3;
+  width: 7.5em;
+  height: 4.8em;
+  translate: -50% -40%;
+  pointer-events: none;
+  animation: ml-env-out 0.35s ease-in 0.78s forwards;
+}
+@keyframes ml-env-out {
+  to {
+    opacity: 0;
+    transform: translateY(45%) scale(0.75);
+  }
+}
+.ml-envelope i {
+  position: absolute;
+  display: block;
+}
+.ml-env-back {
+  inset: 0;
+  z-index: 0;
+  border-radius: 0.45em;
+  background: color-mix(in srgb, var(--jv, #4e8cff) 35%, var(--d-panel2, #182133));
+}
+.ml-env-paper {
+  left: 9%;
+  right: 9%;
+  top: 8%;
+  height: 84%;
+  z-index: 1;
+  border-radius: 0.3em;
+  background: var(--d-panel, #141c2c);
+  box-shadow: 0 0 0 1px var(--d-line, #2b3650);
+  animation: ml-paper 0.42s cubic-bezier(0.2, 0.9, 0.3, 1.25) 0.4s forwards;
+}
+.ml-env-paper::before {
+  /* строки на листе */
+  content: '';
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  top: 20%;
+  height: 48%;
+  background: repeating-linear-gradient(to bottom, var(--d-line, #2b3650) 0 2px, transparent 2px 0.55em);
+}
+@keyframes ml-paper {
+  to {
+    transform: translateY(-62%);
+  }
+}
+.ml-env-front {
+  inset: 0;
+  z-index: 2;
+  border-radius: 0.45em;
+  background: color-mix(in srgb, var(--jv, #4e8cff) 55%, var(--d-panel2, #182133));
+  clip-path: polygon(0 0, 50% 56%, 100% 0, 100% 100%, 0 100%);
+}
+.ml-env-flap {
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 58%;
+  z-index: 3;
+  background: color-mix(in srgb, var(--jv, #4e8cff) 72%, var(--d-panel2, #182133));
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  transform-origin: top;
+  animation: ml-flap 0.34s ease-in-out 0.08s forwards;
+}
+@keyframes ml-flap {
+  /* откинутый клапан уходит за лист */
+  to {
+    transform: perspective(24em) rotateX(180deg);
+    z-index: 0;
+  }
+}
+@container style(--motion: calm) {
+  .ml-detail,
+  .ml-detail > * {
+    animation: none !important;
+  }
+  .ml-envelope {
+    display: none;
   }
 }

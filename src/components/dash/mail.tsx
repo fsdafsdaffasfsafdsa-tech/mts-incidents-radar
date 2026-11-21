@@ -51,6 +51,22 @@ export function MailBlock({ ctx }: { ctx: BlockCtx }) {
   const now = ctx.now;
   const [openId, setOpenId] = useState<string | null>(null);
   useMailAnnounce(mail);
+  // Джарвис читает письмо голосом — на стене оно раскрывается и само закрывается, когда он дочитал
+  useEffect(() => {
+    let t = 0;
+    const f = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (!id) return;
+      setOpenId(id);
+      clearTimeout(t);
+      t = window.setTimeout(() => setOpenId((cur) => (cur === id ? null : cur)), 20_000);
+    };
+    window.addEventListener('radar:mail-open', f);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('radar:mail-open', f);
+    };
+  }, []);
   const recent = mail.filter((m) => now - m.at < 12 * HOUR);
   const unread = recent.filter((m) => !m.read && m.analysis);
   const analyzing = recent.filter((m) => !m.analysis).length;
@@ -133,7 +149,7 @@ export function MailBlock({ ctx }: { ctx: BlockCtx }) {
           </div>
         ) : null;
       })()}
-      {open && <MailDetail m={open} onClose={() => setOpenId(null)} />}
+      {open && <MailDetail key={open.id} m={open} onClose={() => setOpenId(null)} />}
     </div>
   );
 }
@@ -161,6 +177,13 @@ function MailDetail({ m, onClose }: { m: MailItem; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   return (
     <div className="ml-detail" role="dialog" aria-label={m.subject}>
+      {/* письмо открывается: клапан конверта откидывается, лист выезжает, конверт уходит — и проявляется текст */}
+      <span className="ml-envelope" aria-hidden>
+        <i className="ml-env-back" />
+        <i className="ml-env-paper" />
+        <i className="ml-env-front" />
+        <i className="ml-env-flap" />
+      </span>
       <header>
         <b>{a?.summary ?? m.subject}</b>
         <button onClick={onClose} aria-label="Закрыть">

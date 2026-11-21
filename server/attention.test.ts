@@ -60,7 +60,7 @@ test('решили, а жалобы снова: срочно, наверху «�
   assert.equal(snap.action[0].inc.id, 'r', '«снова жалобы» срочнее даже критического в работе');
   assert.equal(attention(done, now)?.reason, 'Снова жалобы · 5');
   assert.equal(snap.counts.recur, 1);
-  const prev = new Map<string, Sig>([['r', { st: 'resolved', pr: 'P3', p1: false, recur: false }]]);
+  const prev = new Map<string, Sig>([['r', { st: 'resolved', pr: 'P3', p1: false, recur: false, ask: false }]]);
   const r = detect(prev, [done], now, new Set());
   assert.equal(r.found[0].kind, 'recur');
   assert.match(r.found[0].text!, /«Billing L2» решила 6 мин назад · снова 5 жалоб/);

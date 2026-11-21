@@ -178,8 +178,8 @@ export class Mailbox {
     this.items = items.filter((m): m is MailItem => !!m && typeof m === 'object' && typeof (m as MailItem).id === 'string').slice(0, KEEP);
   }
   start() {
-    if (!this.items.length) {
-      // первые письма — чтобы ящик не был пустым
+    if (this.demo && !this.items.length) {
+      // первые письма — чтобы ящик не был пустым (в режиме показа — нет: письма только по кнопке)
       const now = Date.now();
       for (let k = 0; k < 5; k++) this.add({ ...draft(this.point, now), at: now - (5 - k) * 7 * MIN, source: 'demo' });
     }

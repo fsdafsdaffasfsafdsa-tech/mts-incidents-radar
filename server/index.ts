@@ -98,15 +98,16 @@ try {
 } catch {
   /* пустой ящик */
 }
-mailbox.start();
-attachMailbox(mailbox); // Джарвис читает письма и заводит по ним инциденты
 // Самотёка нет: всё — по кнопкам ситуаций. Первый запуск в этом режиме (или база пуста после «очистить», а модель
 // при старте заново разложила выгрузку) — пустая смена; дальше перезапуск сохраняет то, что накнопали.
+// До запуска ящика: иначе он положит «первые письма», и Джарвис начнёт объявлять демо-письма.
 setShow(point, mailbox, true);
 if (getMeta(db, 'show') !== '1' || !saved) {
   clearAll(point, mailbox);
   setMeta(db, 'show', '1');
 }
+mailbox.start();
+attachMailbox(mailbox); // Джарвис читает письма и заводит по ним инциденты
 function send(res: http.ServerResponse, msg: PointMessage) {
   res.write(`data: ${JSON.stringify(msg)}\n\n`);
 }
@@ -537,7 +538,9 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
         return json(res, 200, { ok: true });
       }
       if (!(SHOW_KINDS as readonly string[]).includes(kind)) throw new Error('Неизвестная ситуация');
-      return json(res, 200, runShow(point, mailbox, kind as ShowKind, actor));
+      // Ситуацию «делает» коллега по пункту, а не сам дежурный: своё стена не объявляет, а ситуацию надо показать
+      const colleague = PEOPLE.find((x) => x.teamId === POINT_ID && x.name !== actor)?.name ?? 'Коллега по смене';
+      return json(res, 200, runShow(point, mailbox, kind as ShowKind, colleague));
     }
     if (p === '/api/demo/auto' && post) {
       pointOnly();

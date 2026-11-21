@@ -2,7 +2,7 @@
 //   Дежурный: Жалобы → Входящие → У команд → Решено · Запросы · Сигналы · Смена пункта · ИИ-помощник · Справочник
 //   Новые инциденты, которые никто не взял, распределяет ИИ; дежурные передают друг другу сами.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, BellRing, BookUser, CheckCircle2, FileSearch, MousePointerClick, PartyPopper, ChevronDown, ChevronRight, CircleHelp, Inbox, LayoutDashboard, MessageSquareShare, MonitorPlay, MoreHorizontal, Sparkles, Users, Workflow } from 'lucide-react';
+import { Activity, BellRing, BookUser, CheckCircle2, FileSearch, MousePointerClick, PartyPopper, ChevronDown, ChevronRight, CircleHelp, Inbox, LayoutDashboard, MessageSquareShare, MonitorPlay, MoreHorizontal, Sparkles, Workflow } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { openIncident, savedTab, select, setTab, teamName, useStore } from '../store';
 import { fmtDur, urgency } from '../lib/format';
@@ -12,7 +12,7 @@ import { RFMap } from './RFMap';
 import { IncidentCard } from './IncidentCard';
 import { Detector, IncidentRow, RequestCard, Signals } from './PointScreen';
 import { Roster, Shift } from './CommanderScreen';
-import { EscTimer, ForecastChip, heatClass, heatOf, heatStyle, isOn } from './kit';
+import { EscTimer, ForecastChip, heatClass, heatOf, heatStyle } from './kit';
 import { AiPage } from './AiPage';
 import { Replay } from './Replay';
 import { Dashboard } from './dash/Dashboard';
@@ -51,7 +51,6 @@ function useTabs(): TabDef[] {
     const req = [...requests.values()].filter((r) => r.status === 'pending').length;
     const sig = [...signals.values()].filter((s) => s.status === 'open').length;
     const ai = all.reduce((n, i) => n + i.history.filter((h) => h.kind === 'ai' && now - h.at < 3_600_000).length, 0);
-    const duty = staff.filter((p) => p.role === 'coordinator' && isOn(p, now)).length;
     const common: TabDef[] = [
       { id: 'teams', label: 'У команд', icon: Workflow, count: atTeams.length, flow: true, hint: 'Инциденты, переданные командам: кто взял, на каком этапе, сколько до дедлайна. Нажмите строку — карточка справа.' },
       { id: 'done', label: 'Решено', icon: CheckCircle2, count: done.length, flow: true, hint: 'Решённые за последний час: кто решил и за сколько.' },
@@ -64,7 +63,6 @@ function useTabs(): TabDef[] {
       { id: 'map', label: 'Жалобы', icon: Activity, count: stats?.flowPerMin, flow: true, hint: 'Жалобы абонентов приходят на карту. ИИ замечает всплески и сам собирает их в инциденты.' },
       { id: 'inbox', label: 'Входящие', icon: Inbox, count: inbox.length, tone: free.length ? 'warn' : undefined, flow: true, hint: 'Новые инциденты на пункте: ваши и без дежурного. Возьмите себе или передайте коллеге, затем — команде. ИИ подсказывает, кому подходит, решаете вы.' },
       ...common,
-      { id: 'shift', label: 'Смена пункта', icon: Users, count: duty, more: true, hint: 'Кто из дежурных сейчас на смене, что у каждого в работе, и график на сутки. Передать инцидент коллеге — в карточке инцидента.' },
       { id: 'ai', label: 'ИИ-помощник', icon: Sparkles, count: ai, more: true, hint: 'Что ИИ делает за пункт и почему — по каждому действию.' },
       { id: 'wall', label: 'Видеостена', icon: MonitorPlay, more: true, hint: 'Экран для стены над рабочими местами: видно с расстояния. «На экран стены» откроет его отдельным окном, «На весь экран» — без рамок.' },
       { id: 'directory', label: 'Справочник', icon: BookUser, more: true, hint: 'Около 900 команд: направления, регионы, графики, кто сейчас работает.' },

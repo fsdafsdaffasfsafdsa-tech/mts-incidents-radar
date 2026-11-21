@@ -18,7 +18,19 @@ export function localTime(at: number, tz: number) {
 
 const block = (day: number) => Math.floor(day / 2) % 2;
 
+/**
+ * «Вечная смена»: по ссылке пункт работает без графиков — все дежурные и команды всегда на связи, никого нет
+ * «не на смене», таймеры не ждут начала смены, а пересменка — это передача всего, что было с начала смены.
+ * Графики ниже оставлены для настоящего внедрения: выключить флаг — и они снова работают.
+ */
+export let ETERNAL_SHIFT = true;
+/** Включить графики обратно (тесты графиков, настоящее внедрение). */
+export function setEternalShift(on: boolean) {
+  ETERNAL_SHIFT = on;
+}
+
 export function onDuty(kind: ScheduleKind, crew: number, tz: number, at: number): boolean {
+  if (ETERNAL_SHIFT) return true;
   const { day, hour, weekday } = localTime(at, tz);
   switch (kind) {
     case '24/7': {
@@ -34,6 +46,7 @@ export function onDuty(kind: ScheduleKind, crew: number, tz: number, at: number)
 }
 
 export function shiftLabel(kind: ScheduleKind, crew: number): string {
+  if (ETERNAL_SHIFT) return 'всегда на связи';
   switch (kind) {
     case '24/7':
       return `смена ${'АБВГ'[crew] ?? crew + 1}: ${crew % 2 === 0 ? 'день 08–20' : 'ночь 20–08'}, 2/2`;
@@ -52,6 +65,7 @@ export const SCHEDULE_TEXT: Record<ScheduleKind, string> = {
 
 /** Когда в следующий раз изменится «на смене / не на смене» (шаг 15 минут, до 8 суток вперёд). */
 export function nextChange(kind: ScheduleKind, crew: number, tz: number, at: number): number {
+  if (ETERNAL_SHIFT) return at + 8 * DAY;
   const now = onDuty(kind, crew, tz, at);
   const step = 15 * 60_000;
   const start = Math.ceil(at / step) * step;

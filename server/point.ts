@@ -844,6 +844,15 @@ export class Point {
     const team = teamById(teamId);
     if (!team || team.id === POINT_ID) throw new Error('Нет такой команды');
     const now = Date.now();
+    inc.teamAsk = null; // передали — вопрос команды снят
+    // и запрос команды «не наше — передайте» по этому инциденту выполнен
+    for (const r of this.requests.values())
+      if (r.incidentId === id && r.status === 'pending' && r.kind === 'transfer') {
+        r.status = 'approved';
+        r.doneAt = now;
+        r.doneBy = actor;
+        this.emit({ type: 'request', data: r });
+      }
     const top = routeTeams(inc, this.ctx(now))[0];
     const h = this.hidden.get(id)!;
     h.aiTop = top?.teamId ?? null;
@@ -1032,6 +1041,7 @@ export class Point {
     } else if (!approve && r.incidentId) {
       const inc = this.incidents.get(r.incidentId);
       if (inc) {
+        inc.teamAsk = null; // ответили команде — вопрос снят
         inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: передача отклонена${comment ? ` — ${comment}` : ''}` });
         const h = this.hidden.get(inc.id);
         if (h) {
@@ -1147,6 +1157,7 @@ export class Point {
       aiTeamId: check.teamId,
     };
     this.requests.set(r.id, r);
+    inc.teamAsk = { kind: 'transfer', teamName: teamById(r.fromTeamId)?.name ?? 'команда', text: r.reason, at: r.at, aiTeamId: check.teamId ?? null };
     inc.history.push({ at: r.at, kind: 'team', actor: p.name, text: `${p.name}: просит передать${toTeamId ? ` в «${teamById(toTeamId)?.name}»` : ''} — ${r.reason}` });
     inc.history.push({ at: r.at, kind: 'ai', text: `ИИ проверил запрос по справочнику: ${check.note}` });
     this.touch(inc, r.at);
@@ -1168,6 +1179,7 @@ export class Point {
   help(id: string, personId: string, text: string, auto = false) {
     const inc = this.need(id);
     const p = this.member(inc.teamId, personId);
+    inc.teamAsk = { kind: 'help', teamName: teamById(inc.teamId)?.name ?? 'команда', text, at: Date.now() };
     inc.history.push({ at: Date.now(), kind: 'team', actor: p.name, text: `${p.name}: нужна помощь — ${text}` });
     this.touch(inc, Date.now());
     void auto;
@@ -1209,6 +1221,7 @@ export class Point {
 
   private finish(inc: Incident, actor: string) {
     const now = Date.now();
+    inc.teamAsk = null;
     inc.status = 'resolved';
     inc.stateText = 'Завершен';
     inc.stateReason = 'Постоянное решение';

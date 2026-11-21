@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { Point } from './point.ts';
 import { Mailbox } from './mail.ts';
 import { clearAll, runShow, setShow, SHOW_KINDS } from './show.ts';
+import { PEOPLE, isOn } from './directory.ts';
+import { detect, voiceLine, type Sig } from '../shared/attention.ts';
 
 function setup() {
   const p = new Point();
@@ -25,6 +27,37 @@ test('режим показа: самотёк выключен, очистка �
   setShow(p, box, false);
   assert.equal(p.stream.auto, true);
   assert.equal(box.demo, true);
+});
+
+test('режим показа: ящик сам не кладёт демо-письма; смена вечная — никого «не на смене»', () => {
+  const p = new Point();
+  const box = new Mailbox(p, () => undefined, () => true);
+  box.demo = false;
+  box.start();
+  box.stop();
+  assert.equal(box.items.length, 0);
+  const at = Date.UTC(2026, 10, 22, 3, 0); // ночь воскресенья — по графикам почти все не на смене
+  assert.ok(PEOPLE.every((x) => x.away || isOn(x, at)));
+});
+
+test('вопросы команд: «не наше» и «нужна помощь» видны стене, передача снимает вопрос', () => {
+  const { p, box } = setup();
+  const before = new Map<string, Sig>();
+  const ask = p.incidents.get(runShow(p, box, 'teamNotOurs', 'Коллега').id!)!;
+  assert.equal(ask.teamAsk?.kind, 'transfer');
+  assert.ok([...p.requests.values()].some((r) => r.incidentId === ask.id && r.status === 'pending'));
+  const help = p.incidents.get(runShow(p, box, 'teamHelp', 'Коллега').id!)!;
+  assert.equal(help.teamAsk?.kind, 'help');
+  // стена: новые инциденты с вопросом команды — событие «Вопрос команды», и Джарвис спрашивает, передать ли
+  const { found } = detect(before, [...p.incidents.values()], Date.now(), new Set());
+  assert.equal(found.filter((f) => f.kind === 'teamAsk').length, 2);
+  assert.match(voiceLine('teamAsk', ask, Date.now()), /просит передать/);
+  assert.match(voiceLine('teamAsk', help, Date.now()), /просит помощи/);
+  // передали в другую команду — вопрос снят, запрос выполнен
+  const other = [...p.incidents.values()].find((i) => i.id !== ask.id && i.teamId && i.teamId !== ask.teamId)?.teamId ?? ask.ai?.teamId;
+  p.route(ask.id, other!, 'Дежурный');
+  assert.equal(ask.teamAsk, null);
+  assert.ok([...p.requests.values()].every((r) => r.incidentId !== ask.id || r.status === 'approved'));
 });
 
 test('новый критический — P1 на пункте с советом ИИ', () => {
