@@ -384,6 +384,7 @@ const MIME: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.webp': 'image/webp', // миниатюры городов на карте
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.json': 'application/json',
