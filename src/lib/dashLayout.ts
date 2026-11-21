@@ -36,15 +36,15 @@ export const presetItems = (id: PresetId): GridItem[] => {
   return columnsToItems(p.columns);
 };
 /** Новая базовая раскладка — один раз заменяет прежние у тех, кто её не закрепил. */
-const LAYOUT_VER = 3;
+const LAYOUT_VER = 5;
 export const DEFAULT_DASH: DashLayout = {
   ver: LAYOUT_VER,
   preset: 'base',
   items: presetItems('base'),
   counters: true,
-  ticker: true,
+  ticker: false, // бегущая строка мешает читать стену — по умолчанию выключена
   filter: null,
-  style: 'graphite',
+  style: 'focus',
   density: 'normal',
   rotateSec: 20,
   pageSec: 15,
@@ -90,7 +90,18 @@ function clean(x: (Partial<DashLayout> & { columns?: DashColumn[] }) | null): Da
       d.items = presetItems('base');
       d.filter = null;
     }
-    d.sound = false; // v3: звуковые эффекты выключены, о событиях говорит Джарвис (включить — в настройках)
+    if ((d.ver ?? 0) < 3) d.sound = false; // v3: звуковые эффекты выключены, о событиях говорит Джарвис
+    // v4: редизайн по ChatGPT — новая базовая раскладка, стиль «Фокус», без бегущей строки (закреплённые не трогаем)
+    if ((d.ver ?? 0) < 4 && !d.locked) {
+      d.preset = 'base';
+      d.items = presetItems('base');
+      d.filter = null;
+      d.style = 'focus';
+      d.ticker = false;
+      d.density = 'normal';
+    }
+    // v5: избранное смены ушло со стены — почта занимает его место (только базовая раскладка, закреплённые не трогаем)
+    if ((d.ver ?? 0) < 5 && !d.locked && d.preset === 'base') d.items = presetItems('base');
     d.ver = LAYOUT_VER;
   }
   delete d.columns;

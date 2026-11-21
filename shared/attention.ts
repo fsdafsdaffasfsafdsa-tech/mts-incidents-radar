@@ -169,14 +169,15 @@ export function stillUrgent(kind: AlertKind, inc: Incident | undefined, now: num
 export function voiceLine(kind: AlertKind, inc: Incident, now: number, teamOf: (id: string) => string = (id) => id): string {
   const t = `«${inc.title.replace(/^Жалобы: /, 'жалобы: ')}»`;
   const left = inc.slaDeadline - now;
-  const ai = inc.ai?.teamId ? teamOf(inc.ai.teamId) : null;
+  const short = (n: string) => n.split(' · ')[0]; // «SMS и USSD-платформа · L2, дежурная смена» → «SMS и USSD-платформа»
+  const ai = inc.ai?.teamId ? short(teamOf(inc.ai.teamId)) : null;
   switch (kind) {
     case 'crit':
       return `новый критический — ${t}. ${inc.status === 'coordinators' && ai ? `ИИ советует «${ai}». Передать?` : 'Что будем делать?'}`;
     case 'coord':
       return `новый инцидент на распределение — ${t}. ${ai ? `ИИ советует «${ai}». Передать?` : 'Взять на себя?'}`;
     case 'recur':
-      return `${inc.recur?.team ? `команда «${inc.recur.team}»` : 'команда'} закрыла ${t}, но жалобы снова идут — уже ${inc.recur?.count ?? 0} ${complaintsWord(inc.recur?.count ?? 0)}. Вернуть в работу?`;
+      return `${inc.recur?.team ? `команда «${short(inc.recur.team)}»` : 'команда'} закрыла ${t}, но жалобы снова идут — уже ${inc.recur?.count ?? 0} ${complaintsWord(inc.recur?.count ?? 0)}. Вернуть в работу?`;
     case 'p1ask':
       return `ИИ предлагает поднять ${t} до наивысшего. Подтверждаем?`;
     case 'critStuck':

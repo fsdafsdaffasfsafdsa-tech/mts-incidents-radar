@@ -1,6 +1,6 @@
 // Координирующий пункт: жалобы → инциденты → дежурный пункта → команда → решение.
 // Люди за экранами действуют сами; за тех, кто сейчас не в системе, работает автопилот (для демо).
-import { PRIORITY_SLA_MIN, PRIORITY_TEXT, type Cluster, type Complaint, type FeedEvent, type FeedKind, type Incident, type Person, type PointMessage, type Priority, type Signal, type Stats, type Status, type TeamRequest } from '../shared/types.ts';
+import { PRIORITY_SLA_MIN, PRIORITY_TEXT, type Cluster, type Complaint, type FeedEvent, type FeedKind, type Incident, type MailItem, type Person, type PointMessage, type Priority, type Signal, type Stats, type Status, type TeamRequest } from '../shared/types.ts';
 import { RAW, employeeLogin, groupByName, priorityFromId, productByName, serviceName, type RawIncident } from './catalog.ts';
 import { ComplaintStream, RULES, findClusters, higher, isIncidentCluster, makeComplaint, nextAutoLevel, summarize, targetLevel, expected } from './complaints.ts';
 import { POINT_ID, POINT_STAFF, isOn, itsmTeam, membersOf, onShift, personById, serviceDef, teamById, teamOnDuty } from './directory.ts';
@@ -409,6 +409,35 @@ export class Point {
       this.touch(inc, c.at);
       this.pushFeed('recur', inc, `Решён, но снова жалобы: ${r.count}`);
     } else this.dirty.add(inc.id);
+  }
+
+  /** Инцидент из письма — на пункт: уровень по срочности письма, описание — текст письма. */
+  fromMail(mail: MailItem, actor: string) {
+    const now = Date.now();
+    const a = mail.analysis;
+    const priority: Priority = a?.urgency === 'high' ? 'P2' : 'P3';
+    const id = `INC0${this.seq++}`;
+    const inc = this.blank({
+      id,
+      title: `Письмо: ${a?.summary || mail.subject}`.slice(0, 140),
+      shortDescription: mail.subject.slice(0, 300),
+      description: mail.body.slice(0, 1500),
+      priority,
+      status: 'coordinators',
+      createdAt: now,
+      slaDeadline: now + PRIORITY_SLA_MIN[priority] * MIN,
+      origin: 'stream',
+      channel: 'Почта',
+      productName: a?.service ?? '',
+      service: a?.service ?? 'Почта',
+      history: [{ at: now, kind: 'coordinator', actor, text: `${actor}: создал инцидент из письма «${mail.subject.slice(0, 80)}» (${mail.fromName})` }],
+    });
+    this.incidents.set(id, inc);
+    this.hide(inc, now);
+    this.createdLog.push(now);
+    this.touch(inc, now);
+    this.pushFeed('coordinators', inc, `Из письма: ${mail.fromName}`, actor);
+    return inc;
   }
 
   /** Вернуть решённый инцидент в работу: той же команде (или на пункт, если команды нет). */

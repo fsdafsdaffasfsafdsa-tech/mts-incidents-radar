@@ -1,7 +1,7 @@
 // Новые блоки свободного поля и галерея «Добавить блок»: часы, счётчики, одна группа, персонаж, риск,
 // кому передать, команды, заметка и свой блок, придуманный ChatGPT (в том числе новый персонаж с портретом).
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowLeftRight, BarChart3, Bell, Bot, Check, Clock3, Columns3, Eye, Flame, Hash, List, Map as MapIcon, NotebookPen, Repeat, Send, Smile, Sparkles, Star, Table2, Users, X, Target, Timer } from 'lucide-react';
+import { Activity, ArrowLeftRight, BarChart3, Bell, Bot, Check, Clock3, Columns3, Eye, Flame, Hash, List, Map as MapIcon, NotebookPen, Repeat, Send, Smile, Sparkles, Star, Table2, Users, X, Target, Timer, Mail } from 'lucide-react';
 import type { Incident } from '../../../shared/types';
 import { BLOCKS, BLOCK_CATS, DASH_GROUPS, GROUP_NAME, riskOf, waitingTake, NOT_TAKEN_MIN, type BlockId, type DashGroup } from '../../../shared/dash';
 import { DEFAULT_SIZE } from '../../../shared/dashGrid';
@@ -319,6 +319,7 @@ const ICONS: Record<string, React.ReactNode> = {
   eye: <Eye size={22} />,
   star: <Star size={22} />,
   target: <Target size={22} />,
+  mail: <Mail size={22} />,
   timer: <Timer size={22} />,
 };
 /** Маленький набросок блока — чтобы было видно, как он выглядит. */

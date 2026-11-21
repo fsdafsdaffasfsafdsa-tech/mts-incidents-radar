@@ -10,6 +10,7 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 import type { Incident, Me, Priority } from '../shared/types.ts';
 import { PRIORITY_TEXT } from '../shared/types.ts';
 import type { Point } from './point.ts';
+import type { Mailbox } from './mail.ts';
 import { POINT_ID, POINT_STAFF, isOn, personById, teamById } from './directory.ts';
 import { planPoint, routeTeams } from './ai-point.ts';
 import { regionById } from './regions.ts';
@@ -22,6 +23,19 @@ import { personaById } from '../shared/personas.ts';
 import { BLOCK_TOOL, DASH_NOTE, DASH_TOOL, DESIGN_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
 
 const MIN = 60_000;
+// Почта дежурного: сервер подключает ящик при запуске (index.ts), Джарвис читает письма и заводит по ним инциденты.
+let mailbox: Mailbox | null = null;
+export function attachMailbox(m: Mailbox) {
+  mailbox = m;
+}
+const MAIL_KIND: Record<string, string> = { incident: 'сбой', update: 'новость по инциденту', request: 'просьба', complaint: 'жалоба клиента', noise: 'рассылка' };
+const MAIL_URG = { high: 0, normal: 1, low: 2 } as const;
+/** Непрочитанные важные письма: самое важное — первым. */
+function importantMail(now: number) {
+  return (mailbox?.items ?? [])
+    .filter((m) => !m.read && m.analysis && m.analysis.kind !== 'noise' && now - m.at < 12 * 3_600_000)
+    .sort((a, b) => MAIL_URG[a.analysis!.urgency] - MAIL_URG[b.analysis!.urgency] || b.at - a.at);
+}
 export const key = () => process.env.OPENROUTER_API_KEY || '';
 export const JARVIS_MODEL = () => process.env.JARVIS_MODEL || 'anthropic/claude-sonnet-5.5';
 
@@ -302,6 +316,17 @@ function contextText(point: Point, me: Me, q: JarvisAsk) {
     ...hot(point, now).map((i) => `- ${shortLine(i, now, point)}`),
   ];
   lines.push(...caseLines(point, now));
+  const mail = importantMail(now).slice(0, 5);
+  if (mail.length)
+    lines.push(
+      'ПОЧТА — непрочитанные важные письма (самое важное первым; «прочитай письмо», «что в письме» — про первое):',
+      ...mail.map((m) => {
+        const a = m.analysis!;
+        const inc = a.incidentId ? point.incidents.get(a.incidentId) : undefined;
+        return `- mail=${m.id}; ${MAIL_KIND[a.kind] ?? a.kind}${a.urgency === 'high' ? ', срочно' : ''}; от ${m.fromName}; ${fmtShort(now - m.at)} назад; суть: ${a.summary}${inc ? `; про инцидент id=${inc.id} «${inc.title}»` : '; без инцидента'}`;
+      }),
+    );
+  else if (mailbox) lines.push('Почта: важных непрочитанных писем нет.');
   if (point.clusters.length) lines.push('Подозрительные всплески жалоб (ещё не инциденты):', ...point.clusters.slice(0, 4).map((c) => `- key=${c.key}; ${c.service}, ${regionById(c.regionId)?.name}: ${c.count} за 10 мин при норме ${c.expected.toFixed(1)}`));
   if (sig.length) lines.push('Сигналы:', ...sig.slice(0, 5).map((s) => `- инцидент ${s.incidentId}: ${s.text}`));
   if (focus) lines.push('', 'ИНЦИДЕНТ В ФОКУСЕ РАЗГОВОРА («он», «его», «этот»):', details(point, focus));
@@ -426,6 +451,10 @@ class Exec {
         return `${v('Убираю из избранного', 'Убрал из избранного')} «${t(a.id)}»`;
       case 'reopen_incident':
         return `${v('Возвращаю в работу', 'Вернул в работу')} «${t(a.id)}»`;
+      case 'read_mail':
+        return v('Читаю письмо', 'Прочитал письмо');
+      case 'mail_to_incident':
+        return v('Завожу инцидент по письму', 'Завёл инцидент по письму');
       case 'dashboard':
         return v('Перестраиваю видеостену', 'Перестроил видеостену');
       case 'design_dashboard':
@@ -621,6 +650,26 @@ class Exec {
         this.done.push(`Вернул в работу «${inc.title}»${inc.teamId ? ` — команде «${teamName(inc.teamId)}»` : ''}`);
         return 'ok';
       }
+      case 'read_mail': {
+        if (!mailbox) throw new Error('почта не подключена');
+        const m = typeof a.mail === 'string' && a.mail ? mailbox.get(a.mail.replace(/^mail=/, '')) : importantMail(Date.now())[0];
+        if (!m) throw new Error('такого письма нет — важных непрочитанных писем нет');
+        mailbox.read(m.id);
+        const an = m.analysis;
+        if (an?.incidentId && p.incidents.has(an.incidentId)) this.focus = an.incidentId;
+        this.done.push(`Прочитал письмо от ${m.fromName}`);
+        return `письмо mail=${m.id} от ${m.fromName}, тема «${m.subject}».${an ? ` Суть: ${an.summary}. Что сделать: ${an.action}.` : ''}${an?.incidentId ? ` Про инцидент id=${an.incidentId}.` : ''} Текст: ${m.body.replace(/\s+/g, ' ').slice(0, 700)}`;
+      }
+      case 'mail_to_incident': {
+        if (!mailbox) throw new Error('почта не подключена');
+        const m = typeof a.mail === 'string' && a.mail ? mailbox.get(a.mail.replace(/^mail=/, '')) : importantMail(Date.now()).find((x) => !x.analysis?.incidentId && !x.incidentCreated);
+        if (!m) throw new Error('нет письма без инцидента');
+        const inc = mailbox.toIncident(m.id, this.me.name);
+        this.focus = inc.id;
+        this.actions.push({ type: 'open', id: inc.id });
+        this.done.push(`Завёл инцидент «${inc.title}» по письму`);
+        return `создан id=${inc.id} «${inc.title}»`;
+      }
       case 'unpin_incident': {
         const inc = this.inc(a.id);
         p.unpin(inc.id, this.me.name);
@@ -664,6 +713,7 @@ function findIncidents(point: Point, q: string, limit: number): Incident[] {
 
 const fn = (name: string, description: string, properties: Record<string, unknown> = {}, required: string[] = []) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } });
 const ID = { id: { type: 'string', description: 'id инцидента' } };
+const MAIL_ARG = { mail: { type: 'string', description: 'mail=… из раздела «Почта»' } };
 const INFO_TOOLS = [
   fn('get_incident', 'Подробно об инциденте: что случилось, где, уровень, кто ведёт, срок, совет ИИ, кому передать', ID, ['id']),
   fn('find_incidents', 'Найти открытые инциденты по словам: сервис, регион, город, команда', { query: { type: 'string' } }, ['query']),
@@ -694,6 +744,8 @@ const ACTION_TOOLS = [
   fn('pin_incident', 'Добавить инцидент в избранное смены (или изменить заметку): заметку и напоминание видит вся смена', { ...ID, note: { type: 'string', description: 'короткая заметка для смены' }, remind_min: { type: 'number', description: 'через сколько минут напомнить; 0 — без напоминания' } }, ['id']),
   fn('unpin_incident', 'Убрать инцидент из избранного смены', ID, ['id']),
   fn('reopen_incident', 'Вернуть в работу решённый инцидент, по которому снова идут жалобы (той же команде)', ID, ['id']),
+  fn('read_mail', 'Прочитать письмо из почты: от кого, суть, что просят и текст; письмо станет прочитанным. Без mail — самое важное', MAIL_ARG),
+  fn('mail_to_incident', 'Завести инцидент на пункте по письму о сбое. Без mail — самое важное письмо без инцидента', MAIL_ARG),
 ];
 
 const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощник дежурного координирующего пункта ИТ. Пункт получает жалобы абонентов, собирает инциденты и передаёт их в ~900 команд.
@@ -712,6 +764,7 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 - Строки-события в истории — то, что ты сам только что объявил (срочное на стене). Ответ дежурного относится к этому инциденту: «беру», «взял», «взял в задачу» — take_incident; «верни», «да, верни в работу» про «жалобы снова идут» — reopen_incident; «подтверждаю» про «Наивысший» — answer_p1 confirm=true; «принял» — коротко подтверди.
 - «Решили, а жалобы снова идут» — проблема не устранена: предложи вернуть в работу той же команде (reopen_incident).
 - «Что в избранном?» — по разделу «Избранное смены»: что закреплено и какие заметки. «Закрепи», «в избранное», «напомни через N минут» — pin_incident с заметкой со слов дежурного; «убери из избранного» — unpin_incident.
+- Почта: «прочитай письмо», «что пишут?» — read_mail (без mail — самое важное) и перескажи суть одной-двумя фразами, а не весь текст. «Заведи инцидент по письму» — mail_to_incident. «Передай в другую команду» про письмо-просьбу о переназначении — route_incident по инциденту из письма (команда — из письма или из совета ИИ).
 - Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.
 - Пометки «(Сделано: …)» в истории — действия, которые уже выполнены на самом деле. Не оспаривай их и не повторяй без просьбы.`;
 /** Системная подсказка под выбранного персонажа: имя, обращение и характер. */
@@ -812,6 +865,20 @@ function rules(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined)
   // Команды видеостене: «покажи только критические», «поменяй местами блоки», «сделай неон»…
   const dashReply = dashRules(text, q.dash ?? null, (a) => (a.op === '__design' ? tryRun('design_dashboard', { prompt: a.prompt }) : a.op === '__block' ? tryRun('create_block', { prompt: a.prompt, character: a.character }) : tryRun('dashboard', a)), q.tab === 'wall');
   if (dashReply) return say(dashReply);
+  // Почта: «прочитай письмо», «заведи инцидент по письму»; «да» в ответ на «срочное письмо… Прочитать?»
+  const lastSaid = norm(q.history.at(-1)?.role === 'assistant' ? q.history.at(-1)!.content : '');
+  const yes = /^(да|давай|ага|конечно|читай)([\s,.!]|$)/.test(text);
+  if (/письм|почт/.test(text) || (yes && /письм/.test(lastSaid))) {
+    if (/завед|созда|инцидент/.test(text) || (yes && /завести инцидент/.test(lastSaid))) {
+      const r = tryRun('mail_to_incident', {});
+      return say(r.startsWith('!') ? `Не вышло: ${r.slice(1)}.` : `Готово, сэр. ${ex.done.at(-1)}.`);
+    }
+    const m = importantMail(now)[0];
+    const r = tryRun('read_mail', {});
+    if (r.startsWith('!') || !m) return say('Важных непрочитанных писем нет, сэр.');
+    const an = m.analysis!;
+    return say(`Письмо от ${m.fromName}: ${an.summary.replace(/[.!]+$/, '')}.${an.action ? ` ${an.action.replace(/[.!]+$/, '')}.` : ''}`);
+  }
   if (/кому .*(дать|переда|отда|поруч)|кто .*(возьм|подойд)/.test(text)) {
     const i = focus();
     if (!i) return say('О каком инциденте речь, сэр? Откройте его или назовите сервис и регион.');

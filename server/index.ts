@@ -14,10 +14,11 @@ import { planPoint, routeTeams } from './ai-point.ts';
 import { assessRisk, buildContext } from './ai-heuristic.ts';
 import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
+import { Mailbox } from './mail.ts';
 import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
 import { RAW } from './catalog.ts';
-import { actorLine, ask as askJarvis, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
+import { actorLine, ask as askJarvis, attachMailbox, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
 import { parseDashCtx } from './jarvis-dash.ts';
 import { design as designDash } from './design.ts';
 import { characterSays, drawAvatar, makeBlock } from './blockgen.ts';
@@ -82,6 +83,22 @@ itsm.start();
 // ─── SSE ───────────────────────────────────────────────────────────────────
 
 const clients = new Map<http.ServerResponse, Me>();
+// Почта дежурного: письма и их разбор моделью (server/mail.ts). Пишем только дежурным пункта.
+const mailbox = new Mailbox(
+  point,
+  (m) => {
+    for (const [res, who] of clients) if (who.role === 'coordinator') send(res, { type: 'mail', data: m });
+  },
+  () => [...clients.values()].some((who) => who.role === 'coordinator'),
+  (items) => setMeta(db, 'mail', JSON.stringify(items.slice(0, 100))),
+);
+try {
+  mailbox.restore(JSON.parse(getMeta(db, 'mail') ?? '[]'));
+} catch {
+  /* пустой ящик */
+}
+mailbox.start();
+attachMailbox(mailbox); // Джарвис читает письма и заводит по ним инциденты
 function send(res: http.ServerResponse, msg: PointMessage) {
   res.write(`data: ${JSON.stringify(msg)}\n\n`);
 }
@@ -227,6 +244,24 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
     }
 
     // ─── Джарвис: голосовой помощник дежурного ───
+    // ─── почта ───
+    if (p === '/api/mail' && !post) {
+      pointOnly();
+      return json(res, 200, { items: mailbox.items.slice(0, 80) });
+    }
+    if (p === '/api/mail/upload' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      const raw = str(body.raw);
+      if (!raw.trim()) throw new Error('Пустое письмо');
+      return json(res, 200, mailbox.upload(raw.slice(0, 400_000)));
+    }
+    m = p.match(/^\/api\/mail\/([\w-]+)\/(read|incident)$/);
+    if (m && post) {
+      pointOnly();
+      if (m[2] === 'read') return json(res, 200, mailbox.read(m[1]));
+      return json(res, 200, mailbox.toIncident(m[1], actor));
+    }
     if (p === '/api/jarvis/status') return json(res, 200, jarvisStatus());
     if (p === '/api/jarvis' && post) {
       pointOnly();

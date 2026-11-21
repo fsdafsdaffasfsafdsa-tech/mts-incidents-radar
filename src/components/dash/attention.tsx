@@ -4,11 +4,13 @@
 //   «Внимание» — полосой сверху, мягкий звук, уходит сама;
 //   «Инфо»     — тихой строкой без звука.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BellRing, CheckCircle2, ExternalLink, Eye, Info, Mic, RotateCcw, Siren, Star, UserCheck, X } from 'lucide-react';
+import { BellRing, CheckCircle2, ExternalLink, Eye, Info, Mic, RotateCcw, Send, Siren, Star, Timer, UserCheck, X } from 'lucide-react';
+import { serviceIcon, shortPlace, splitTitle } from './wall2';
+import { timerText } from './blocks3';
 import type { Incident } from '../../../shared/types';
 import { ALERT_META, detect, levelOf, stillUrgent, voiceLine, type AlertKind, type Found, type Level, type Sig } from '../../../shared/attention';
-import { dashSnapshot, fmtShort } from '../../../shared/dash';
-import { answerP1, getState, reopenIncident, takeAtPoint, teamName } from '../../store';
+import { dashSnapshot, fmtShort, isRecurring } from '../../../shared/dash';
+import { answerP1, getState, reopenIncident, routeTo, takeAtPoint, teamName } from '../../store';
 import { fmtClock } from '../../lib/format';
 import { useDashEvents, type DashLayout } from '../../lib/dashLayout';
 import { announceText } from '../Jarvis';
@@ -179,7 +181,7 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
       (e) => {
         if (e.type !== 'test-alarm') return;
         const list = [...getState().incidents.values()];
-        const any = list.find((i) => i.status !== 'resolved') ?? list[0];
+        const any = (e.kind === 'recur' ? list.find((i) => isRecurring(i, Date.now())) : undefined) ?? list.find((i) => i.status !== 'resolved') ?? list[0];
         if (any) push([{ kind: e.kind, inc: any, text: e.kind === 'recur' ? '«Billing L2» решила 4 мин назад · снова 7 жалоб' : undefined }], true);
       },
       [push],
@@ -199,46 +201,78 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
 }
 
 const left = (i: Incident, now: number) => (i.slaDeadline - now > 0 ? fmtShort(i.slaDeadline - now) : `−${fmtShort(now - i.slaDeadline)}`);
-const whoOf = (i: Incident) => (i.status === 'coordinators' ? (i.coordinatorName ? `ведёт ${i.coordinatorName}` : 'на пункте, никто не ведёт') : `${teamName(i.teamId)}${i.assigneeName ? ` · ${i.assigneeName}` : ''}`);
 
 /** Главное действие по срочному — одной кнопкой (у проверочных тревог действий нет). */
 function primaryOf(a: Alert, i: Incident): { label: string; icon: React.ReactNode; run: () => void; alt?: { label: string; run: () => void } } | null {
   if (a.test) return null;
   if (a.kind === 'recur' && i.status === 'resolved') return { label: 'Вернуть в работу', icon: <RotateCcw size={18} />, run: () => void reopenIncident(i.id) };
+  if ((a.kind === 'crit' || a.kind === 'coord') && i.status === 'coordinators' && i.ai?.teamId)
+    return { label: `Передать: ${teamName(i.ai.teamId).split(' · ')[0]}`, icon: <Send size={18} />, run: () => void routeTo(i.id, i.ai.teamId!), alt: !i.coordinatorId ? { label: 'Беру на себя', run: () => void takeAtPoint(i.id) } : undefined };
   if ((a.kind === 'crit' || a.kind === 'coord') && i.status !== 'resolved' && !i.coordinatorId) return { label: 'Беру на себя', icon: <UserCheck size={18} />, run: () => void takeAtPoint(i.id) };
   if (a.kind === 'p1ask' && i.p1Proposal) return { label: 'Поднять до «Наивысшего»', icon: <Siren size={18} />, run: () => void answerP1(i.id, true), alt: { label: 'Отклонить', run: () => void answerP1(i.id, false) } };
   return null;
 }
 
-/** Срочное — на весь экран стены. Шар помощника остаётся поверх: можно ответить голосом. */
+/** Вопрос, который задаёт помощник, — одной строкой крупно. */
+function questionOf(a: Alert, i: Incident) {
+  switch (a.kind) {
+    case 'recur':
+      return 'Вернуть в работу?';
+    case 'crit':
+    case 'coord':
+      return i.status === 'coordinators' && i.ai?.teamId ? `Передать «${teamName(i.ai.teamId).split(' · ')[0]}»?` : i.coordinatorId ? 'Что будем делать?' : 'Взять на себя?';
+    case 'p1ask':
+      return 'Поднять до наивысшего?';
+    case 'critStuck':
+      return 'Указать руководителю команды?';
+    default:
+      return 'Что будем делать?';
+  }
+}
+
+/**
+ * Срочное — «режим фокуса» на всю стену (по предложению ChatGPT): крупная пиктограмма сервиса, сервис и место,
+ * таймер, один вопрос и одна главная кнопка; помощник спрашивает голосом и ждёт ответа. Шар помощника — поверх.
+ */
 export function UrgentOverlay({ list, incidents, now, onAck, onOpen }: { list: Alert[]; incidents: Map<string, Incident>; now: number; onAck: (key: string) => void; onOpen: (i: Incident) => void }) {
   const a = list[0];
   if (!a) return null;
   const i = incidents.get(a.inc.id) ?? a.inc;
   const meta = ALERT_META[a.kind];
   const act = primaryOf(a, i);
+  const Icon = serviceIcon(i);
+  const { name, place } = splitTitle(i);
+  const left = i.slaDeadline - now;
   return (
     <div className={`dur-wrap k-${a.kind}`} role="alertdialog" aria-label={`Срочно: ${meta.title}`}>
-      <div className="dur">
+      <div className="dur dur2">
         <div className="dur-top">
           <Siren size={22} />
-          <b>Срочно · {meta.title}</b>
+          <b>{meta.title}</b>
           {a.test && <em>проверка</em>}
-          <span className="num">{fmtClock(a.at)}</span>
+          {list.length > 1 && <span className="dur-more">+{list.length - 1}</span>}
         </div>
-        <h1>{i.title}</h1>
-        {a.text && <p className="dur-why">{a.text}</p>}
-        <div className="dur-meta">
-          <span>{i.priorityText}</span>
-          <span>{i.productName || i.service}</span>
-          <span>{whoOf(i)}</span>
-          {i.status !== 'resolved' && <span className={`num ${i.slaDeadline - now < 30 * 60_000 ? 'hot' : ''}`}>срок {left(i, now)}</span>}
+        <div className="dur-main">
+          <span className="dur-ill">
+            <Icon />
+          </span>
+          <div className="dur-what">
+            <h1>{name}</h1>
+            {place && <p className="dur-place">{shortPlace(place)}</p>}
+            <p className={`dur-timer ${i.status === 'resolved' || left < 30 * 60_000 ? 'hot' : ''}`}>
+              {i.status === 'resolved' && i.recur ? (
+                <>
+                  <RotateCcw /> снова {i.recur.count}
+                </>
+              ) : (
+                <>
+                  <Timer /> <b className="num">{timerText(left)}</b>
+                </>
+              )}
+            </p>
+          </div>
         </div>
-        {meta.todo && (
-          <p className="dur-todo">
-            Что сделать: <b>{meta.todo}</b>
-          </p>
-        )}
+        <p className="dur-q">{questionOf(a, i)}</p>
         <div className="dur-act">
           {act && (
             <button
@@ -261,17 +295,19 @@ export function UrgentOverlay({ list, incidents, now, onAck, onOpen }: { list: A
               {act.alt.label}
             </button>
           )}
-          <button onClick={() => onOpen(i)}>
-            <ExternalLink size={16} /> Открыть
-          </button>
           <button onClick={() => onAck(a.key)}>
-            <CheckCircle2 size={16} /> Принял
+            <CheckCircle2 size={18} /> Принял
+          </button>
+          <button className="icon" onClick={() => onOpen(i)} title="Открыть в ITSM" aria-label="Открыть в ITSM">
+            <ExternalLink size={18} />
           </button>
         </div>
         <p className="dur-voice">
-          <Mic size={14} /> Можно голосом: «{a.kind === 'recur' ? 'верни в работу' : a.kind === 'p1ask' ? 'подтверждаю' : 'беру'}», «принял»
+          <span className="dur-mic">
+            <Mic size={16} />
+          </span>
+          Ожидаю голосовую команду
         </p>
-        {list.length > 1 && <span className="dur-more">ещё срочных: {list.length - 1}</span>}
       </div>
     </div>
   );

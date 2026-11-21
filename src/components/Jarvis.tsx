@@ -240,6 +240,23 @@ function enqueueAnnounce(text: string, id: string, key = `inc:${id}`) {
   }
   void runAnnounce();
 }
+// ─── что Джарвис объявил сам — для блока Джарвиса на стене (лента разговора) ───
+export const jarvisSaid: { text: string; at: number; id: string }[] = [];
+const saidSubs = new Set<() => void>();
+function logSaid(text: string, id: string) {
+  jarvisSaid.unshift({ text, at: Date.now(), id });
+  if (jarvisSaid.length > 6) jarvisSaid.length = 6;
+  saidSubs.forEach((f) => f());
+}
+export function useJarvisSaid() {
+  const [, set] = useState(0);
+  useEffect(() => {
+    const f = () => set((x) => x + 1);
+    saidSubs.add(f);
+    return () => void saidSubs.delete(f);
+  }, []);
+  return jarvisSaid;
+}
 async function runAnnounce() {
   if (annRunning) return;
   annRunning = true;
@@ -247,6 +264,7 @@ async function runAnnounce() {
     while (annQueue.length) {
       const a = annQueue.shift()!;
       if (!canAnnounce()) continue;
+      logSaid(a.text, a.id);
       if (bridge) await bridge.announce(a.text, a.id);
       else await say(a.text);
       await new Promise((r) => setTimeout(r, 500));
@@ -315,6 +333,20 @@ const onDashboard = () => !isWorkOpen() && !new URLSearchParams(location.search)
 const aiBlockOnWall = () => getDash().items.some((i) => i.block === 'assistant' || i.block === 'rotate');
 const workInBlock = () => onDashboard() && aiBlockOnWall();
 
+// ─── живое состояние — для персонажа на стене ──────────────────────────────
+/** Что Джарвис делает прямо сейчас: ждёт, слушает, думает, говорит. Персонаж в ИИ-блоке анимируется по нему. */
+export const jarvisLive: { phase: Phase; hearing: boolean } = { phase: 'idle', hearing: false };
+const liveSubs = new Set<() => void>();
+export function useJarvisLive() {
+  const [, set] = useState(0);
+  useEffect(() => {
+    const f = () => set((x) => x + 1);
+    liveSubs.add(f);
+    return () => void liveSubs.delete(f);
+  }, []);
+  return jarvisLive;
+}
+
 // ─── пауза ─────────────────────────────────────────────────────────────────
 /**
  * sleep — «всё, пока не надо»: не говорит и не отвечает, слушает только «продолжаем работу»;
@@ -325,6 +357,9 @@ const pauseSubs = new Set<() => void>();
 function setPause(p: Partial<typeof jarvisPause>) {
   Object.assign(jarvisPause, p);
   pauseSubs.forEach((f) => f());
+}
+export function useJarvisPause() {
+  return usePause();
 }
 function usePause() {
   const [, set] = useState(0);
@@ -896,6 +931,24 @@ export function Jarvis() {
     setPhase('idle');
     follow();
   }
+  const toggleMuteRef = useRef(toggleMute);
+  toggleMuteRef.current = toggleMute;
+  const stopTalkingRef = useRef(stopTalking);
+  stopTalkingRef.current = stopTalking;
+  // Кнопки персонажа на стене: микрофон, пауза, «стоп».
+  useEffect(() => {
+    const mute = () => toggleMuteRef.current();
+    const pauseT = () => (jarvisPause.sleep ? resumeRef.current() : (setPause({ sleep: true }), stopVoice()));
+    const stop = () => stopTalkingRef.current();
+    window.addEventListener('radar:jarvis-mute', mute);
+    window.addEventListener('radar:jarvis-pause', pauseT);
+    window.addEventListener('radar:jarvis-stop', stop);
+    return () => {
+      window.removeEventListener('radar:jarvis-mute', mute);
+      window.removeEventListener('radar:jarvis-pause', pauseT);
+      window.removeEventListener('radar:jarvis-stop', stop);
+    };
+  }, []);
   // Esc — замолчать.
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && phase === 'speak' && stopTalking();
@@ -1014,6 +1067,11 @@ export function Jarvis() {
 
   // Подпись — по настоящему состоянию микрофона, а не по таймеру.
   const hearing = control ? earState === 'on' : phase === 'listen';
+  useEffect(() => {
+    jarvisLive.phase = phase;
+    jarvisLive.hearing = hearing || awaiting;
+    liveSubs.forEach((f) => f());
+  }, [phase, hearing, awaiting]);
   const label = pause.mute
     ? 'Микрофон выключен — нажмите, чтобы включить'
     : pause.sleep && phase === 'idle'

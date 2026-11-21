@@ -6,6 +6,7 @@ import type {
   Complaint,
   FeedEvent,
   Incident,
+  MailItem,
   Me,
   Person,
   PointMessage,
@@ -64,6 +65,7 @@ export interface State {
   requests: Map<string, TeamRequest>;
   signals: Map<string, Signal>;
   feed: FeedEvent[];
+  mail: MailItem[]; // почта дежурного с разбором ИИ
   stats: Stats | null;
   ai: AiStatus | null;
   config: PointSnapshot['config'] | null;
@@ -125,6 +127,7 @@ let state: State = {
   requests: new Map(),
   signals: new Map(),
   feed: [],
+  mail: [],
   stats: null,
   ai: null,
   config: null,
@@ -262,6 +265,7 @@ function handle(msg: PointMessage) {
         ai: d.ai,
         config: d.config,
       });
+      if (isPoint()) void loadMail();
       break;
     }
     case 'incident': {
@@ -321,6 +325,12 @@ function handle(msg: PointMessage) {
     case 'feed':
       setState({ feed: [msg.data, ...state.feed].slice(0, 200) });
       break;
+    case 'mail': {
+      const m = msg.data;
+      const rest = state.mail.filter((x) => x.id !== m.id);
+      setState({ mail: [m, ...rest].sort((a, b) => b.at - a.at).slice(0, 80) });
+      break;
+    }
     case 'stats':
       setState({ stats: msg.data });
       break;
@@ -610,3 +620,16 @@ export function setHotkeysOn(hotkeysOn: boolean) {
   writePref('radar.hotkeysOn', hotkeysOn);
   setState({ hotkeysOn });
 }
+
+// ─── почта ───
+export async function loadMail() {
+  try {
+    const r = await fetch('/api/mail');
+    if (r.ok) setState({ mail: ((await r.json()) as { items: MailItem[] }).items });
+  } catch {
+    /* позже придёт потоком */
+  }
+}
+export const mailRead = (id: string) => quiet(post(`/api/mail/${encodeURIComponent(id)}/read`));
+export const mailToIncident = (id: string) => post<Incident>(`/api/mail/${encodeURIComponent(id)}/incident`);
+export const mailUpload = (raw: string) => post<MailItem>('/api/mail/upload', { raw });

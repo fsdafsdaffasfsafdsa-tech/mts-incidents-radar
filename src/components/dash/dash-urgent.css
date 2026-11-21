@@ -1,0 +1,208 @@
+/* ═══ срочное: Джарвис говорит, экран параллельно показывает ═══ */
+.us-wrap {
+  --uc: var(--d-crit);
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  font-size: clamp(13px, 1vw, 30px);
+}
+.us-wrap.k-coord {
+  --uc: var(--d-high);
+}
+.us-wrap.k-recur {
+  --uc: color-mix(in srgb, var(--d-crit) 55%, var(--d-high));
+}
+.us-dim {
+  position: absolute;
+  inset: 0;
+  background: rgb(5 8 14 / 0.86);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: dur-in 0.3s ease-out;
+}
+.us-kind {
+  position: absolute;
+  top: 4%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.5em 1.2em;
+  border-radius: 999px;
+  background: var(--uc);
+  color: #fff;
+  font-size: 1.15em;
+  font-weight: 800;
+  white-space: nowrap;
+  animation: dn-in 0.4s ease-out;
+}
+.us-kind svg {
+  width: 1.1em;
+  height: 1.1em;
+}
+.us-kind em {
+  font-style: normal;
+  opacity: 0.8;
+  font-weight: 600;
+}
+.us-kind i {
+  font-style: normal;
+  padding: 0 0.5em;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.25);
+}
+.us-center {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 0.6em;
+  width: min(80%, 1200px);
+  color: #fff;
+  text-align: center;
+}
+.us-name {
+  font-size: 2.4em;
+  line-height: 1.1;
+}
+/* субтитры речи Джарвиса */
+.us-sub {
+  position: absolute;
+  left: 50%;
+  bottom: 5%;
+  transform: translateX(-50%);
+  width: min(86%, 1300px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1em;
+  align-items: center;
+  padding: 0.8em 1.2em;
+  border-radius: calc(var(--d-radius) * 1.2);
+  background: var(--d-panel);
+  border: 2px solid var(--jv);
+  box-shadow: 0 1em 3em rgb(0 0 0 / 0.5);
+  animation: dn-in 0.4s ease-out;
+}
+.us-sub-ava {
+  height: 4.2em;
+  width: auto;
+  object-fit: contain;
+  -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
+  mask-image: linear-gradient(to bottom, #000 80%, transparent);
+}
+.us-sub p {
+  margin: 0;
+  font-size: 1.6em;
+  line-height: 1.3;
+  color: var(--d-muted);
+}
+.us-sub p span {
+  opacity: 0.18;
+  transition: opacity 0.25s, color 0.25s;
+}
+.us-sub p span.on {
+  opacity: 1;
+  color: var(--d-text);
+}
+.us-sub p span.on.q {
+  color: var(--jv);
+  font-weight: 800;
+}
+.us-mic {
+  display: grid;
+  place-items: center;
+  width: 2.6em;
+  height: 2.6em;
+  border-radius: 50%;
+  background: var(--jv);
+  color: #fff;
+  animation: dur-mic 1.4s ease-out infinite;
+}
+.us-mic svg {
+  width: 50%;
+  height: 50%;
+}
+@keyframes story-in {
+  from {
+    opacity: 0;
+    transform: scale(0.4) translateY(0.5em);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* линия времени */
+.us-tl {
+  position: relative;
+  width: 100%;
+  height: 10em;
+  margin-top: 0.5em;
+}
+.us-tl-line {
+  position: absolute;
+  left: 2%;
+  right: 2%;
+  top: 4.6em;
+  height: 4px;
+  border-radius: 4px;
+  background: #3a475e;
+}
+.us-tl-ev {
+  position: absolute;
+  top: 3.6em;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 0.35em;
+  color: #cfd8e3;
+  opacity: 0;
+  animation: story-in 0.5s ease-out forwards;
+}
+/* подпись над линией — у близких соседей */
+.us-tl-ev.up {
+  top: auto;
+  bottom: calc(100% - 5.6em);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+}
+.us-tl-ev i {
+  width: 2em;
+  height: 2em;
+  border-radius: 50%;
+  background: #9fb0c8;
+  border: 3px solid #0b1019;
+}
+.us-tl-ev.t-ok i {
+  background: var(--d-ok);
+}
+.us-tl-ev.t-bad i {
+  background: var(--d-crit);
+}
+.us-tl-ev.t-now i {
+  background: transparent;
+  border: 3px solid var(--jv);
+}
+.us-tl-ev.t-flag i {
+  background: transparent;
+  border: 3px dashed #9fb0c8;
+}
+.us-tl-ev b {
+  font-size: 1.2em;
+  color: #fff;
+}
+.us-tl-ev small {
+  font-size: 1em;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .us-wrap * {
+    animation-duration: 0.01s !important;
+    transition: none !important;
+  }
+}

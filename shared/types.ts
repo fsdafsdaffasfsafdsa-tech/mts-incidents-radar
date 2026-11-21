@@ -65,6 +65,31 @@ export interface Crew {
 }
 
 /** Избранное смены: инцидент закреплён дежурным с заметкой и, по желанию, напоминанием. */
+/** Почта дежурного: письмо и его разбор моделью (или по правилам). */
+export type MailKind = 'incident' | 'update' | 'request' | 'complaint' | 'noise';
+export interface MailAnalysis {
+  kind: MailKind;
+  urgency: 'high' | 'normal' | 'low';
+  summary: string; // суть одной строкой
+  action: string; // что сделать дежурному
+  incidentId: string | null; // к какому инциденту относится
+  service: string | null;
+  llm: boolean; // разобрала модель (иначе — правила)
+  at: number;
+}
+export interface MailItem {
+  id: string;
+  at: number;
+  from: string;
+  fromName: string;
+  subject: string;
+  body: string;
+  source: 'demo' | 'upload';
+  read: boolean;
+  analysis: MailAnalysis | null;
+  incidentCreated: string | null; // инцидент, созданный из письма
+}
+
 /** Решили, а жалобы снова идут: сколько жалоб пришло после решения и когда. Своё поле Радара. */
 export interface IncidentRecur {
   count: number; // жалоб после решения
@@ -391,7 +416,8 @@ export type PointMessage =
   | { type: 'feed'; data: FeedEvent }
   | { type: 'stats'; data: Stats }
   | { type: 'tick'; data: { serverTime: number } }
-  | { type: 'insight'; data: Insight };
+  | { type: 'insight'; data: Insight }
+  | { type: 'mail'; data: MailItem };
 
 export type WorkerStatus = 'free' | 'busy' | 'break' | 'enroute' | 'onsite';
 
