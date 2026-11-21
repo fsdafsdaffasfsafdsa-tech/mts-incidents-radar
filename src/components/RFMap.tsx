@@ -7,7 +7,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { geoConicConformal, geoGraticule, geoPath, type GeoProjection } from 'd3-geo';
 import type { Incident, Region } from '../../shared/types';
-import { select, useStore } from '../store';
+import { readLocal, select, useStore, writeLocal } from '../store';
 import { useNow } from '../lib/hooks';
 
 interface GeoFeature {
@@ -26,6 +26,23 @@ const PRIO = { P1: 'var(--p1)', P2: 'var(--p2)', P3: 'var(--p3)', P4: 'var(--p4)
 type View = { k: number; x: number; y: number };
 const ID: View = { k: 1, x: 0, y: 0 };
 type Shape = { id: string | null; name: string; d: string; bounds: [[number, number], [number, number]] };
+
+// Объёмные миниатюры достопримечательностей крупных городов (нарисованы в ChatGPT, public/landmarks/*.webp).
+// Стоят у столицы региона, под кольцами инцидентов и пузырями жалоб; где проблема — гаснут, чтобы не мешать.
+export const LANDMARKS: Record<string, string> = {
+  msk: 'Кремль',
+  spb: 'Исаакиевский собор',
+  tat: 'Кул-Шариф',
+  nsk: 'Оперный театр',
+  svr: 'Храм на Крови',
+  nnv: 'Нижегородский кремль',
+  prim: 'Золотой мост',
+  vgg: 'Родина-мать',
+  sam: 'Монумент «Слава»',
+  kry: 'Часовня Параскевы Пятницы',
+  kgd: 'Кафедральный собор',
+  mur: 'Ледокол «Ленин»',
+};
 
 /** Слой регионов: перерисовывается только когда меняются заливка, выбор или регион под курсором — не от движения карты. */
 const RegionLayer = memo(function RegionLayer({ shapes, fills, hot, sel, hoverId, onHover, onPick }: { shapes: Shape[]; fills: Map<string, string>; hot: Set<string>; sel: Set<string>; hoverId: string | null; onHover: (id: string | null, e?: React.PointerEvent) => void; onPick: (id: string) => void }) {
@@ -56,6 +73,7 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
   const [view, setView] = useState<View>(ID);
   const [anim, setAnim] = useState(false);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [showLm, setShowLm] = useState(() => readLocal<boolean>('radar.map.landmarks', true));
   const complaints = useStore((s) => s.complaints);
   const incidents = useStore((s) => s.incidents);
   const regions = useStore((s) => s.regions);
@@ -289,6 +307,29 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
 
           {/* Подписи и значки — поверх, размер не зависит от приближения */}
           <g className={`rf-marks ${anim ? 'hide' : ''}`}>
+            {showLm &&
+              Object.keys(LANDMARKS).map((rid) => {
+                const r = regionById.get(rid);
+                if (!r) return null;
+                const [cx, cy] = P(r.lon, r.lat);
+                // Размер растёт с приближением; основание миниатюры — у самого города.
+                const s = Math.round(Math.min(120, 46 * Math.pow(view.k, 0.5)));
+                // Есть инцидент — миниатюра отходит в сторону от кольца (не гаснет и не закрывает проблему).
+                const incs = data.incByRegion.get(rid);
+                const ring = incs ? Math.max(...incs.map((i) => 14 + Math.min(22, Math.sqrt(i.complaints ?? 0) * 1.6))) : 0;
+                const x = ring ? cx - ring - s * 0.32 : cx;
+                const y = ring ? cy - ring * 0.35 : cy;
+                return (
+                  <g key={`lm-${rid}`} className={`rf-lm ${ring ? 'aside' : ''}`}>
+                    <image href={`/landmarks/${rid}.webp`} x={x - s / 2} y={y - s * 0.92} width={s} height={s} preserveAspectRatio="xMidYMax meet" />
+                    {view.k >= 1.7 && (
+                      <text x={x} y={y + 12} className="rf-lm-name">
+                        {r.city}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
             {data.pings.map((c) => {
               const [x, y] = P(c.lon, c.lat);
               return <circle key={c.id} cx={x} cy={y} r={3} className={`rf-ping ${c.incidentId ? 'linked' : ''}`} />;
@@ -394,6 +435,17 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
         <button className="rf-reset" onClick={() => fitTo(null)}>
           Вся страна
         </button>
+        <label className="rf-lm-toggle" title="Объёмные миниатюры главных городов на карте">
+          <input
+            type="checkbox"
+            checked={showLm}
+            onChange={(e) => {
+              setShowLm(e.target.checked);
+              writeLocal('radar.map.landmarks', e.target.checked);
+            }}
+          />
+          города
+        </label>
         <button className="rf-reset" onClick={() => fitTo(regions.filter((r) => r.district === 'cfo' || r.district === 'szfo' || r.district === 'pfo' || r.district === 'yufo').map((r) => r.id), 4)}>
           Европейская часть
         </button>
