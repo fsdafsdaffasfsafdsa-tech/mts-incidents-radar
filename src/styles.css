@@ -9390,3 +9390,235 @@ body.desk-resizing {
 .rf-lm-toggle input {
   accent-color: var(--coord);
 }
+
+/* ═══ Карта v2: спокойная объёмная плита, значки только по делу ═══ */
+.rf-svg {
+  --rf-sea-1: #e9f0f7;
+  --rf-sea-2: #d6e1ed;
+  --rf-land: #f7f2e8;
+  --rf-none: #eee8dc;
+  --rf-border: rgba(120, 104, 78, 0.2);
+  --rf-side: #dccdb1;
+  --rf-shadow: rgba(38, 52, 74, 0.16);
+  --rf-coast: rgba(128, 106, 72, 0.5);
+  --rf-grid: rgba(90, 112, 142, 0.09);
+  --rf-chip: #ffffff;
+}
+:root[data-theme='dark'] .rf-svg,
+.rf-svg.rf-dark {
+  --rf-sea-1: #0f1a29;
+  --rf-sea-2: #070b13;
+  --rf-land: #1e2635;
+  --rf-none: #181f2b;
+  --rf-border: rgba(170, 190, 222, 0.13);
+  --rf-side: #0d121b;
+  --rf-shadow: rgba(0, 0, 0, 0.5);
+  --rf-coast: rgba(140, 172, 214, 0.32);
+  --rf-grid: rgba(120, 150, 190, 0.05);
+  --rf-chip: #141b27;
+}
+.rf-sea {
+  background: radial-gradient(ellipse at 50% 35%, var(--rf-sea-1), var(--rf-sea-2) 80%);
+}
+.rf-shadow {
+  fill: var(--rf-shadow);
+  stroke: none;
+}
+.rf-side {
+  fill: var(--rf-side);
+  stroke: var(--rf-side);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.rf-coast {
+  fill: none;
+  stroke: var(--rf-coast);
+  stroke-width: 1.1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.rf-region {
+  stroke: var(--rf-border);
+  stroke-width: 0.6;
+}
+.rf-region.marked {
+  stroke-width: 1.3;
+}
+.rf-region.sel {
+  stroke-width: 2.4;
+}
+.rf-region.hov {
+  stroke: color-mix(in srgb, var(--text-2) 60%, transparent);
+  stroke-width: 1.2;
+}
+.rf-region.marked.hov {
+  stroke-width: 1.8;
+}
+/* фон жалоб — тихие вспышки */
+.rf-ping {
+  fill: color-mix(in srgb, var(--p2) 85%, transparent);
+}
+.rf-ping.linked {
+  fill: color-mix(in srgb, var(--p1) 85%, transparent);
+}
+/* дуги «инцидент → другие регионы» */
+.rf-link {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.rf-link.sel {
+  stroke-width: 2.2;
+  opacity: 0.9;
+}
+.rf-sec {
+  stroke: var(--rf-chip);
+  stroke-width: 2;
+  pointer-events: none;
+}
+/* всплеск без инцидента */
+.rf-spike {
+  pointer-events: none;
+}
+.rf-spike .glow {
+  fill: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+.rf-spike .core {
+  fill: var(--warn);
+  stroke: var(--rf-chip);
+  stroke-width: 2;
+}
+.rf-spike text {
+  fill: #2b1d00;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-anchor: middle;
+}
+/* инцидент */
+.rf-badge {
+  cursor: pointer;
+}
+.rf-badge .glow {
+  fill: color-mix(in srgb, var(--c) 20%, transparent);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: rf-glow 2.6s ease-in-out infinite;
+}
+.rf-badge.hot .glow {
+  fill: color-mix(in srgb, var(--c) 30%, transparent);
+  animation-duration: 1.5s;
+}
+@keyframes rf-glow {
+  0%,
+  100% {
+    transform: scale(0.82);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.45;
+  }
+}
+:root[data-motion='off'] .rf-badge .glow {
+  animation: none;
+}
+.rf-badge .core {
+  fill: var(--c);
+  stroke: var(--rf-chip);
+  stroke-width: 2.5;
+}
+.rf-badge.sel .core {
+  stroke-width: 3.5;
+}
+.rf-badge text {
+  fill: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  text-anchor: middle;
+  pointer-events: none;
+}
+/* цифры в значках — без обводки подписей (иначе белые «кляксы») */
+.rf-marks .rf-badge text,
+.rf-marks .rf-spike text,
+.rf-marks .rf-pill text {
+  stroke: none;
+  paint-order: normal;
+}
+/* подпись инцидента — плашкой */
+.rf-pill {
+  pointer-events: none;
+}
+.rf-pill rect {
+  fill: color-mix(in srgb, var(--rf-chip) 94%, transparent);
+  stroke: color-mix(in srgb, var(--c) 45%, transparent);
+  stroke-width: 1;
+}
+.rf-pill.sel rect {
+  stroke-width: 1.6;
+  stroke: var(--c);
+}
+.rf-pill text {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.rf-pill.sel text {
+  fill: var(--c);
+}
+/* миниатюры городов: мягкая тень под основанием */
+.rf-lm-shadow {
+  fill: rgba(20, 28, 40, 0.22);
+}
+:root[data-theme='dark'] .rf-lm-shadow,
+.rf-dark .rf-lm-shadow {
+  fill: rgba(0, 0, 0, 0.45);
+}
+.rf-lm.aside image {
+  opacity: 1;
+}
+.rf-lm-name,
+.rf-city {
+  paint-order: stroke;
+  stroke: var(--rf-land);
+  stroke-width: 3px;
+}
+.rf-tip-spike {
+  color: color-mix(in srgb, var(--warn) 75%, var(--text));
+  font-weight: 700;
+}
+/* легенда */
+.lg-badge {
+  width: 12px !important;
+  height: 12px !important;
+  background: var(--p2);
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 5px color-mix(in srgb, var(--p2) 25%, transparent);
+}
+.lg-spike {
+  width: 10px !important;
+  height: 10px !important;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.lg-ping {
+  width: 5px !important;
+  height: 5px !important;
+  background: var(--p2);
+}
+
+.rf-tie {
+  pointer-events: none;
+}
+.rf-tie line {
+  stroke: var(--c);
+  stroke-width: 1.4;
+  opacity: 0.6;
+}
+.rf-tie circle {
+  fill: var(--c);
+  stroke: var(--rf-chip);
+  stroke-width: 1.5;
+}
