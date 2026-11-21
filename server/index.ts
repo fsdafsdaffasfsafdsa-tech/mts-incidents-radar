@@ -15,7 +15,8 @@ import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
 import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
-import { actorLine, ask as askJarvis, brief as jarvisBrief, jarvisStatus, speak } from './jarvis.ts';
+import { actorLine, ask as askJarvis, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
+import { parseDashCtx } from './jarvis-dash.ts';
 import { reviewFor, reviewList } from './review.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -219,9 +220,16 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
           tab: str(body.tab) || null,
           mode: body.mode === 'control' ? 'control' : 'chat',
           short: body.short === true,
+          dash: parseDashCtx(body.dash),
+          dashControl: body.dashControl === true,
           history: history as { role: 'user' | 'assistant'; content: string }[],
         }),
       );
+    }
+    // ─── Видеостена: «главное сейчас» для ИИ-помощника ───
+    if (p === '/api/dash/brief') {
+      pointOnly();
+      return json(res, 200, await dashBrief(point));
     }
     // ─── Разборы после решения ───
     if (p === '/api/reviews') {

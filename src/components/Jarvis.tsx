@@ -6,6 +6,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bot, Check, Lock, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
 import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
+import type { DashOp } from '../../shared/dash';
+import { applyDashOp, dashSummary, getDash, wallWindowOpen } from '../lib/dashLayout';
 
 type Phase = 'idle' | 'listen' | 'think' | 'speak';
 type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean; done?: string[]; event?: boolean };
@@ -17,7 +19,8 @@ type Action =
   | { type: 'theme'; id: string }
   | { type: 'team'; name: string }
   | { type: 'show'; what: string }
-  | { type: 'report' };
+  | { type: 'report' }
+  | { type: 'dash'; cmd: DashOp };
 interface Status {
   llm: boolean;
   tts: boolean;
@@ -179,12 +182,14 @@ export async function say(text: string, opt: { voice?: string; asJarvis?: boolea
 }
 
 // Мост к окну Джарвиса: объявления о критических попадают в разговор и становятся его темой.
-let bridge: { announce: (text: string, id: string) => void; ask: (text: string) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
+let bridge: { announce: (text: string, id: string) => void; ask: (text: string, quiet?: boolean) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
 /** Джарвис говорит готовый текст об инциденте (строка в разговоре, тема — этот инцидент) и ждёт, пока договорит. */
 export const jarvisSpeak = (text: string, id: string) => bridge?.speak(text, id) ?? say(text);
 
 /** Задать Джарвису вопрос из интерфейса (кнопки, сценарий для жюри). Ждёт, пока он ответит и договорит. */
-export const jarvisAsk = (text: string) => bridge?.ask(text) ?? Promise.resolve('');
+export const jarvisAsk = (text: string, opts: { quiet?: boolean } = {}) => bridge?.ask(text, opts.quiet) ?? Promise.resolve('');
+/** Джарвис на этом экране есть (шар смонтирован) — можно задавать вопросы. */
+export const jarvisReady = () => !!bridge;
 
 /** Объявить критический инцидент голосом: что случилось, где и что советует ИИ. */
 export function announceIncident(id: string, fallback: string) {
@@ -420,6 +425,11 @@ function runActions(actions: Action[]) {
       case 'report':
         void import('../lib/shiftReport').then((m) => m.downloadShiftReport());
         break;
+      case 'dash':
+        // Стена в отдельном окне получит изменение сама; иначе показываем её здесь.
+        if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && getState().tab !== 'wall') setTab('wall');
+        setTimeout(() => applyDashOp(a.cmd), 60);
+        break;
       case 'tab':
         if (TABS.includes(a.tab)) {
           setTab(a.tab);
@@ -504,8 +514,9 @@ export function Jarvis() {
         setLines((l) => [...l, { role: 'assistant', content: t, event: true }]);
         void say(t).then(() => follow());
       },
-      ask: async (t) => {
-        setOpen(true);
+      // quiet — спрашивают с видеостены: ответ виден в ИИ-помощнике, окно разговора не закрывает стену.
+      ask: async (t, quiet) => {
+        if (!quiet) setOpen(true);
         return askRef.current(t);
       },
       speak: async (t, id) => {
@@ -557,7 +568,7 @@ export function Jarvis() {
       const r = await fetch('/api/jarvis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history }),
+        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history, dash: dashSummary(), dashControl: getDash().jarvisEdit }),
       });
       const data = (await r.json()) as { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
       if (!r.ok) throw new Error(data.error ?? 'нет ответа');

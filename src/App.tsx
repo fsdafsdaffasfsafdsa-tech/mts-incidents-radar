@@ -9,7 +9,7 @@ import { Directory } from './components/Directory';
 import { CriticalBanner, Toasts } from './components/Alerts';
 import { Login } from './components/Login';
 import { QuickSearch } from './components/QuickSearch';
-import { WallPage } from './components/WallPage';
+import { StandaloneWall } from './components/dash/Dashboard';
 import { Hotkeys } from './components/Hotkeys';
 import { Settings } from './components/Settings';
 import { Alarm, ForecastWatch } from './components/Alarm';
@@ -49,7 +49,7 @@ export function App() {
   if (!me) return <Login />;
   const atPoint = me.role === 'coordinator';
   // Отдельное окно для экрана стены: адрес с ?wall — только видеостена, без шапки.
-  if (atPoint && loaded && new URLSearchParams(location.search).has('wall')) return <WallPage standalone />;
+  if (atPoint && loaded && new URLSearchParams(location.search).has('wall')) return <StandaloneWall />;
 
   return (
     <div className={`app role-${me.role} view-${view}`}>

@@ -298,12 +298,24 @@ export class Point {
       cur.priorityText = next.priorityText;
       cur.title = next.title;
       cur.slaDeadline = next.slaDeadline;
+      cur.stateText = next.stateText;
       if (next.status === 'resolved' && cur.status !== 'resolved') this.finish(cur, 'ITSM');
-      else if (next.stateText !== cur.stateText) {
-        cur.stateText = next.stateText;
-        if (next.status === 'coordinators' && cur.status !== 'coordinators') {
-          Object.assign(cur, { status: 'coordinators', teamId: POINT_ID, groupName: teamById(POINT_ID)!.name, assignee: null, assigneeName: null });
-          this.pushFeed('coordinators', cur, 'ITSM: на координирующий пункт');
+      else if (next.status !== 'resolved') {
+        // Переназначение в выгрузке: на координаторов или в другую команду — дашборд должен это увидеть сразу.
+        if (next.teamId !== cur.teamId) {
+          if (next.status === 'coordinators') {
+            Object.assign(cur, { status: 'coordinators', teamId: POINT_ID, groupName: teamById(POINT_ID)!.name, assignee: null, assigneeName: null });
+            cur.history.push({ at: now, kind: 'system', text: 'ITSM: назначен на координаторов' });
+            this.pushFeed('coordinators', cur, 'ITSM: на координирующий пункт');
+          } else {
+            Object.assign(cur, { status: next.status, teamId: next.teamId, groupName: next.groupName, assignee: next.assignee, assigneeName: next.assigneeName, routedAt: now, startedAt: next.status === 'in_progress' ? now : null });
+            cur.reassignCount = (cur.reassignCount ?? 0) + 1;
+            cur.history.push({ at: now, kind: 'system', text: `ITSM: передано команде «${next.groupName}»` });
+            this.pushFeed('routed', cur, `ITSM: передан команде «${next.groupName}»`);
+          }
+        } else if (next.status !== cur.status || next.assigneeName !== cur.assigneeName) {
+          if (next.status === 'in_progress' && cur.status !== 'in_progress') cur.startedAt = now;
+          Object.assign(cur, { status: next.status, assignee: next.assignee, assigneeName: next.assigneeName });
         }
       }
       cur.history.push({ at: now, kind: 'system', text: 'Изменения из выгрузки ITSM' });

@@ -15,7 +15,7 @@ import { Roster, Shift } from './CommanderScreen';
 import { EscTimer, ForecastChip, heatClass, heatOf, heatStyle, isOn } from './kit';
 import { AiPage } from './AiPage';
 import { Replay } from './Replay';
-import { WallPage } from './WallPage';
+import { Dashboard } from './dash/Dashboard';
 import { hotNav } from '../lib/hotkeys';
 import { MyShift } from './ShiftTools';
 import { Directory } from './Directory';
@@ -72,6 +72,9 @@ function useTabs(): TabDef[] {
   }, [me, incidents, requests, signals, stats, staff, now]);
 }
 
+const MENU_W = 320; // ширина меню «Ещё» (как в CSS)
+const TIP_W = 340; // ширина подсказки «?»
+
 export function PointApp() {
   const me = useStore((s) => s.me)!;
   const tab = useStore((s) => s.tab);
@@ -88,20 +91,27 @@ export function PointApp() {
   const helpRef = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [help, setHelp] = useState<{ x: number; y: number } | null>(null);
-  const place = (el: HTMLElement | null, alignRight = false) => {
+  // Всплывашка не выходит за края окна: прижимается к правому краю, если кнопка близко к нему.
+  const place = (el: HTMLElement | null, width: number, alignRight = false) => {
     const r = el!.getBoundingClientRect();
-    return { x: alignRight ? Math.max(12, r.right - 340) : r.left, y: r.bottom + 6 };
+    const vw = document.documentElement.clientWidth;
+    const w = Math.min(width, vw - 24);
+    const x = alignRight ? r.right - w : r.left;
+    return { x: Math.max(12, Math.min(x, vw - w - 12)), y: r.bottom + 6 };
   };
   useEffect(() => {
     if (!menu) return;
     const close = (e: Event) => {
       if (e instanceof KeyboardEvent ? e.key === 'Escape' : !(e.target as Element).closest('.more-menu, .stab-more')) setMenu(null);
     };
+    const shut = () => setMenu(null);
     document.addEventListener('pointerdown', close);
     document.addEventListener('keydown', close);
+    window.addEventListener('resize', shut);
     return () => {
       document.removeEventListener('pointerdown', close);
       document.removeEventListener('keydown', close);
+      window.removeEventListener('resize', shut);
     };
   }, [menu]);
   return (
@@ -126,7 +136,7 @@ export function PointApp() {
             ref={moreBtn}
             data-tab={cur.more ? cur.id : 'more'}
             className={`stab stab-more ${cur.more ? 'on' : ''}`}
-            onClick={() => setMenu((m) => (m ? null : place(moreBtn.current)))}
+            onClick={() => setMenu((m) => (m ? null : place(moreBtn.current, MENU_W)))}
             aria-expanded={!!menu}
             aria-haspopup="menu"
           >
@@ -140,16 +150,16 @@ export function PointApp() {
           ref={helpRef}
           className="stage-help"
           aria-label={`Что на этой вкладке: ${cur.hint}`}
-          onMouseEnter={() => setHelp(place(helpRef.current, true))}
+          onMouseEnter={() => setHelp(place(helpRef.current, TIP_W, true))}
           onMouseLeave={() => setHelp(null)}
-          onFocus={() => setHelp(place(helpRef.current, true))}
+          onFocus={() => setHelp(place(helpRef.current, TIP_W, true))}
           onBlur={() => setHelp(null)}
         >
           <CircleHelp size={18} />
         </button>
       </nav>
       {menu && (
-        <div className="more-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+        <div className="more-menu" role="menu" style={{ left: menu.x, top: menu.y, maxHeight: `calc(100vh - ${menu.y + 12}px)` }}>
           {more.map((t) => (
             <button
               key={t.id}
@@ -188,7 +198,7 @@ export function PointApp() {
         {cur.id === 'ai' && <AiPage />}
         {cur.id === 'directory' && <Directory />}
         {cur.id === 'shift' && <ShiftPage />}
-        {cur.id === 'wall' && <WallPage />}
+        {cur.id === 'wall' && <Dashboard />}
       </div>
     </div>
   );

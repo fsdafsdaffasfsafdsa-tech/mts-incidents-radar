@@ -16,6 +16,8 @@ import { regionById } from './regions.ts';
 import { RULES } from './complaints.ts';
 import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
 import { myShiftWork } from '../shared/shift.ts';
+import type { DashOp } from '../shared/dash.ts';
+import { DASH_NOTE, DASH_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
 
 const MIN = 60_000;
 export const key = () => process.env.OPENROUTER_API_KEY || '';
@@ -44,7 +46,8 @@ export type ClientAction =
   | { type: 'theme'; id: string }
   | { type: 'team'; name: string }
   | { type: 'show'; what: Show } // прокрутить карточку к разделу, который изменился, и подсветить
-  | { type: 'report' }; // собрать и скачать отчёт смены в PDF
+  | { type: 'report' } // собрать и скачать отчёт смены в PDF
+  | { type: 'dash'; cmd: DashOp }; // перестроить видеостену (дашборд)
 export type Show = 'top' | 'who' | 'route' | 'level' | 'p1' | 'signal' | 'chat' | 'decide';
 export interface JarvisAsk {
   text: string;
@@ -53,6 +56,8 @@ export interface JarvisAsk {
   tab: string | null;
   mode: Mode;
   short?: boolean; // сценарий для жюри: ещё короче
+  dash?: DashCtx | null; // что сейчас на видеостене
+  dashControl?: boolean; // в настройках дашборда разрешено перестраивать стену
   history: { role: 'user' | 'assistant'; content: string }[];
 }
 export interface JarvisReply {
@@ -251,6 +256,7 @@ function contextText(point: Point, me: Me, q: JarvisAsk) {
   const lines = [
     `Дежурный: ${me.name}. Время: ${new Date(now).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' })} МСК.`,
     `На экране: вкладка ${TAB_NAMES[q.tab ?? ''] ?? '—'}${sel ? `, открыт инцидент id=${sel.id} «${sel.title}»` : ''}.`,
+    dashContextLine(q.dash ?? null),
     `Жалоб в минуту: ${point.stats().flowPerMin}. Открыто инцидентов: ${all.length}: на пункте ${all.filter((i) => i.status === 'coordinators').length} (без дежурного ${all.filter((i) => i.status === 'coordinators' && !i.coordinatorId).length}), у команд ${all.filter((i) => i.status !== 'coordinators').length}. Открытых сигналов: ${sig.length}, запросов команд: ${req.length}.`,
     `Дежурные на смене: ${duty.map((p) => `${p.name} (${p.spec}, ведёт ${owned.get(p.id) ?? 0})`).join(', ') || 'никого'}.`,
     'Горящие инциденты:',
@@ -306,6 +312,7 @@ class Exec {
     private me: Me,
     private mode: Mode,
     focus: string | null,
+    private dash: { ctx: DashCtx | null; allowed: boolean } = { ctx: null, allowed: false },
   ) {
     this.focus = focus;
   }
@@ -357,6 +364,14 @@ class Exec {
         const inc = this.inc(a.id);
         this.actions.push({ type: 'open', id: inc.id }, { type: 'show', what: 'top' });
         this.done.push(`Открыл «${inc.title}»`);
+        return 'ok';
+      }
+      case 'dashboard': {
+        if (!this.dash.allowed && this.mode !== 'control') throw new Error('перестраивать дашборд Джарвису не разрешено — включите это в настройках дашборда');
+        const { cmd, done } = toDashOp(a, this.dash.ctx, this.point);
+        if (cmd.op === 'focus' && cmd.id) this.focus = cmd.id;
+        this.actions.push({ type: 'dash', cmd });
+        this.done.push(done);
         return 'ok';
       }
       case 'shift_report':
@@ -543,14 +558,15 @@ const CHAT_NOTE = `Режим только ответов: ты ничего н�
 type Msg = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_calls?: unknown[]; tool_call_id?: string };
 
 async function llm(point: Point, me: Me, q: JarvisAsk): Promise<JarvisReply> {
-  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId);
+  const dashOk = q.mode === 'control' || !!q.dashControl;
+  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId, { ctx: q.dash ?? null, allowed: !!q.dashControl });
   const msgs: Msg[] = [
-    { role: 'system', content: `${SYSTEM}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}${q.short ? '\nСейчас показ для жюри: отвечай особенно коротко — одна-две фразы, до 25 слов, без поправок к прошлым ответам.' : ''}` },
+    { role: 'system', content: `${SYSTEM}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}${dashOk ? `\n${DASH_NOTE}` : ''}${q.short ? '\nСейчас показ для жюри: отвечай особенно коротко — одна-две фразы, до 25 слов, без поправок к прошлым ответам.' : ''}` },
     { role: 'system', content: `Данные пункта сейчас:\n${contextText(point, me, q)}` },
     ...q.history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }) as Msg),
     { role: 'user', content: q.text.slice(0, 500) },
   ];
-  const tools = q.mode === 'control' ? [...INFO_TOOLS, ...CONTROL_TOOLS] : INFO_TOOLS;
+  const tools = [...INFO_TOOLS, ...(q.mode === 'control' ? CONTROL_TOOLS : []), ...(dashOk ? [DASH_TOOL] : [])];
   let nudged = false;
   for (let round = 0; round < 6; round++) {
     // Размышления у модели на OpenRouter обязательны — держим их на минимуме (голосу важна скорость),
@@ -607,7 +623,7 @@ const TAB_WORDS: [RegExp, string][] = [
 function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
   const text = norm(q.text);
   const now = Date.now();
-  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId);
+  const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId, { ctx: q.dash ?? null, allowed: !!q.dashControl });
   const say = (reply: string): JarvisReply => ({ reply, actions: ex.actions, done: ex.done, focus: ex.focus, llm: false });
   const focus = () => (ex.focus ? point.incidents.get(ex.focus) : undefined) ?? findIncidents(point, text, 1)[0];
   const tryRun = (name: string, a: Record<string, unknown>) => {
@@ -622,6 +638,9 @@ function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
     return `${i.title}. ${i.origin === 'complaints' ? `${i.complaints} жалоб. ` : ''}Сейчас ${where(i)}, ${left(i, now)}.${s.picks[0] ? ` ИИ советует команду «${teamName(s.picks[0].teamId)}».` : ''}`;
   };
 
+  // Команды видеостене: «покажи только критические», «поменяй местами блоки», «сделай неон»…
+  const dashReply = dashRules(text, q.dash ?? null, (a) => tryRun('dashboard', a), q.tab === 'wall');
+  if (dashReply) return say(dashReply);
   if (/кому .*(дать|переда|отда|поруч)|кто .*(возьм|подойд)/.test(text)) {
     const i = focus();
     if (!i) return say('О каком инциденте речь, сэр? Откройте его или назовите сервис и регион.');
@@ -726,6 +745,48 @@ export async function ask(point: Point, me: Me, q: JarvisAsk): Promise<JarvisRep
  * Сценарий для жюри: реплика дежурного — её говорит другой ИИ (своя модель, свой голос).
  * Цель шага задана сценарием, формулировку и реакцию на ответ Джарвиса ИИ-дежурный выбирает сам.
  */
+// ─── «Главное сейчас» для ИИ-помощника на видеостене ───────────────────────
+let briefMemo: { key: string; at: number; text: string; llm: boolean } | null = null;
+let briefPending: Promise<{ text: string; llm: boolean }> | null = null;
+export async function dashBrief(point: Point): Promise<{ text: string; llm: boolean }> {
+  const { key: k, text: ctx } = briefContext(point);
+  const now = Date.now();
+  if (briefMemo && ((briefMemo.key === k && now - briefMemo.at < 120_000) || now - briefMemo.at < 25_000)) return briefMemo;
+  if (briefPending) return briefPending;
+  briefPending = (async () => {
+    let out = { text: briefByRules(point), llm: false };
+    if (key()) {
+      try {
+        const r = await openrouter(
+          '/chat/completions',
+          {
+            model: JARVIS_MODEL(),
+            messages: [
+              { role: 'system', content: 'Ты — ИИ-помощник на видеостене координаторов массовых инцидентов. По данным напиши два коротких предложения, всего до 40 слов: что сейчас главное и что сделать координатору (кому передать, что под угрозой, что может стать критическим). Без вступлений, без обращений, без разметки, без номеров INC. Пользуйся только данными.' },
+              { role: 'user', content: ctx },
+            ],
+            max_tokens: 700,
+            temperature: 0.3,
+            reasoning: { effort: 'low' },
+          },
+          25_000,
+        );
+        if (r.status === 200) {
+          const t = ((JSON.parse(r.buf.toString('utf8')) as { choices: { message: { content: string | null } }[] }).choices[0]?.message.content ?? '').trim();
+          if (t) out = { text: t, llm: true };
+        }
+      } catch (err) {
+        console.error('Выжимка для стены: модель недоступна —', err instanceof Error ? err.message : err);
+      }
+    }
+    briefMemo = { key: k, at: Date.now(), ...out };
+    return out;
+  })().finally(() => {
+    briefPending = null;
+  });
+  return briefPending;
+}
+
 export async function actorLine(goal: string, last: string, fallback: string): Promise<string> {
   if (!key() || !goal) return fallback;
   try {
