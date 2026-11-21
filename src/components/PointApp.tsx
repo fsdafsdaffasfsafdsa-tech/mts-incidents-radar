@@ -1,18 +1,18 @@
 // Пункт по вкладкам: каждая вкладка — один шаг работы. Полоса сверху показывает процесс и сколько ждёт на каждом шаге.
 //   Дежурный: Жалобы → Входящие → У команд → Решено · Запросы · Сигналы · Смена пункта · ИИ-помощник · Справочник
 //   Новые инциденты, которые никто не взял, распределяет ИИ; дежурные передают друг другу сами.
-import { useEffect, useMemo, useState } from 'react';
-import { Activity, BellRing, BookUser, CheckCircle2, ChevronRight, Inbox, LayoutDashboard, MessageSquareShare, MonitorPlay, Sparkles, Users, Workflow } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, BellRing, BookUser, CheckCircle2, FileSearch, MousePointerClick, PartyPopper, ChevronDown, ChevronRight, CircleHelp, Inbox, LayoutDashboard, MessageSquareShare, MonitorPlay, MoreHorizontal, Sparkles, Users, Workflow } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { openIncident, savedTab, select, setTab, teamName, useStore } from '../store';
 import { fmtDur, urgency } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { Deadline, PrioDot } from './ui';
+import { Deadline, Empty, PrioDot } from './ui';
 import { RFMap } from './RFMap';
 import { IncidentCard } from './IncidentCard';
 import { Detector, IncidentRow, RequestCard, Signals } from './PointScreen';
 import { Roster, Shift } from './CommanderScreen';
-import { EscTimer, heatClass, heatOf, heatStyle, isOn } from './kit';
+import { EscTimer, ForecastChip, heatClass, heatOf, heatStyle, isOn } from './kit';
 import { AiPage } from './AiPage';
 import { Replay } from './Replay';
 import { WallPage } from './WallPage';
@@ -20,6 +20,7 @@ import { hotNav } from '../lib/hotkeys';
 import { MyShift } from './ShiftTools';
 import { Directory } from './Directory';
 import { Desk } from './Desk';
+import { ReviewsPage } from './Reviews';
 
 interface TabDef {
   id: string;
@@ -28,6 +29,7 @@ interface TabDef {
   count?: number;
   tone?: 'warn' | 'hot';
   flow?: boolean; // шаг процесса (со стрелкой)
+  more?: boolean; // в меню «Ещё»
   hint: string;
 }
 
@@ -53,18 +55,19 @@ function useTabs(): TabDef[] {
     const common: TabDef[] = [
       { id: 'teams', label: 'У команд', icon: Workflow, count: atTeams.length, flow: true, hint: 'Инциденты, переданные командам: кто взял, на каком этапе, сколько до дедлайна. Нажмите строку — карточка справа.' },
       { id: 'done', label: 'Решено', icon: CheckCircle2, count: done.length, flow: true, hint: 'Решённые за последний час: кто решил и за сколько.' },
+      { id: 'reviews', label: 'Разборы', icon: FileSearch, flow: true, hint: 'Разбор после решения: ИИ пишет черновик по истории инцидента — хронология, вероятная причина, что сделали, масштаб, что улучшить. Можно скопировать и озвучить.' },
       { id: 'requests', label: 'Запросы команд', icon: MessageSquareShare, count: req, tone: req ? 'warn' : undefined, hint: 'Команды пишут «это не наше — передайте» или «проблема у другой команды». ИИ уже сверил запрос со справочником.' },
-      { id: 'signals', label: 'Сигналы', icon: BellRing, count: sig, tone: sig ? 'hot' : undefined, hint: 'Застрявшие инциденты и просьбы о помощи. «Указать руководителю» — и руководитель команды увидит это у себя.' },
+      { id: 'signals', label: 'Сигналы', icon: BellRing, count: sig, tone: sig ? 'warn' : undefined, hint: 'Застрявшие инциденты и просьбы о помощи. «Указать руководителю» — и руководитель команды увидит это у себя.' },
     ];
     return [
       { id: 'desk', label: 'Мой стол', icon: LayoutDashboard, hint: 'Ваше рабочее место из блоков: входящие, карточка, карта, сигналы… «Настроить стол» — добавить, убрать, перетащить и растянуть. У каждого дежурного своя раскладка.' },
       { id: 'map', label: 'Жалобы', icon: Activity, count: stats?.flowPerMin, flow: true, hint: 'Жалобы абонентов приходят на карту. ИИ замечает всплески и сам собирает их в инциденты.' },
       { id: 'inbox', label: 'Входящие', icon: Inbox, count: inbox.length, tone: free.length ? 'warn' : undefined, flow: true, hint: 'Новые инциденты на пункте: ваши и без дежурного. Возьмите себе или передайте коллеге, затем — команде. ИИ подсказывает, кому подходит, решаете вы.' },
       ...common,
-      { id: 'shift', label: 'Смена пункта', icon: Users, count: duty, hint: 'Кто из дежурных сейчас на смене, что у каждого в работе, и график на сутки. Передать инцидент коллеге — в карточке инцидента.' },
-      { id: 'ai', label: 'ИИ-помощник', icon: Sparkles, count: ai, hint: 'Что ИИ делает за пункт и почему — по каждому действию.' },
-      { id: 'wall', label: 'Видеостена', icon: MonitorPlay, hint: 'Экран для стены над рабочими местами: видно с расстояния. «На экран стены» откроет его отдельным окном, «На весь экран» — без рамок.' },
-      { id: 'directory', label: 'Справочник', icon: BookUser, hint: 'Около 900 команд: направления, регионы, графики, кто сейчас работает.' },
+      { id: 'shift', label: 'Смена пункта', icon: Users, count: duty, more: true, hint: 'Кто из дежурных сейчас на смене, что у каждого в работе, и график на сутки. Передать инцидент коллеге — в карточке инцидента.' },
+      { id: 'ai', label: 'ИИ-помощник', icon: Sparkles, count: ai, more: true, hint: 'Что ИИ делает за пункт и почему — по каждому действию.' },
+      { id: 'wall', label: 'Видеостена', icon: MonitorPlay, more: true, hint: 'Экран для стены над рабочими местами: видно с расстояния. «На экран стены» откроет его отдельным окном, «На весь экран» — без рамок.' },
+      { id: 'directory', label: 'Справочник', icon: BookUser, more: true, hint: 'Около 900 команд: направления, регионы, графики, кто сейчас работает.' },
     ];
   }, [me, incidents, requests, signals, stats, staff, now]);
 }
@@ -78,14 +81,37 @@ export function PointApp() {
   }, [tab, tabs, me.role]);
   const cur = tabs.find((t) => t.id === tab) ?? tabs[0];
   hotNav.tabs = tabs.map((t) => t.id);
+  const main = tabs.filter((t) => !t.more);
+  const more = tabs.filter((t) => t.more);
+  // Меню «Ещё» и подсказка «?» — поверх полосы вкладок (у неё своя прокрутка), поэтому позиция фиксированная.
+  const moreBtn = useRef<HTMLButtonElement>(null);
+  const helpRef = useRef<HTMLButtonElement>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [help, setHelp] = useState<{ x: number; y: number } | null>(null);
+  const place = (el: HTMLElement | null, alignRight = false) => {
+    const r = el!.getBoundingClientRect();
+    return { x: alignRight ? Math.max(12, r.right - 340) : r.left, y: r.bottom + 6 };
+  };
+  useEffect(() => {
+    if (!menu) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !(e.target as Element).closest('.more-menu, .stab-more')) setMenu(null);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [menu]);
   return (
     <div className="pointapp">
       <nav className="stagebar" aria-label="Шаги работы пункта">
-        {tabs.map((t, k) => {
-          const nextFlow = t.flow && tabs[k + 1]?.flow;
+        {main.map((t, k) => {
+          const nextFlow = t.flow && main[k + 1]?.flow;
           return (
             <span key={t.id} className="stage-wrap">
-              {!t.flow && tabs[k - 1]?.flow && <span className="stage-gap" />}
+              {!t.flow && main[k - 1]?.flow && <span className="stage-gap" />}
               <button data-tab={t.id} className={`stab ${t.id === cur.id ? 'on' : ''} ${t.tone ?? ''}`} onClick={() => setTab(t.id)} aria-current={t.id === cur.id ? 'page' : undefined}>
                 <t.icon size={15} />
                 <span>{t.label}</span>
@@ -95,14 +121,68 @@ export function PointApp() {
             </span>
           );
         })}
+        <span className="stage-wrap">
+          <button
+            ref={moreBtn}
+            data-tab={cur.more ? cur.id : 'more'}
+            className={`stab stab-more ${cur.more ? 'on' : ''}`}
+            onClick={() => setMenu((m) => (m ? null : place(moreBtn.current)))}
+            aria-expanded={!!menu}
+            aria-haspopup="menu"
+          >
+            {cur.more ? <cur.icon size={15} /> : <MoreHorizontal size={15} />}
+            <span>{cur.more ? cur.label : 'Ещё'}</span>
+            <ChevronDown size={14} />
+          </button>
+        </span>
+        <span className="stage-sp" />
+        <button
+          ref={helpRef}
+          className="stage-help"
+          aria-label={`Что на этой вкладке: ${cur.hint}`}
+          onMouseEnter={() => setHelp(place(helpRef.current, true))}
+          onMouseLeave={() => setHelp(null)}
+          onFocus={() => setHelp(place(helpRef.current, true))}
+          onBlur={() => setHelp(null)}
+        >
+          <CircleHelp size={18} />
+        </button>
       </nav>
-      <div className="stage-hint">{cur.hint}</div>
+      {menu && (
+        <div className="more-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+          {more.map((t) => (
+            <button
+              key={t.id}
+              role="menuitem"
+              className={t.id === cur.id ? 'on' : ''}
+              onClick={() => {
+                setTab(t.id);
+                setMenu(null);
+              }}
+            >
+              <t.icon size={17} />
+              <span className="mm-text">
+                <b>{t.label}</b>
+                <small>{t.hint.split('. ')[0].replace(/\.$/, '')}</small>
+              </span>
+              {t.count !== undefined && <span className="stage-n num">{t.count}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {help && (
+        <div className="stage-help-tip" role="tooltip" style={{ left: help.x, top: help.y }}>
+          <b>{cur.label}</b>
+          {cur.hint}
+        </div>
+      )}
       <div className="stage-body">
         {cur.id === 'desk' && <Desk />}
         {cur.id === 'map' && <MapPage />}
         {cur.id === 'inbox' && <InboxPage />}
         {cur.id === 'teams' && <TeamsPage />}
         {cur.id === 'done' && <DonePage />}
+        {cur.id === 'reviews' && <ReviewsPage />}
         {cur.id === 'requests' && <RequestsPage />}
         {cur.id === 'signals' && <SignalsPage />}
         {cur.id === 'ai' && <AiPage />}
@@ -129,7 +209,7 @@ function MapPage() {
 }
 
 /** Список слева, карточка справа: общий каркас для «Входящих», «У команд», «Решено», «Распределить». */
-function ListWithCard({ list, empty, header, row }: { list: Incident[]; empty: string; header?: React.ReactNode; row?: (i: Incident, sel: boolean) => React.ReactNode }) {
+function ListWithCard({ list, empty, emptyHint, emptyAction, header, row }: { list: Incident[]; empty: string; emptyHint?: string; emptyAction?: { label: string; run: () => void }; header?: React.ReactNode; row?: (i: Incident, sel: boolean) => React.ReactNode }) {
   const selectedId = useStore((s) => s.selectedId);
   const sel = list.find((i) => i.id === selectedId) ?? list[0];
   hotNav.list = list.slice(0, 100).map((i) => i.id);
@@ -141,11 +221,17 @@ function ListWithCard({ list, empty, header, row }: { list: Incident[]; empty: s
       <section className="panel plist">
         {header}
         <div className="pl-rows">
-          {!list.length && <div className="empty">{empty}</div>}
+          {!list.length && <Empty icon={PartyPopper} title={empty} hint={emptyHint} action={emptyAction} />}
           {list.slice(0, 100).map((i) => (row ? <div key={i.id}>{row(i, i.id === sel?.id)}</div> : <IncidentRow key={i.id} inc={i} sel={i.id === sel?.id} onClick={() => select(i.id)} />))}
         </div>
       </section>
-      {sel ? <IncidentCard key={sel.id} inc={sel} /> : <section className="panel empty-panel">{empty}</section>}
+      {sel ? (
+        <IncidentCard key={sel.id} inc={sel} />
+      ) : (
+        <section className="panel empty-panel">
+          <Empty icon={MousePointerClick} title="Здесь откроется карточка инцидента" hint={list.length ? 'Выберите строку в списке слева' : 'Как только что-то появится в списке — откройте его, и здесь будут шаги: что случилось, что советует ИИ, ваше решение.'} />
+        </section>
+      )}
     </div>
   );
 }
@@ -190,7 +276,9 @@ function InboxPage() {
   return (
     <ListWithCard
       list={list}
-      empty={scope === 'mine' ? 'У вас нет новых инцидентов — возьмите из «Без дежурного»' : 'Пусто'}
+      empty={scope === 'mine' ? 'У вас нет новых инцидентов' : scope === 'free' ? 'Все инциденты разобраны' : 'На пункте пусто'}
+      emptyHint={scope === 'mine' ? (free.length ? `Без дежурного ждут: ${free.length}` : 'Новые придут сюда, как только ИИ соберёт жалобы в инцидент') : 'Новые инциденты появятся здесь автоматически'}
+      emptyAction={scope === 'mine' && free.length ? { label: 'Показать без дежурного', run: () => setScope('free') } : undefined}
       header={
         <>
           <Seg
@@ -249,6 +337,7 @@ function TeamsPage() {
               {teamName(i.teamId)}
               {i.assigneeName ? ` · ${i.assigneeName}` : ''}
               {flagged.has(i.id) && <span className="pr-tag warn">сигнал</span>}
+              <ForecastChip inc={i} now={now} />
             </span>
             <EscTimer inc={i} now={now} />
             <span className="stepper">
@@ -297,7 +386,11 @@ function RequestsPage() {
   return (
     <div className="page-cards">
       <section className="cards">
-        {!pending.length && <div className="panel empty-panel">Новых запросов от команд нет</div>}
+        {!pending.length && (
+          <div className="panel empty-panel">
+            <Empty icon={MessageSquareShare} title="Новых запросов от команд нет" hint="Здесь появятся просьбы команд «это не наше — передайте» — ИИ сразу сверит их со справочником." />
+          </div>
+        )}
         {pending.map((r) => (
           <RequestCard key={r.id} r={r} />
         ))}

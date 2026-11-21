@@ -1,6 +1,6 @@
 // Мелкие общие элементы центров и кабинетов.
 import { useState } from 'react';
-import { Settings2, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { Settings2, X, ChevronUp, ChevronDown, Inbox, type LucideIcon } from 'lucide-react';
 import type { Incident, Priority, Worker } from '../../shared/types';
 import { fmtDur, fmtSla } from '../lib/format';
 import { useNow } from '../lib/hooks';
@@ -186,3 +186,21 @@ export const PRIO_COLORS: Record<Priority, string> = {
   P3: 'var(--p3)',
   P4: 'var(--p4)',
 };
+
+/** Пустой экран: значок, что здесь будет и что сделать. */
+export function Empty({ icon: Icon = Inbox, title, hint, action, small }: { icon?: LucideIcon; title: string; hint?: string; action?: { label: string; run: () => void }; small?: boolean }) {
+  return (
+    <div className={`empty-state ${small ? 'sm' : ''}`}>
+      <span className="es-ico">
+        <Icon size={small ? 20 : 26} />
+      </span>
+      <b>{title}</b>
+      {hint && <span className="es-hint">{hint}</span>}
+      {action && (
+        <button className="btn btn-sm" onClick={action.run}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+}

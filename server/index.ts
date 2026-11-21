@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { Me, PointMessage, PointSnapshot, Priority } from '../shared/types.ts';
 import { Point } from './point.ts';
 import { RULES } from './complaints.ts';
-import { POINT_ID, POINT_STAFF, PEOPLE, TEAMS, SERVICES, membersOf, teamById } from './directory.ts';
+import { POINT_ID, POINT_STAFF, PEOPLE, TEAMS, SERVICES, isOn, membersOf, teamById } from './directory.ts';
 import { REGIONS } from './regions.ts';
 import { planPoint, routeTeams } from './ai-point.ts';
 import { assessRisk, buildContext } from './ai-heuristic.ts';
@@ -15,7 +15,8 @@ import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
 import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
-import { ask as askJarvis, brief as jarvisBrief, jarvisStatus, speak } from './jarvis.ts';
+import { actorLine, ask as askJarvis, brief as jarvisBrief, jarvisStatus, speak } from './jarvis.ts';
+import { reviewFor, reviewList } from './review.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -217,9 +218,20 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
           focusId: str(body.focusId) || null,
           tab: str(body.tab) || null,
           mode: body.mode === 'control' ? 'control' : 'chat',
+          short: body.short === true,
           history: history as { role: 'user' | 'assistant'; content: string }[],
         }),
       );
+    }
+    // ─── Разборы после решения ───
+    if (p === '/api/reviews') {
+      pointOnly();
+      return json(res, 200, reviewList(point));
+    }
+    m = p.match(/^\/api\/reviews\/([\w-]+)$/);
+    if (m) {
+      pointOnly();
+      return json(res, 200, await reviewFor(point, m[1], post)); // POST — написать заново
     }
     m = p.match(/^\/api\/jarvis\/brief\/([\w-]+)$/);
     if (m) {
@@ -313,6 +325,46 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       const regions = (Array.isArray(body.regionIds) ? body.regionIds : []).map(str).filter((r) => REGIONS.some((x) => x.id === r));
       if (!service || !regions.length) throw new Error('Укажите сервис и регион');
       return json(res, 200, point.outage(service, regions, Number(body.minutes) || 6, Number(body.perSec) || 0.5));
+    }
+    // Сценарий для жюри: сбой → ИИ собирает инцидент → тревога → ИИ-дежурный говорит с Джарвисом → команда решает → разбор.
+    if (p === '/api/demo/scenario' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      const step = str(body.step);
+      if (step === 'start') {
+        point.stream.outages = point.stream.outages.filter((o) => !o.id.startsWith('JURY'));
+        // Остатки прошлого показа закрываем, чтобы ИИ собрал новый инцидент с нуля.
+        for (const i of point.incidents.values())
+          if (i.origin === 'complaints' && i.status !== 'resolved' && i.service === 'Мобильный интернет' && (i.regionIds ?? []).some((r) => ['nsk', 'oms', 'tom'].includes(r))) {
+            try {
+              if (i.status === 'coordinators') point.resolveAtPoint(i.id, 'Сценарий для жюри');
+              else if (i.teamId) point.resolveByTeam(i.id, i.assignee ?? membersOf(i.teamId)[0]?.id ?? '', 'Закрыт перед новым показом');
+            } catch {
+              /* не мешаем запуску */
+            }
+          }
+        const o = point.outage('Мобильный интернет', ['nsk', 'oms', 'tom'], 8, 3);
+        o.id = `JURY${o.id}`;
+        return json(res, 200, { startedAt: o.start, service: o.service, regionIds: o.regionIds });
+      }
+      if (step === 'actor') return json(res, 200, { text: await actorLine(str(body.goal), str(body.last), str(body.fallback)) });
+      const inc = point.incidents.get(str(body.id));
+      const team = inc ? teamById(inc.teamId) : undefined;
+      if (!inc || !team) throw new Error('Инцидент ещё не передан команде');
+      const people = membersOf(team.id).filter((x) => x.role === 'engineer');
+      const eng = people.find((x) => isOn(x, Date.now())) ?? people[0];
+      if (step === 'team') {
+        try {
+          return json(res, 200, point.take(inc.id, eng.id));
+        } catch {
+          return json(res, 200, inc); // никого на смене — команда возьмёт сама позже, сценарий идёт дальше
+        }
+      }
+      if (step === 'resolve') {
+        point.stream.outages = point.stream.outages.filter((o) => !o.id.startsWith('JURY'));
+        return json(res, 200, point.resolveByTeam(inc.id, inc.assignee ?? eng.id, 'Перезапустили узел пакетного ядра в Новосибирске, трафик восстановлен, жалобы прекратились'));
+      }
+      throw new Error('Неизвестный шаг');
     }
     if (p === '/api/demo/auto' && post) {
       pointOnly();

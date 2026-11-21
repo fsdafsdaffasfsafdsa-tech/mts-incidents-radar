@@ -1,14 +1,14 @@
 // Экран дежурного пункта: слева инциденты / запросы команд / сигналы, в центре карта жалоб, справа карточка или детектор.
 import { useMemo, useState } from 'react';
-import { Activity, BellRing, Inbox, Sparkles, X } from 'lucide-react';
+import { Activity, BellRing, Inbox, MessageSquareShare, Sparkles, X } from 'lucide-react';
 import type { Incident, Signal, TeamRequest } from '../../shared/types';
 import { answerRequest, closeSignal, createFromCluster, notifyLead, openIncident, regionName, select, setPointTab, teamName, useStore } from '../store';
 import { urgency, fmtAgo } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { Deadline, Initials, PrioDot } from './ui';
+import { Deadline, Empty, Initials, PrioDot } from './ui';
 import { RFMap } from './RFMap';
 import { IncidentCard, TeamSearch } from './IncidentCard';
-import { STATUS_TEXT, heatClass, heatOf, heatStyle } from './kit';
+import { ForecastChip, STATUS_TEXT, heatClass, heatOf, heatStyle } from './kit';
 
 type Scope = 'mine' | 'all' | 'free';
 const TZ: { id: string; label: string; test: (i: Incident) => boolean }[] = [
@@ -130,6 +130,7 @@ export function IncidentRow({ inc, sel, onClick }: { inc: Incident; sel: boolean
           {inc.origin === 'complaints' ? <span className="pr-tag cm">{inc.complaints} жалоб</span> : <span className="pr-tag">ITSM</span>}
           {inc.status === 'coordinators' ? STATUS_TEXT[inc.status] : teamName(inc.teamId)}
           {inc.p1Proposal && <span className="pr-tag p1">ИИ: P1?</span>}
+          <ForecastChip inc={inc} now={now} />
           {flagged && <span className="pr-tag warn">сигнал</span>}
           {inc.status === 'coordinators' && waitMin >= 0 && waitMin < 24 * 60 && <span className={`wait ${waitMin >= 5 ? 'long' : ''}`}>ждёт {waitMin} мин</span>}
         </span>
@@ -155,7 +156,7 @@ export function Requests({ list }: { list: TeamRequest[] }) {
   const done = list.filter((r) => r.status !== 'pending').sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, 15);
   return (
     <div className="pl-rows pad">
-      {!pending.length && <div className="empty">Новых запросов от команд нет</div>}
+      {!pending.length && <Empty small icon={MessageSquareShare} title="Новых запросов от команд нет" />}
       {pending.map((r) => (
         <RequestCard key={r.id} r={r} />
       ))}
@@ -213,7 +214,7 @@ export function Signals({ list }: { list: Signal[] }) {
   const open = list.filter((s) => s.status !== 'closed').sort((a, b) => Number(a.status !== 'open') - Number(b.status !== 'open') || b.at - a.at);
   return (
     <div className="pl-rows pad">
-      {!open.length && <div className="empty">Никто не застрял, просьб о помощи нет</div>}
+      {!open.length && <Empty icon={BellRing} title="Никто не застрял" hint="Просьб о помощи нет. ИИ сам заметит инцидент без движения и покажет его здесь." />}
       {open.map((s) => {
         const inc = incidents.get(s.incidentId);
         return (
@@ -279,7 +280,7 @@ export function Detector() {
         </div>
       </div>
       <h3 className="cm-h">Подозрительные всплески</h3>
-      {!clusters.length && <div className="empty">Всё в пределах нормы</div>}
+      {!clusters.length && <Empty small icon={Activity} title="Всё в пределах нормы" hint="Подозрительных всплесков жалоб нет" />}
       {clusters.slice(0, 8).map((c) => (
         <div key={c.key} className="cluster">
           <span className="cl-main">

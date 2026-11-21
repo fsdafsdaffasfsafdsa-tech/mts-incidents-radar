@@ -1,5 +1,7 @@
 // Общие элементы экранов пункта и команд: смена, график, команда, график жалоб, уровни.
 import type { Incident, Person, Team } from '../../shared/types';
+import { forecast, forecastChip } from '../../shared/forecast';
+import { useStore } from '../store';
 import { SCHEDULE_TEXT, dutySlots, fmtTz, nextChange, onDuty, shiftLabel } from '../../shared/schedule';
 import { fmtClock } from '../lib/format';
 import { Initials } from './ui';
@@ -152,3 +154,17 @@ export function heatOf(inc: Incident, now: number): number {
 }
 export const heatStyle = (h: number) => ({ ['--heat' as string]: h.toFixed(2) }) as React.CSSProperties;
 export const heatClass = (h: number) => (h >= 0.85 ? 'heat hot' : h >= 0.5 ? 'heat warm' : 'heat');
+
+/** Прогноз в строке: «↑ Высокий ~12 мин» — когда по темпу жалоб инцидент наберёт порог следующего уровня. */
+export function ForecastChip({ inc, now }: { inc: Incident; now: number }) {
+  const complaints = useStore((s) => s.complaints);
+  const rules = useStore((s) => s.config?.rules);
+  if (!rules || inc.origin !== 'complaints' || inc.status === 'resolved') return null;
+  const chip = forecastChip(forecast(inc, complaints, rules, now));
+  if (!chip) return null;
+  return (
+    <span className={`pr-tag fc ${chip.hot ? 'hot' : ''}`} title="Прогноз по темпу жалоб">
+      {chip.text}
+    </span>
+  );
+}

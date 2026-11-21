@@ -1,10 +1,11 @@
 // Карточка инцидента для пункта — по шагам: 1) что случилось, 2) что советует ИИ и почему, 3) ваше решение.
 import { useEffect, useMemo, useState } from 'react';
-import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, Send, UserCheck, X } from 'lucide-react';
+import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, Send, Siren, UserCheck, X } from 'lucide-react';
 import type { Incident, Priority } from '../../shared/types';
 import { PRIORITY_TEXT } from '../../shared/types';
+import { FORECAST_TEXT, forecast } from '../../shared/forecast';
 import { SCHEDULE_TEXT } from '../../shared/schedule';
-import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, resolveAtPoint, routeTo, setLevel, takeAtPoint, useStore } from '../store';
+import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, readLocal, resolveAtPoint, routeTo, setLevel, takeAtPoint, useStore, writeLocal } from '../store';
 import { fmtClock } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, PRIO_COLORS, PrioDot } from './ui';
@@ -54,9 +55,32 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
   const best = route?.picks[0];
   const bestTeam = best ? teamIndex.get(best.teamId) : undefined;
   const routedToBest = best && inc.teamId === best.teamId;
+  // Шаги карточки можно свернуть — дежурный сам решает, что держать перед глазами (запоминается).
+  const [closed, setClosed] = useState<Set<string>>(() => new Set(readLocal<string[]>('radar.card.closed', [])));
+  const toggle = (k: string) =>
+    setClosed((c) => {
+      const n = new Set(c);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      writeLocal('radar.card.closed', [...n]);
+      return n;
+    });
+  const stepH = (k: string) => ({ role: 'button', tabIndex: 0, onClick: () => toggle(k), onKeyDown: (e: React.KeyboardEvent) => e.key === 'Enter' && toggle(k), 'aria-expanded': !closed.has(k) });
+  // Одна главная кнопка в шапке — самое нужное сейчас действие.
+  const primary =
+    !open || me.role !== 'coordinator'
+      ? null
+      : inc.p1Proposal && inc.priority !== 'P1'
+        ? { label: 'Поднять до «Наивысшего»', cls: 'btn-danger', icon: Siren, run: () => answerP1(inc.id, true) }
+        : inc.status === 'coordinators' && best && bestTeam && !routedToBest
+          ? { label: `Передать в «${bestTeam.name}»`, cls: 'btn-ai', icon: Send, run: () => void routeTo(inc.id, best.teamId) }
+          : inc.status === 'coordinators' && !mine
+            ? { label: 'Взять себе', cls: 'btn-primary', icon: UserCheck, run: () => takeAtPoint(inc.id) }
+            : null;
 
   return (
     <section className={`panel icard p-${inc.priority}`} aria-label={inc.title}>
+      <div className="icard-top">
       <header className="pd-head" data-jv="top">
         <PrioDot p={inc.priority} text={inc.priorityText} />
         <span className={`chip-state st-${inc.status}`}>{STATUS_TEXT[inc.status]}</span>
@@ -84,11 +108,24 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
         )}
       </header>
       <h1 className="pd-title">{inc.title}</h1>
+      <div className="icard-bar">
+        <span className="ib-dl">
+          до дедлайна <Deadline inc={inc} />
+        </span>
+        <span className="ib-who">{team ? `у «${team.name}»` : inc.coordinatorName ? `ведёт ${inc.coordinatorName}` : 'дежурного нет'}</span>
+        <span className="pd-sp" />
+        {primary && (
+          <button className={`btn ${primary.cls} ib-main`} onClick={primary.run}>
+            <primary.icon size={15} /> {primary.label}
+          </button>
+        )}
+      </div>
+      </div>
 
       {/* 1. Что случилось */}
-      <div className="step">
-        <h3 className="step-h">
-          <span className="step-n">1</span> Что случилось
+      <div className={`step ${closed.has('what') ? 'closed' : ''}`}>
+        <h3 className="step-h" {...stepH('what')}>
+          <span className="step-n">1</span> Что случилось <ChevronDown size={15} className="step-chev" />
         </h3>
         <div className="facts" data-jv="level">
           {inc.origin === 'complaints' ? (
@@ -136,9 +173,9 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
 
       {/* 2. Что советует ИИ */}
       {open && (
-        <div className="step ai-step">
-          <h3 className="step-h">
-            <span className="step-n">2</span> ИИ советует <AiBadge text="подсказка, решаете вы" />
+        <div className={`step ai-step ${closed.has('ai') ? 'closed' : ''}`}>
+          <h3 className="step-h" {...stepH('ai')}>
+            <span className="step-n">2</span> ИИ советует <AiBadge text="подсказка, решаете вы" /> <ChevronDown size={15} className="step-chev" />
           </h3>
 
           {inc.p1Proposal && (
@@ -254,9 +291,9 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
 
       {/* 3. Решение */}
       {open && (
-        <div className="step">
-          <h3 className="step-h">
-            <span className="step-n">3</span> Ваше решение
+        <div className={`step ${closed.has('decide') ? 'closed' : ''}`}>
+          <h3 className="step-h" {...stepH('decide')}>
+            <span className="step-n">3</span> Ваше решение <ChevronDown size={15} className="step-chev" />
           </h3>
           <div className="decide" data-jv="decide">
             {me.role === 'coordinator' && !mine && (
@@ -319,18 +356,35 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
 /** Уровень: что сделает ИИ дальше и сколько жалоб до следующей ступени. */
 function LevelAdvice({ inc, n30 }: { inc: Incident; n30: number }) {
   const rules = useStore((s) => s.config!.rules);
+  const complaints = useStore((s) => s.complaints);
+  const f = forecast(inc, complaints, rules, Date.now());
   const regions = inc.regionIds?.length ?? 1;
   const next = NEXT[inc.priority];
   const need = next === 'P3' ? rules.p3 : next === 'P2' ? (regions >= 2 ? rules.p2multi : rules.p2) : next === 'P1' ? rules.p1 : null;
   const ceiling = inc.priority === rules.ceiling || inc.priority === 'P1';
   return (
-    <div className="advice">
+    <div className="advice rules">
       <div className="adv-h">Уровень: {ceiling ? `«${inc.priorityText}» — выше ИИ сам не поднимает` : `пока «${inc.priorityText}»`}</div>
       {need && next && (
         <>
           <div className="meter">
+            {f && f.in15 > n30 && <b className="meter-fc" style={{ width: `${Math.min(100, (f.in15 / need) * 100)}%` }} title={`Через 15 мин по темпу: ~${f.in15}`} />}
             <i style={{ width: `${Math.min(100, (n30 / need) * 100)}%` }} />
           </div>
+          {f && (
+            <div className={`fc-line ${f.next?.level === 'P1' ? 'hot' : f.next ? 'warn' : ''}`}>
+              Прогноз: {f.rate} жалоб/мин, {f.trend === 'up' ? 'растёт' : f.trend === 'down' ? 'спадает' : 'ровно'}.{' '}
+              {f.next ? (
+                <b>
+                  {FORECAST_TEXT[f.next.level]} — примерно через {f.next.inMin} мин
+                </b>
+              ) : f.trend === 'down' ? (
+                'Уровень, скорее всего, не вырастет.'
+              ) : (
+                'В ближайший час порог не наберётся.'
+              )}
+            </div>
+          )}
           <div className="adv-why">
             {next === 'P1'
               ? `«Наивысший» ИИ только предложит при ${rules.p1}+ жалоб за ${rules.windowMin} мин или ${rules.p1regions}+ регионах. Сейчас ${n30}, регионов ${regions}.`

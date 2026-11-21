@@ -13,9 +13,11 @@ import type { Point } from './point.ts';
 import { POINT_ID, POINT_STAFF, isOn, personById, teamById } from './directory.ts';
 import { planPoint, routeTeams } from './ai-point.ts';
 import { regionById } from './regions.ts';
+import { RULES } from './complaints.ts';
+import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
 
 const MIN = 60_000;
-const key = () => process.env.OPENROUTER_API_KEY || '';
+export const key = () => process.env.OPENROUTER_API_KEY || '';
 export const JARVIS_MODEL = () => process.env.JARVIS_MODEL || 'anthropic/claude-sonnet-5.5';
 
 // Голоса — разные «говорящие» модели OpenRouter. По умолчанию — живой русский голос MiniMax (родной русский, ~1,5 с).
@@ -48,6 +50,7 @@ export interface JarvisAsk {
   focusId: string | null;
   tab: string | null;
   mode: Mode;
+  short?: boolean; // сценарий для жюри: ещё короче
   history: { role: 'user' | 'assistant'; content: string }[];
 }
 export interface JarvisReply {
@@ -69,7 +72,7 @@ function proxyAgent() {
   return agent;
 }
 /** Сеть иногда рвётся на полуслове — один повтор через полсекунды. */
-async function openrouter(path: string, body: unknown, timeoutMs: number): Promise<{ status: number; buf: Buffer }> {
+export async function openrouter(path: string, body: unknown, timeoutMs: number): Promise<{ status: number; buf: Buffer }> {
   try {
     return await openrouterOnce(path, body, timeoutMs);
   } catch (err) {
@@ -168,6 +171,7 @@ const TAB_NAMES: Record<string, string> = {
   inbox: '«Входящие»',
   teams: '«У команд»',
   done: '«Решено»',
+  reviews: '«Разборы» (разбор после решения)',
   requests: '«Запросы команд»',
   signals: '«Сигналы»',
   shift: '«Смена пункта»',
@@ -194,7 +198,10 @@ const left = (i: Incident, now: number) => {
   return m <= 0 ? 'срок уже прошёл' : m < 90 ? `${m} мин до дедлайна` : `${Math.round(m / 60)} ч до дедлайна`;
 };
 const regions = (i: Incident) => (i.regionIds ?? []).map((r) => regionById(r)?.name).filter(Boolean).join(', ');
-const shortLine = (i: Incident, now: number) => `id=${i.id}; «${i.title}»; ${PRIORITY_TEXT[i.priority]}${i.p1Proposal ? ' (ИИ предлагает «Наивысший»)' : ''}; ${where(i)}; ${left(i, now)}${i.origin === 'complaints' ? `; жалоб ${i.complaints}` : ''}`;
+const shortLine = (i: Incident, now: number, point?: Point) => {
+  const f = point ? forecast(i, point.complaints, RULES, now) : null;
+  return `id=${i.id}; «${i.title}»; ${PRIORITY_TEXT[i.priority]}${i.p1Proposal ? ' (ИИ предлагает «Наивысший»)' : ''}; ${where(i)}; ${left(i, now)}${i.origin === 'complaints' ? `; жалоб ${i.complaints}` : ''}${f?.next ? `; прогноз: ${FORECAST_TEXT[f.next.level]} через ~${f.next.inMin} мин` : ''}`;
+};
 
 /** Кому дать: команды по справочнику и кто из дежурных подходит вести. */
 function suggestions(point: Point, inc: Incident) {
@@ -219,6 +226,8 @@ function details(point: Point, inc: Incident) {
       ? `ИИ советует команду: ${s.picks.map((p, k) => `${k + 1}) team_id=${p.teamId} «${teamName(p.teamId)}» — ${p.score}%, ${p.onDuty ? `на смене ${p.onDutyCount}` : 'сейчас не на смене'}; почему: ${p.reasons.slice(0, 2).join('; ')}`).join(' | ')}`
       : 'ИИ не нашёл команду в справочнике — выбрать вручную',
   ];
+  const f = forecast(inc, point.complaints, RULES, now);
+  if (f) lines.push(`Прогноз по темпу жалоб: ${f.rate}/мин, ${f.trend === 'up' ? 'растёт' : f.trend === 'down' ? 'спадает' : 'ровно'}; ${f.next ? `${FORECAST_TEXT[f.next.level]} примерно через ${f.next.inMin} мин` : 'порог в ближайший час не наберётся'}`);
   if (s.coordName) lines.push(`Вести на пункте лучше: ${s.coordName} — ${s.coord!.why}`);
   if (sig.length) lines.push(`Сигналы: ${sig.map((x) => x.text).join('; ')}`);
   const hist = inc.history.slice(-3).map((h) => h.text);
@@ -243,13 +252,55 @@ function contextText(point: Point, me: Me, q: JarvisAsk) {
     `Жалоб в минуту: ${point.stats().flowPerMin}. Открыто инцидентов: ${all.length}: на пункте ${all.filter((i) => i.status === 'coordinators').length} (без дежурного ${all.filter((i) => i.status === 'coordinators' && !i.coordinatorId).length}), у команд ${all.filter((i) => i.status !== 'coordinators').length}. Открытых сигналов: ${sig.length}, запросов команд: ${req.length}.`,
     `Дежурные на смене: ${duty.map((p) => `${p.name} (${p.spec}, ведёт ${owned.get(p.id) ?? 0})`).join(', ') || 'никого'}.`,
     'Горящие инциденты:',
-    ...hot(point, now).map((i) => `- ${shortLine(i, now)}`),
+    ...hot(point, now).map((i) => `- ${shortLine(i, now, point)}`),
   ];
   if (point.clusters.length) lines.push('Подозрительные всплески жалоб (ещё не инциденты):', ...point.clusters.slice(0, 4).map((c) => `- key=${c.key}; ${c.service}, ${regionById(c.regionId)?.name}: ${c.count} за 10 мин при норме ${c.expected.toFixed(1)}`));
   if (sig.length) lines.push('Сигналы:', ...sig.slice(0, 5).map((s) => `- инцидент ${s.incidentId}: ${s.text}`));
   if (focus) lines.push('', 'ИНЦИДЕНТ В ФОКУСЕ РАЗГОВОРА («он», «его», «этот»):', details(point, focus));
   else if (sel) lines.push('', 'ОТКРЫТЫЙ НА ЭКРАНЕ ИНЦИДЕНТ («он», «его», «этот»):', details(point, sel));
   return lines.join('\n');
+}
+
+// ─── сводка смены ──────────────────────────────────────────────────────────
+
+const SHIFT_MS = 12 * 3_600_000;
+/** Итоги смены дежурного: что взял, передал, решено, что открыто и горит, что ждёт пункт. */
+export function shiftSummary(point: Point, me: Me) {
+  const now = Date.now();
+  const from = now - SHIFT_MS;
+  const all = [...point.incidents.values()];
+  let taken = 0;
+  let routed = 0;
+  const routeTimes: number[] = [];
+  for (const i of all) {
+    if (i.history.some((h) => h.at > from && h.actor === me.name && /ведёт/.test(h.text))) taken++;
+    const r = i.history.find((h) => h.at > from && h.actor === me.name && /передано команде/.test(h.text));
+    if (r) {
+      routed++;
+      routeTimes.push(r.at - i.createdAt);
+    }
+  }
+  const mine = all.filter((i) => i.coordinatorId === me.personId);
+  const solved = mine.filter((i) => i.status === 'resolved' && (i.resolvedAt ?? 0) > from).length;
+  const open = mine.filter((i) => i.status !== 'resolved');
+  const hot = open.filter((i) => i.priority === 'P1' || i.priority === 'P2' || i.slaDeadline - now < 3_600_000);
+  const created = all.filter((i) => i.createdAt > from).length;
+  const resolvedAll = all.filter((i) => i.status === 'resolved' && (i.resolvedAt ?? 0) > from).length;
+  const ai = all.reduce((n, i) => n + i.history.filter((h) => h.kind === 'ai' && h.at > from).length, 0);
+  const req = [...point.requests.values()].filter((r) => r.status === 'pending').length;
+  const sig = [...point.signals.values()].filter((s) => s.status === 'open').length;
+  const avg = routeTimes.length ? Math.round(routeTimes.reduce((a, b) => a + b, 0) / routeTimes.length / MIN) : null;
+  const biggest = all.filter((i) => i.origin === 'complaints' && i.createdAt > from).sort((a, b) => (b.complaints ?? 0) - (a.complaints ?? 0))[0];
+  return [
+    `Смена ${me.name}, последние 12 часов.`,
+    `Вы: взяли ${taken}, передали командам ${routed}${avg !== null ? ` (в среднем через ${avg} мин после появления)` : ''}, решено из ваших ${solved}.`,
+    `Сейчас у вас открыто ${open.length}, из них горит ${hot.length}${hot.length ? `: ${hot.slice(0, 3).map((i) => `«${i.title}» (${where(i)})`).join('; ')}` : ''}.`,
+    `По пункту: новых инцидентов ${created}, решено ${resolvedAll}, ИИ сделал ${ai} действий.`,
+    biggest ? `Самый массовый: «${biggest.title}», ${biggest.complaints} жалоб, ${where(biggest)}.` : '',
+    `Ждут пункт: запросов команд ${req}, открытых сигналов ${sig}.`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 // ─── действия: общий исполнитель для модели и для правил ───────────────────
@@ -287,6 +338,8 @@ class Exec {
         if (found.length === 1) this.focus = found[0].id;
         return found.length ? found.map((i) => shortLine(i, Date.now())).join('\n') : 'ничего не нашлось';
       }
+      case 'shift_summary':
+        return shiftSummary(p, this.me);
       case 'who_is_on_duty': {
         const now = Date.now();
         const owned = p.owned();
@@ -452,6 +505,7 @@ const INFO_TOOLS = [
   fn('get_incident', 'Подробно об инциденте: что случилось, где, уровень, кто ведёт, срок, совет ИИ, кому передать', ID, ['id']),
   fn('find_incidents', 'Найти открытые инциденты по словам: сервис, регион, город, команда', { query: { type: 'string' } }, ['query']),
   fn('who_is_on_duty', 'Кто из дежурных пункта сейчас на смене и сколько у каждого в работе'),
+  fn('shift_summary', 'Итоги смены дежурного за 12 часов: что взял, передал, решено, что открыто и горит, что ждёт пункт — для пересменки'),
   fn('suggest_assignee', 'Кому дать инцидент: команды по справочнику и кто из дежурных подходит вести', ID, ['id']),
 ];
 const CONTROL_TOOLS = [
@@ -475,7 +529,8 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 Твой ответ сразу звучит голосом, поэтому:
 - говори по-русски, живо и коротко: одно-три предложения, строго не больше 40 слов, даже в обзоре; без списков, скобок, номеров INC и разметки;
 - обращайся «сэр»;
-- если горит много — назови одно-два главных и общее число, подробности — только по просьбе.
+- если горит много — назови одно-два главных и общее число, подробности — только по просьбе;
+- исключение — «сводка смены»: вызови shift_summary и расскажи итоги связно, секунд на 30 (до 70 слов);
 Пользуйся только данными пункта ниже и ответами инструментов — ничего не выдумывай.
 Как вести разговор:
 - «Объясни ситуацию» — что случилось, где и насколько массово, кто ведёт, сколько до срока, что советует ИИ.
@@ -492,7 +547,7 @@ type Msg = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string; to
 async function llm(point: Point, me: Me, q: JarvisAsk): Promise<JarvisReply> {
   const ex = new Exec(point, me, q.mode, q.focusId ?? q.selectedId);
   const msgs: Msg[] = [
-    { role: 'system', content: `${SYSTEM}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}` },
+    { role: 'system', content: `${SYSTEM}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}${q.short ? '\nСейчас показ для жюри: отвечай особенно коротко — одна-две фразы, до 25 слов, без поправок к прошлым ответам.' : ''}` },
     { role: 'system', content: `Данные пункта сейчас:\n${contextText(point, me, q)}` },
     ...q.history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }) as Msg),
     { role: 'user', content: q.text.slice(0, 500) },
@@ -630,6 +685,10 @@ function rules(point: Point, me: Me, q: JarvisAsk): JarvisReply {
     ex.focus = i.id;
     return say(explain(i));
   }
+  if (/сводк|итог.*смен|пересменк/.test(text)) {
+    const s = shiftSummary(point, me).split('\n');
+    return say(`Сэр, итоги смены. ${s.slice(1, 4).join(' ')}`);
+  }
   if (/кто.*смен|на смене/.test(text)) {
     const duty = POINT_STAFF.filter((p) => p.role === 'coordinator' && isOn(p, now));
     return say(duty.length ? `На смене: ${duty.map((p) => p.name.split(' ').reverse().join(' ')).join(', ')}.` : 'Сейчас на смене дежурных нет.');
@@ -659,6 +718,40 @@ export async function ask(point: Point, me: Me, q: JarvisAsk): Promise<JarvisRep
     }
   }
   return rules(point, me, q);
+}
+
+/**
+ * Сценарий для жюри: реплика дежурного — её говорит другой ИИ (своя модель, свой голос).
+ * Цель шага задана сценарием, формулировку и реакцию на ответ Джарвиса ИИ-дежурный выбирает сам.
+ */
+export async function actorLine(goal: string, last: string, fallback: string): Promise<string> {
+  if (!key() || !goal) return fallback;
+  try {
+    const r = await openrouter(
+      '/chat/completions',
+      {
+        model: process.env.JARVIS_ACTOR_MODEL || 'anthropic/claude-haiku-5.5',
+        max_tokens: 80,
+        temperature: 0.8,
+        reasoning: { enabled: false },
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Ты — дежурный координирующего пункта ИТ, говоришь голосом с ИИ-помощником Джарвисом. Скажи одну короткую живую разговорную реплику по-русски, до 10 слов, строго про то, что нужно сказать сейчас: не добавляй других вопросов и не проси данных вроде имён инженеров или узлов сети. Обращайся к нему «Джарвис» только если это первая реплика. Без кавычек, без пояснений — только то, что произносишь.',
+          },
+          { role: 'user', content: `Что нужно сказать сейчас: ${goal}.\nПоследнее, что сказал Джарвис: ${last.slice(0, 400) || '—'}` },
+        ],
+      },
+      9_000,
+    );
+    if (r.status !== 200) throw new Error(String(r.status));
+    const text = ((JSON.parse(r.buf.toString('utf8')) as { choices: { message: { content: string | null } }[] }).choices[0].message.content ?? '').trim().replace(/^["«]|["»]$/g, '');
+    return text && text.length < 160 ? text : fallback;
+  } catch (err) {
+    console.error('Сценарий: ИИ-дежурный недоступен, реплика по сценарию —', err instanceof Error ? err.message : err);
+    return fallback;
+  }
 }
 
 /** Объявление голосом о критическом: что случилось и что советует ИИ. Без модели — быстро, по шаблону. */

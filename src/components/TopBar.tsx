@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileJson, FlaskConical, LogOut, Moon, Search, Settings2, Sun, Volume2, VolumeX } from 'lucide-react';
+import { Clapperboard, FileJson, FlaskConical, LogOut, Moon, Search, Settings2, Sun, Volume2, VolumeX } from 'lucide-react';
+import { startScenario } from './Scenario';
 import { demoAuto, demoOutage, doLogout, setPalette, setSettings, teamName, toggleSound, toggleTheme, useStore } from '../store';
 import { fmtClockSec } from '../lib/format';
 import { useNow } from '../lib/hooks';
@@ -74,6 +75,18 @@ export function TopBar() {
           </button>
           {demo && (
             <div className="popover demo-pop">
+              <button
+                className="scenario jury"
+                onClick={() => {
+                  setDemo(false);
+                  startScenario();
+                }}
+              >
+                <b>
+                  <Clapperboard size={14} /> Сценарий для жюри
+                </b>
+                <span>сбой → тревога → ИИ-дежурный говорит с Джарвисом → команда решает → разбор</span>
+              </button>
               <div className="demo-h">Устроить сбой — пойдут жалобы</div>
               {SCENARIOS.map((s) => (
                 <button

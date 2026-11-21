@@ -479,3 +479,18 @@ export type ScenarioKind = 'mass_outage' | 'field_wave' | 'coord_flood';
 export const PRIORITY_SLA_MIN: Record<Priority, number> = { P1: 120, P2: 360, P3: 720, P4: 1920 };
 export const PRIORITY_TEXT: Record<Priority, string> = { P1: 'Наивысший', P2: 'Высокий', P3: 'Средний', P4: 'Низкий' };
 export const AT_RISK_MIN = 30;
+
+/** Разбор инцидента после решения (черновик ИИ или по шаблону). */
+export interface Review {
+  id: string;
+  title: string;
+  by: 'ai' | 'rules';
+  at: number;
+  facts: { level: string; durationMin: number; toTeamMin: number | null; complaints: number | null; regions: string; team: string; assignee: string | null };
+  summary: string;
+  timeline: { at: number; text: string }[];
+  cause: string;
+  actions: string;
+  impact: string;
+  lessons: string[];
+}

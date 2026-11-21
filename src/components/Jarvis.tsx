@@ -40,7 +40,13 @@ export const jarvisPrefs = {
   speak: readLocal<boolean>('radar.jarvis.speak', true), // голос Джарвиса
   announce: readLocal<boolean>('radar.jarvis.announce', true), // объявлять критические голосом
   voice: readLocal<string>('radar.jarvis.voice2', 'mm-guy'), // новый набор голосов: прежний «Адам» не прижился
+  scenario: false, // идёт сценарий для жюри: Джарвис действует и говорит, микрофон молчит (не сохраняется)
 };
+/** Сценарий для жюри включает режим «сценарий» (не сохраняется в настройках). */
+export function setScenarioMode(on: boolean) {
+  jarvisPrefs.scenario = on;
+  listeners.forEach((f) => f());
+}
 const listeners = new Set<() => void>();
 export function setJarvisPref<K extends keyof typeof jarvisPrefs>(k: K, v: (typeof jarvisPrefs)[K]) {
   jarvisPrefs[k] = v;
@@ -116,17 +122,19 @@ function browserVoice(text: string, id: number) {
 }
 
 /** Сказать вслух голосом выбранной говорящей модели с сервера; если его нет — голосом браузера. Ждёт, пока договорит. */
-export async function say(text: string) {
+export async function say(text: string, opt: { voice?: string; asJarvis?: boolean } = {}) {
   stopVoice();
   const id = speaking;
   const t = text.replace(/[«»"*_#]/g, '').trim();
   if (!t) return;
+  const asJarvis = opt.asJarvis !== false;
+  const phase = (p: Phase) => asJarvis && onPhase(p);
   window.dispatchEvent(new Event('radar:siren-stop')); // сирена не перекрикивает Джарвиса
-  onPhase('speak');
+  phase('speak');
   try {
     const st = await jarvisStatus();
     if (st?.tts) {
-      const r = await fetch('/api/jarvis/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t, voice: jarvisPrefs.voice }) });
+      const r = await fetch('/api/jarvis/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t, voice: opt.voice ?? jarvisPrefs.voice }) });
       if (id !== speaking) return;
       if (r.status === 200) {
         const url = URL.createObjectURL(await r.blob());
@@ -154,8 +162,8 @@ export async function say(text: string) {
         if (played) {
           const used = r.headers.get('X-Jarvis-Voice');
           const name = JARVIS_VOICES.find((x) => x.id === used)?.name.split(' (')[0];
-          onVoiceNote(used && used !== jarvisPrefs.voice && name ? `Выбранный голос сейчас недоступен — говорю голосом «${name}».` : '');
-          if (id === speaking) onPhase('idle');
+          if (asJarvis) onVoiceNote(used && used !== jarvisPrefs.voice && name ? `Выбранный голос сейчас недоступен — говорю голосом «${name}».` : '');
+          if (id === speaking) phase('idle');
           return;
         }
         onVoiceNote('Браузер не дал включить звук — нажмите на шар Джарвиса один раз.');
@@ -166,11 +174,16 @@ export async function say(text: string) {
   }
   if (id !== speaking) return;
   await browserVoice(t, id);
-  if (id === speaking) onPhase('idle');
+  if (id === speaking) phase('idle');
 }
 
 // Мост к окну Джарвиса: объявления о критических попадают в разговор и становятся его темой.
-let bridge: { announce: (text: string, id: string) => void } | null = null;
+let bridge: { announce: (text: string, id: string) => void; ask: (text: string) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
+/** Джарвис говорит готовый текст об инциденте (строка в разговоре, тема — этот инцидент) и ждёт, пока договорит. */
+export const jarvisSpeak = (text: string, id: string) => bridge?.speak(text, id) ?? say(text);
+
+/** Задать Джарвису вопрос из интерфейса (кнопки, сценарий для жюри). Ждёт, пока он ответит и договорит. */
+export const jarvisAsk = (text: string) => bridge?.ask(text) ?? Promise.resolve('');
 
 /** Объявить критический инцидент голосом: что случилось, где и что советует ИИ. */
 export function announceIncident(id: string, fallback: string) {
@@ -187,6 +200,13 @@ export function announceIncident(id: string, fallback: string) {
     if (bridge) bridge.announce(text, id);
     else void say(text);
   }, 1800);
+}
+
+/** Сказать готовый текст об инциденте (например, прогноз) — если голос и объявления включены. */
+export function announceText(text: string, id: string) {
+  if (getState().me?.role !== 'coordinator' || !jarvisPrefs.speak || !jarvisPrefs.announce) return;
+  if (bridge) bridge.announce(text, id);
+  else void say(text);
 }
 
 // ─── распознавание речи ────────────────────────────────────────────────────
@@ -320,7 +340,7 @@ const afterWake = (t: string) => {
 };
 const FOLLOW_MS = 9000; // после ответа можно продолжать без слова «Джарвис»
 
-const TABS = ['map', 'inbox', 'teams', 'done', 'requests', 'signals', 'shift', 'ai', 'wall', 'directory', 'desk'];
+const TABS = ['map', 'inbox', 'teams', 'done', 'reviews', 'requests', 'signals', 'shift', 'ai', 'wall', 'directory', 'desk'];
 const SUGGEST_CONTROL = ['Что горит?', 'Открой входящие и объясни ситуацию', 'Кому можно дать?', 'Кто на смене?', 'Перемотай карту'];
 const SUGGEST_CHAT = ['Что горит?', 'Кто на смене?', 'Сколько жалоб?', 'Что с самым срочным?'];
 
@@ -357,6 +377,12 @@ function reveal(what: string) {
     for (const s of sels) {
       const el = document.querySelector(`.icard ${s}`) ?? document.querySelector(s);
       if (!el) continue;
+      const step = el.closest('.step.closed');
+      if (step) {
+        (step.querySelector('.step-h') as HTMLElement | null)?.click();
+        setTimeout(attempt, 120);
+        return;
+      }
       el.scrollIntoView({ behavior: smooth(), block: what === 'top' ? 'start' : 'center' });
       if (what === 'chat') {
         const list = el.querySelector('.chat-list');
@@ -474,6 +500,15 @@ export function Jarvis() {
         setLines((l) => [...l, { role: 'assistant', content: t, event: true }]);
         void say(t).then(() => follow());
       },
+      ask: async (t) => {
+        setOpen(true);
+        return askRef.current(t);
+      },
+      speak: async (t, id) => {
+        focus.current = id;
+        setLines((l) => [...l, { role: 'assistant', content: t, event: true }]);
+        await say(t);
+      },
     };
     return () => {
       bridge = null;
@@ -502,9 +537,9 @@ export function Jarvis() {
     log.current?.scrollTo({ top: log.current.scrollHeight, behavior: 'smooth' });
   }, [lines, heard]);
 
-  async function ask(q: string) {
+  async function ask(q: string): Promise<string> {
     const question = afterWake(q) || q.trim();
-    if (!question || busy.current) return;
+    if (!question || busy.current) return '';
     busy.current = true;
     setErr('');
     setHeard('');
@@ -518,7 +553,7 @@ export function Jarvis() {
       const r = await fetch('/api/jarvis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control ? 'control' : 'chat', history }),
+        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history }),
       });
       const data = (await r.json()) as { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
       if (!r.ok) throw new Error(data.error ?? 'нет ответа');
@@ -528,12 +563,14 @@ export function Jarvis() {
       // Джарвис показывает изменение в карточке — сворачиваем окно, чтобы оно его не закрывало
       // (ответ виден подписью у шара; окно — по клику на шар).
       if (data.actions?.some((a) => a.type === 'show') && window.innerWidth < 2200) setOpen(false);
-      if (jarvisPrefs.speak) await say(data.reply);
+      if (jarvisPrefs.speak || jarvisPrefs.scenario) await say(data.reply);
       setPhase('idle');
       follow();
+      return data.reply;
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setPhase('idle');
+      return '';
     } finally {
       busy.current = false;
     }
@@ -631,8 +668,8 @@ export function Jarvis() {
     };
   }, []);
   useEffect(() => {
-    ear.set(!!RecCtor && control && !micDenied && phase === 'idle');
-  }, [control, micDenied, phase]);
+    ear.set(!!RecCtor && control && !prefs.scenario && !micDenied && phase === 'idle');
+  }, [control, micDenied, phase, prefs.scenario]);
   // Сторож: раз в 2 с и при возвращении на вкладку поднимает слух, если браузер его уронил.
   useEffect(() => {
     if (!control) return;
@@ -722,9 +759,9 @@ export function Jarvis() {
             </button>
           </div>
           <div className="jv-flags">
-            <button className={`jv-flag ${control ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
+            <button className={`jv-flag ${control || prefs.scenario ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
               {control ? <Lock size={12} /> : null}
-              {control ? 'управляет экраном · слушает всегда' : 'только ответы'}
+              {prefs.scenario ? 'сценарий для жюри' : control ? 'управляет экраном · слушает всегда' : 'только ответы'}
             </button>
             <button className={`jv-flag ${prefs.speak ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
               {prefs.speak ? <Volume2 size={12} /> : <VolumeX size={12} />}

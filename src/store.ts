@@ -334,7 +334,7 @@ function handle(msg: PointMessage) {
 
 const isPoint = () => state.me?.role === 'coordinator';
 let toastSeq = 1;
-function toast(t: Omit<Toast, 'id' | 'at'>) {
+export function toast(t: Omit<Toast, 'id' | 'at'>) {
   const item: Toast = { ...t, id: `T${toastSeq++}`, at: Date.now() };
   setState({ toasts: [item, ...state.toasts].slice(0, 4) });
   setTimeout(() => dismissToast(item.id), item.ttl);

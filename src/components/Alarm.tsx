@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Siren } from 'lucide-react';
 import type { Incident } from '../../shared/types';
-import { getState, openIncident, useStore } from '../store';
+import { getState, openIncident, toast, useStore } from '../store';
+import { forecast } from '../../shared/forecast';
+import { useNow } from '../lib/hooks';
 import { siren, unlockAudio } from '../lib/sound';
-import { announceIncident } from './Jarvis';
+import { announceIncident, announceText, jarvisPrefs } from './Jarvis';
 
 export function Alarm() {
   const incidents = useStore((s) => s.incidents);
@@ -30,7 +32,7 @@ export function Alarm() {
     setInc(fresh);
     unlockAudio();
     if (sound && p1Sound) stop.current = siren();
-    announceIncident(fresh.id, fresh.p1Proposal ? `Внимание. ИИ предлагает наивысший уровень: ${fresh.title}` : `Внимание. Критический инцидент: ${fresh.title}`);
+    if (!jarvisPrefs.scenario) announceIncident(fresh.id, fresh.p1Proposal ? `Внимание. ИИ предлагает наивысший уровень: ${fresh.title}` : `Внимание. Критический инцидент: ${fresh.title}`);
   }, [incidents, on]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => stop.current?.(), []);
@@ -46,8 +48,21 @@ export function Alarm() {
       if (getState().sound) stop.current = siren();
       announceIncident(pick.id, `Внимание. Критический инцидент: ${pick.title}`);
     };
+    // Сценарий для жюри: тревога по конкретному инциденту (голос объявления — у сценария).
+    const forId = (e: Event) => {
+      const pick = getState().incidents.get((e as CustomEvent<string>).detail);
+      if (!pick) return;
+      unlockAudio();
+      setInc(pick);
+      stop.current?.();
+      if (getState().sound) stop.current = siren();
+    };
     window.addEventListener('radar:alarm-test', test);
-    return () => window.removeEventListener('radar:alarm-test', test);
+    window.addEventListener('radar:alarm-for', forId);
+    return () => {
+      window.removeEventListener('radar:alarm-test', test);
+      window.removeEventListener('radar:alarm-for', forId);
+    };
   }, []);
   // Джарвис заговорил — сирена смолкает (мигание остаётся до «Принял»);
   // Джарвис открыл этот инцидент по голосовой команде — тревога принята.
@@ -95,4 +110,24 @@ export function Alarm() {
       </div>
     </div>
   );
+}
+
+/** Прогноз: по темпу жалоб инцидент станет критическим в ближайшие 15 минут — предупреждаем заранее (один раз). */
+export function ForecastWatch() {
+  const now = useNow(15_000);
+  const warned = useRef(new Set<string>());
+  useEffect(() => {
+    const s = getState();
+    const rules = s.config?.rules;
+    if (!rules) return;
+    for (const i of s.incidents.values()) {
+      if (jarvisPrefs.scenario || i.origin !== 'complaints' || i.status === 'resolved' || i.priority === 'P1' || i.p1Proposal || warned.current.has(i.id)) continue;
+      const f = forecast(i, s.complaints, rules, Date.now());
+      if (f?.next?.level !== 'P1' || f.next.inMin > 15) continue;
+      warned.current.add(i.id);
+      toast({ kind: 'warn', title: `Прогноз: станет критическим через ~${f.next.inMin} мин`, body: `${i.title} · ${f.rate} жалоб/мин, ${f.trend === 'up' ? 'растёт' : 'держится'}`, incidentId: i.id, ttl: 14_000 });
+      announceText(`Сэр, по темпу жалоб ${i.title.replace(/^Жалобы: /, '')} станет критическим примерно через ${f.next.inMin} минут.`, i.id);
+    }
+  }, [now]);
+  return null;
 }

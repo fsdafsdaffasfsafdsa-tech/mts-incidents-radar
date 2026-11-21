@@ -1,11 +1,12 @@
 // «Моя смена» (сколько взял, передал, решено) и сводка для пересменки — текст, который можно скопировать следующей смене.
 import { useMemo, useState } from 'react';
-import { ClipboardCopy, FileText, X } from 'lucide-react';
+import { ClipboardCopy, FileText, Mic, X } from 'lucide-react';
 import type { Incident } from '../../shared/types';
 import { teamName, useStore } from '../store';
 import { fmtClock, fmtDur } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { STATUS_TEXT } from './kit';
+import { jarvisAsk } from './Jarvis';
 
 const SHIFT_MS = 12 * 3_600_000;
 
@@ -53,7 +54,12 @@ export function MyShift() {
           <span className="num">{s.avg === null ? '—' : fmtDur(s.avg)}</span>в среднем до передачи
         </div>
       </div>
-      <Handover />
+      <div className="ms-actions">
+        <Handover />
+        <button className="btn btn-sm btn-ai" onClick={() => void jarvisAsk('Сводка смены')} title="Джарвис расскажет итоги смены голосом">
+          <Mic size={14} /> Сводка голосом
+        </button>
+      </div>
     </section>
   );
 }
