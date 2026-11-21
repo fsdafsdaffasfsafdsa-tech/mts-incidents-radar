@@ -8618,10 +8618,30 @@ body.desk-resizing {
 }
 .rf-country {
   fill: var(--rf-land);
+  /* без filter: тень на огромном контуре перерисовывалась каждый кадр и тормозила перетаскивание */
   stroke: color-mix(in srgb, var(--coord) 35%, var(--rf-border));
   stroke-width: 2.2;
   vector-effect: non-scaling-stroke;
-  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--coord) 18%, transparent));
+}
+.rf-sea {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 40%, var(--rf-sea-1), var(--rf-sea-2) 75%);
+}
+.rf-pan {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.rf-marks {
+  transition: opacity 0.25s;
+}
+.rf-marks.hide {
+  opacity: 0;
+}
+.rf-tip.off {
+  display: none;
 }
 .rf-region {
   stroke: var(--rf-border);
@@ -8679,8 +8699,7 @@ body.desk-resizing {
   pointer-events: none;
 }
 .rf-bubble .glow {
-  fill: color-mix(in srgb, var(--p2) 25%, transparent);
-  filter: blur(4px);
+  fill: color-mix(in srgb, var(--p2) 18%, transparent);
 }
 .rf-bubble .core {
   fill: var(--p2);

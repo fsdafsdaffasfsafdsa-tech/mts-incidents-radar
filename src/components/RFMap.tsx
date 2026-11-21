@@ -1,9 +1,12 @@
 // Карта России своя (SVG, контуры регионов в public/rf-regions.json) — появляется мгновенно, без внешней подложки.
 // Регионы закрашены по числу жалоб за 30 минут, у столиц — пузыри «сколько жалоб за 10 минут», новые жалобы «пингуют»,
 // инциденты — пульсирующие кольца. Колесо/кнопки — приблизить, перетаскивание — сдвинуть, выбранный инцидент — приближение.
-import { useEffect, useMemo, useRef, useState } from 'react';
+//
+// Плавность: во время перетаскивания и колеса карта двигается напрямую трансформацией слоёв (без перерисовки React),
+// состояние фиксируется в конце жеста. Регионы и данные считаются один раз и не перерисовываются от движения.
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { geoConicConformal, geoGraticule, geoPath, type GeoProjection } from 'd3-geo';
-import type { Incident } from '../../shared/types';
+import type { Incident, Region } from '../../shared/types';
 import { select, useStore } from '../store';
 import { useNow } from '../lib/hooks';
 
@@ -22,15 +25,37 @@ const MIN = 60_000;
 const PRIO = { P1: 'var(--p1)', P2: 'var(--p2)', P3: 'var(--p3)', P4: 'var(--p4)' } as const;
 type View = { k: number; x: number; y: number };
 const ID: View = { k: 1, x: 0, y: 0 };
+type Shape = { id: string | null; name: string; d: string; bounds: [[number, number], [number, number]] };
+
+/** Слой регионов: перерисовывается только когда меняются заливка, выбор или регион под курсором — не от движения карты. */
+const RegionLayer = memo(function RegionLayer({ shapes, fills, hot, sel, hoverId, onHover, onPick }: { shapes: Shape[]; fills: Map<string, string>; hot: Set<string>; sel: Set<string>; hoverId: string | null; onHover: (id: string | null, e?: React.PointerEvent) => void; onPick: (id: string) => void }) {
+  return (
+    <>
+      {shapes.map((s, k) => (
+        <path
+          key={k}
+          d={s.d}
+          className={`rf-region ${s.id ? 'ours' : ''} ${s.id && hot.has(s.id) ? 'hot' : ''} ${s.id && sel.has(s.id) ? 'sel' : ''} ${s.id && hoverId === s.id ? 'hov' : ''}`}
+          style={{ fill: s.id ? fills.get(s.id) ?? 'var(--rf-land)' : 'var(--rf-none)' }}
+          onPointerMove={s.id ? (e) => onHover(s.id, e) : undefined}
+          onPointerLeave={s.id ? () => onHover(null) : undefined}
+          onClick={s.id ? () => onPick(s.id!) : undefined}
+        />
+      ))}
+    </>
+  );
+});
 
 export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
   const box = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
+  const pan = useRef<HTMLDivElement>(null); // слой, который двигается во время жеста
+  const tip = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [geo, setGeo] = useState<GeoFeature[] | null>(null);
   const [view, setView] = useState<View>(ID);
   const [anim, setAnim] = useState(false);
-  const [hover, setHover] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const complaints = useStore((s) => s.complaints);
   const incidents = useStore((s) => s.incidents);
   const regions = useStore((s) => s.regions);
@@ -38,6 +63,12 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
   const replayAt = useStore((s) => s.replayAt);
   const tick = useNow(2000);
   const now = replayAt ?? tick;
+
+  // Живое положение во время жеста (без React) и зафиксированное — в state.
+  const live = useRef<View>(ID);
+  const viewRef = useRef<View>(ID);
+  viewRef.current = view;
+  const gesture = useRef(false);
 
   useEffect(() => void loadGeo().then(setGeo), []);
   useEffect(() => {
@@ -47,7 +78,7 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
     return () => ro.disconnect();
   }, []);
 
-  // Проекция и пути регионов — пересчитываются только при смене размера.
+  // Проекция и пути регионов — только при смене размера.
   const base = useMemo(() => {
     if (!geo || size.w < 50 || size.h < 50) return null;
     const fc = { type: 'FeatureCollection' as const, features: geo.map((f) => ({ type: 'Feature' as const, properties: {}, geometry: { type: 'MultiPolygon' as const, coordinates: f.g } })) };
@@ -59,171 +90,218 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
       fc,
     );
     const path = geoPath(proj);
-    const shapes = geo.map((f, k) => ({ id: f.id, name: f.name, d: path(fc.features[k]) ?? '', bounds: path.bounds(fc.features[k]) }));
+    const shapes: Shape[] = geo.map((f, k) => ({ id: f.id, name: f.name, d: path(fc.features[k]) ?? '', bounds: path.bounds(fc.features[k]) as Shape['bounds'] }));
     const country = shapes.map((s) => s.d).join(' ');
     const grid = path(geoGraticule().step([10, 10])()) ?? '';
-    const at = (lon: number, lat: number) => proj([lon, lat]) ?? [0, 0];
+    const at = (lon: number, lat: number) => (proj([lon, lat]) ?? [0, 0]) as [number, number];
     return { shapes, country, grid, at };
   }, [geo, size.w, size.h]);
 
-  // ─── данные слоёв ────────────────────────────────────────────────────────
-  const live = replayAt === null ? complaints : complaints.filter((c) => c.at <= replayAt);
-  const per30 = new Map<string, number>();
-  const per10 = new Map<string, { n: number; linked: number }>();
-  for (const c of live) {
-    if (now - c.at < 30 * MIN) per30.set(c.regionId, (per30.get(c.regionId) ?? 0) + 1);
-    if (now - c.at < 10 * MIN) {
-      const p = per10.get(c.regionId) ?? { n: 0, linked: 0 };
-      p.n++;
-      if (c.incidentId) p.linked++;
-      per10.set(c.regionId, p);
+  // ─── данные слоёв: считаются при новых жалобах/инцидентах, а не при каждом движении ─────────
+  const data = useMemo(() => {
+    const list = replayAt === null ? complaints : complaints.filter((c) => c.at <= replayAt);
+    const per30 = new Map<string, number>();
+    const per10 = new Map<string, { n: number; linked: number }>();
+    for (const c of list) {
+      if (now - c.at < 30 * MIN) per30.set(c.regionId, (per30.get(c.regionId) ?? 0) + 1);
+      if (now - c.at < 10 * MIN) {
+        const p = per10.get(c.regionId) ?? { n: 0, linked: 0 };
+        p.n++;
+        if (c.incidentId) p.linked++;
+        per10.set(c.regionId, p);
+      }
     }
-  }
-  const max30 = Math.max(8, ...per30.values());
-  const pings = live.filter((c) => now - c.at < 12_000).slice(-120);
-  const openInc: Incident[] = [...incidents.values()].filter((i) => i.origin === 'complaints' && (replayAt === null ? i.status !== 'resolved' : i.createdAt <= replayAt && (i.resolvedAt === null || i.resolvedAt > replayAt)));
-  const incByRegion = new Map<string, Incident[]>();
-  for (const i of openInc) for (const r of i.regionIds ?? []) incByRegion.set(r, [...(incByRegion.get(r) ?? []), i]);
-  const sel = selectedId ? incidents.get(selectedId) : undefined;
-  const selRegions = new Set(sel?.origin === 'complaints' ? sel.regionIds ?? [] : []);
+    const max30 = Math.max(8, ...per30.values());
+    const pings = list.filter((c) => now - c.at < 12_000).slice(-120);
+    const openInc: Incident[] = [...incidents.values()].filter((i) => i.origin === 'complaints' && (replayAt === null ? i.status !== 'resolved' : i.createdAt <= replayAt && (i.resolvedAt === null || i.resolvedAt > replayAt)));
+    const incByRegion = new Map<string, Incident[]>();
+    for (const i of openInc) for (const r of i.regionIds ?? []) incByRegion.set(r, [...(incByRegion.get(r) ?? []), i]);
+    const fills = new Map<string, string>();
+    for (const r of regions) {
+      const n = per30.get(r.id) ?? 0;
+      const hot = incByRegion.get(r.id);
+      const pct = n ? Math.round(12 + 70 * Math.sqrt(n / max30)) : 0;
+      fills.set(r.id, hot ? `color-mix(in srgb, ${PRIO[hot[0].priority]} ${Math.max(28, pct)}%, var(--rf-land))` : pct ? `color-mix(in srgb, var(--rf-heat) ${pct}%, var(--rf-land))` : 'var(--rf-land)');
+    }
+    return { per30, per10, pings, openInc, incByRegion, fills, hot: new Set(incByRegion.keys()) };
+  }, [complaints, incidents, regions, now, replayAt]);
 
-  // ─── приближение ─────────────────────────────────────────────────────────
+  const sel = selectedId ? incidents.get(selectedId) : undefined;
+  const selKey = sel?.origin === 'complaints' ? (sel.regionIds ?? []).join(',') : '';
+  const selRegions = useMemo(() => new Set(selKey ? selKey.split(',') : []), [selKey]);
+  const regionById = useMemo(() => new Map<string, Region>(regions.map((r) => [r.id, r])), [regions]);
+
+  // ─── движение карты ──────────────────────────────────────────────────────
+  /**
+   * Во время жеста двигаем не SVG, а HTML-слой с ним: браузер сдвигает готовую картинку на видеокарте, без перерисовки.
+   * Сдвиг/масштаб — относительно зафиксированного вида; в конце жеста вид фиксируется и слой возвращается на место.
+   */
+  const paint = (v: View) => {
+    const c = viewRef.current;
+    const r = v.k / c.k;
+    if (pan.current) pan.current.style.transform = `translate(${v.x - c.x * r}px, ${v.y - c.y * r}px) scale(${r})`;
+  };
+  const commit = (v: View) => {
+    gesture.current = false;
+    setView(v);
+  };
+  // После фиксации вида значки уже стоят на новых местах — снимаем временный сдвиг.
+  useLayoutEffect(() => {
+    live.current = view;
+    if (pan.current) pan.current.style.transform = '';
+  }, [view, base]);
+
   function fitTo(ids: string[] | null, maxK = 6) {
     if (!base) return;
-    if (!ids?.length) {
-      setAnim(true);
-      setView(ID);
-      return;
+    let v = ID;
+    if (ids?.length) {
+      const bs = base.shapes.filter((s) => s.id && ids.includes(s.id)).map((s) => s.bounds);
+      if (!bs.length) return;
+      const x0 = Math.min(...bs.map((b) => b[0][0]));
+      const y0 = Math.min(...bs.map((b) => b[0][1]));
+      const x1 = Math.max(...bs.map((b) => b[1][0]));
+      const y1 = Math.max(...bs.map((b) => b[1][1]));
+      const k = Math.max(1, Math.min(maxK, 0.75 / Math.max((x1 - x0) / size.w, (y1 - y0) / size.h)));
+      v = { k, x: size.w / 2 - k * ((x0 + x1) / 2), y: size.h / 2 - k * ((y0 + y1) / 2) };
     }
-    const bs = base.shapes.filter((s) => s.id && ids.includes(s.id)).map((s) => s.bounds);
-    if (!bs.length) return;
-    const x0 = Math.min(...bs.map((b) => b[0][0]));
-    const y0 = Math.min(...bs.map((b) => b[0][1]));
-    const x1 = Math.max(...bs.map((b) => b[1][0]));
-    const y1 = Math.max(...bs.map((b) => b[1][1]));
-    const k = Math.max(1, Math.min(maxK, 0.75 / Math.max((x1 - x0) / size.w, (y1 - y0) / size.h)));
     setAnim(true);
-    setView({ k, x: size.w / 2 - k * ((x0 + x1) / 2), y: size.h / 2 - k * ((y0 + y1) / 2) });
+    setView(v);
+    window.setTimeout(() => setAnim(false), 780);
   }
   useEffect(() => {
     if (sel?.origin === 'complaints' && sel.regionIds?.length) fitTo(sel.regionIds);
   }, [selectedId, base]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Колесо — приближение к курсору (свой обработчик: React вешает wheel пассивным).
+  // Колесо: двигаем напрямую, фиксируем через 160 мс после последнего щелчка колеса.
   useEffect(() => {
     const el = svg.current;
     if (!el) return;
+    let timer = 0;
+    let raf = 0;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const px = e.clientX - r.left;
       const py = e.clientY - r.top;
+      const v = live.current;
+      const k = Math.max(1, Math.min(14, v.k * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+      live.current = k === 1 ? ID : { k, x: px - ((px - v.x) * k) / v.k, y: py - ((py - v.y) * k) / v.k };
+      gesture.current = true;
       setAnim(false);
-      setView((v) => {
-        const k = Math.max(1, Math.min(14, v.k * (e.deltaY < 0 ? 1.25 : 0.8)));
-        if (k === 1) return ID;
-        return { k, x: px - ((px - v.x) * k) / v.k, y: py - ((py - v.y) * k) / v.k };
-      });
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => paint(live.current));
+      clearTimeout(timer);
+      timer = window.setTimeout(() => commit(live.current), 160);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [base]);
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      clearTimeout(timer);
+      cancelAnimationFrame(raf);
+    };
+  }, [base]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Перетаскивание: тоже без React до отпускания.
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean; raf: number } | null>(null);
+  const zoomBy = (f: number) => {
+    const v = live.current;
+    const k = Math.max(1, Math.min(14, v.k * f));
+    setAnim(true);
+    setView(k === 1 ? ID : { k, x: size.w / 2 - ((size.w / 2 - v.x) * k) / v.k, y: size.h / 2 - ((size.h / 2 - v.y) * k) / v.k });
+    window.setTimeout(() => setAnim(false), 780);
+  };
+
+  // ─── подсказка по региону: позиция — напрямую, состояние — только при смене региона ──────────
+  const onHover = useMemo(
+    () => (id: string | null, e?: React.PointerEvent) => {
+      if (drag.current?.moved || gesture.current) return;
+      if (id && e && tip.current && box.current) {
+        const r = box.current.getBoundingClientRect();
+        tip.current.style.left = `${Math.min(e.clientX - r.left + 14, r.width - 230)}px`;
+        tip.current.style.top = `${Math.max(8, e.clientY - r.top - 10)}px`;
+      }
+      setHoverId((h) => (h === id ? h : id));
+    },
+    [],
+  );
+  const onPick = useMemo(
+    () => (id: string) => {
+      if (drag.current?.moved) return;
+      const inc = data.incByRegion.get(id)?.[0];
+      if (inc) select(inc.id);
+      else fitTo([id], 5);
+    },
+    [data, base, size.w, size.h], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const P = (lon: number, lat: number) => {
     const [x, y] = base!.at(lon, lat);
     return [view.x + view.k * x, view.y + view.k * y] as const;
   };
-  const regionById = new Map(regions.map((r) => [r.id, r]));
-  const hoverRegion = hover ? regionById.get(hover.id) : undefined;
-  const zoomBy = (f: number) => {
-    setAnim(true);
-    setView((v) => {
-      const k = Math.max(1, Math.min(14, v.k * f));
-      if (k === 1) return ID;
-      return { k, x: size.w / 2 - ((size.w / 2 - v.x) * k) / v.k, y: size.h / 2 - ((size.h / 2 - v.y) * k) / v.k };
-    });
-  };
+  const hoverRegion = hoverId ? regionById.get(hoverId) : undefined;
 
   return (
     <div className={`rfmap rf-svg ${forceTheme === 'dark' ? 'rf-dark' : ''}`} ref={box}>
+      <div className="rf-sea" />
       {base && (
+        <div className="rf-pan" ref={pan}>
         <svg
           ref={svg}
           width={size.w}
           height={size.h}
-          className={drag.current?.moved ? 'grabbing' : ''}
           onPointerDown={(e) => {
-            (e.target as Element).setPointerCapture?.(e.pointerId);
-            drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false };
+            drag.current = { x: e.clientX, y: e.clientY, vx: live.current.x, vy: live.current.y, moved: false, raf: 0 };
           }}
           onPointerMove={(e) => {
             const d = drag.current;
             if (!d) return;
             const dx = e.clientX - d.x;
             const dy = e.clientY - d.y;
-            if (!d.moved && Math.hypot(dx, dy) < 4) return;
-            d.moved = true;
-            setAnim(false);
-            setHover(null);
-            setView((v) => ({ ...v, x: d.vx + dx, y: d.vy + dy }));
+            if (!d.moved) {
+              if (Math.hypot(dx, dy) < 4) return;
+              d.moved = true;
+              gesture.current = true;
+              // Захват — только когда перетаскивание началось: иначе клики по регионам и кольцам не доходят до них.
+              svg.current?.setPointerCapture?.(e.pointerId);
+              setAnim(false);
+              setHoverId(null);
+              svg.current?.classList.add('grabbing');
+            }
+            live.current = { ...live.current, x: d.vx + dx, y: d.vy + dy };
+            cancelAnimationFrame(d.raf);
+            d.raf = requestAnimationFrame(() => paint(live.current));
           }}
-          onPointerUp={() => setTimeout(() => (drag.current = null), 0)}
+          onPointerUp={() => {
+            const d = drag.current;
+            svg.current?.classList.remove('grabbing');
+            if (d?.moved) {
+              cancelAnimationFrame(d.raf);
+              commit(live.current);
+            }
+            setTimeout(() => (drag.current = null), 0);
+          }}
         >
-          <defs>
-            <radialGradient id="rf-sea" cx="50%" cy="40%" r="75%">
-              <stop offset="0%" stopColor="var(--rf-sea-1)" />
-              <stop offset="100%" stopColor="var(--rf-sea-2)" />
-            </radialGradient>
-          </defs>
-          <rect width={size.w} height={size.h} fill="url(#rf-sea)" />
           <g className={`rf-world ${anim ? 'anim' : ''}`} style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
             <path d={base.grid} className="rf-grid" />
             <path d={base.country} className="rf-country" />
-            {base.shapes.map((s, k) => {
-              const n = s.id ? per30.get(s.id) ?? 0 : 0;
-              const hot = s.id ? incByRegion.get(s.id) : undefined;
-              const pct = n ? Math.round(12 + 70 * Math.sqrt(n / max30)) : 0;
-              const fill = !s.id ? 'var(--rf-none)' : hot ? `color-mix(in srgb, ${PRIO[hot[0].priority]} ${Math.max(28, pct)}%, var(--rf-land))` : pct ? `color-mix(in srgb, var(--rf-heat) ${pct}%, var(--rf-land))` : 'var(--rf-land)';
-              return (
-                <path
-                  key={k}
-                  d={s.d}
-                  className={`rf-region ${s.id ? 'ours' : ''} ${hot ? 'hot' : ''} ${s.id && selRegions.has(s.id) ? 'sel' : ''} ${hover?.id === s.id ? 'hov' : ''}`}
-                  style={{ fill }}
-                  onPointerMove={(e) => {
-                    if (drag.current?.moved || !s.id) return;
-                    const r = box.current!.getBoundingClientRect();
-                    setHover({ x: e.clientX - r.left, y: e.clientY - r.top, id: s.id });
-                  }}
-                  onPointerLeave={() => setHover((h) => (h?.id === s.id ? null : h))}
-                  onClick={() => {
-                    if (drag.current?.moved || !s.id) return;
-                    const inc = incByRegion.get(s.id)?.[0];
-                    if (inc) select(inc.id);
-                    else fitTo([s.id], 5);
-                  }}
-                />
-              );
-            })}
+            <RegionLayer shapes={base.shapes} fills={data.fills} hot={data.hot} sel={selRegions} hoverId={hoverId} onHover={onHover} onPick={onPick} />
           </g>
 
           {/* Подписи и значки — поверх, размер не зависит от приближения */}
-          <g className="rf-marks">
-            {pings.map((c) => {
+          <g className={`rf-marks ${anim ? 'hide' : ''}`}>
+            {data.pings.map((c) => {
               const [x, y] = P(c.lon, c.lat);
               return <circle key={c.id} cx={x} cy={y} r={3} className={`rf-ping ${c.incidentId ? 'linked' : ''}`} />;
             })}
-            {[...per10].map(([rid, p]) => {
+            {[...data.per10].map(([rid, p]) => {
               const r = regionById.get(rid);
               if (!r || p.n < 2) return null;
               const [x, y] = P(r.lon, r.lat);
-              // Фон (пара жалоб) — точка; всплеск — пузырь с числом.
-              if (p.n < 6 && !incByRegion.has(rid)) return <circle key={rid} cx={x} cy={y} r={3.2} className="rf-dot" />;
+              if (p.n < 6 && !data.incByRegion.has(rid)) return <circle key={rid} cx={x} cy={y} r={3.2} className="rf-dot" />;
               const rad = 5 + Math.sqrt(p.n) * 2.4;
               return (
                 <g key={rid} className={`rf-bubble ${p.linked > p.n / 2 ? 'linked' : ''}`} transform={`translate(${x} ${y})`}>
-                  <circle r={rad + 6} className="glow" />
+                  <circle r={rad + 5} className="glow" />
                   <circle r={rad} className="core" />
                   {p.n >= 4 && (
                     <text dy="0.35em" className="num">
@@ -233,7 +311,7 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
                 </g>
               );
             })}
-            {openInc.flatMap((i) =>
+            {data.openInc.flatMap((i) =>
               (i.regionIds ?? []).map((rid, k) => {
                 const r = regionById.get(rid);
                 if (!r) return null;
@@ -249,7 +327,7 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
                     style={{ ['--c' as string]: PRIO[i.priority] }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      select(i.id);
+                      if (!drag.current?.moved) select(i.id);
                     }}
                   >
                     <circle r={rad} className="halo" />
@@ -275,22 +353,25 @@ export function RFMap({ forceTheme }: { forceTheme?: 'dark' | 'light' } = {}) {
               })}
           </g>
         </svg>
+        </div>
       )}
       {!base && <div className="rf-loading">Карта загружается…</div>}
 
-      {hover && hoverRegion && (
-        <div className="rf-tip" style={{ left: Math.min(hover.x + 14, size.w - 230), top: Math.max(8, hover.y - 10) }}>
-          <b>{hoverRegion.name}</b>
-          <span>
-            жалоб за 30 мин: <b className="num">{per30.get(hover.id) ?? 0}</b>
-          </span>
-          {(incByRegion.get(hover.id) ?? []).slice(0, 3).map((i) => (
-            <span key={i.id} className="rf-tip-inc" style={{ color: PRIO[i.priority] }}>
-              ● {i.service}
+      <div ref={tip} className={`rf-tip ${hoverRegion ? '' : 'off'}`}>
+        {hoverRegion && hoverId && (
+          <>
+            <b>{hoverRegion.name}</b>
+            <span>
+              жалоб за 30 мин: <b className="num">{data.per30.get(hoverId) ?? 0}</b>
             </span>
-          ))}
-        </div>
-      )}
+            {(data.incByRegion.get(hoverId) ?? []).slice(0, 3).map((i) => (
+              <span key={i.id} className="rf-tip-inc" style={{ color: PRIO[i.priority] }}>
+                ● {i.service}
+              </span>
+            ))}
+          </>
+        )}
+      </div>
 
       <div className="rf-zoom">
         <button onClick={() => zoomBy(1.6)} aria-label="Приблизить">
