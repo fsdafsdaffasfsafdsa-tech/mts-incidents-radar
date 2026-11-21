@@ -153,17 +153,33 @@ export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filte
 }
 
 // ─── блоки и раскладки (общие для стены и Джарвиса) ────────────────────────
-export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate';
-export const BLOCKS: { id: BlockId; name: string; hint: string }[] = [
-  { id: 'action', name: 'Требует действия', hint: 'критические, на координаторах, срок под угрозой, команда не берёт — по срочности' },
-  { id: 'work', name: 'В работе у команд', hint: 'таблица: сколько в работе, до срока, передачи, последняя команда; листается сама' },
-  { id: 'groups', name: 'Четыре группы', hint: 'критические, на координаторах, высокий, исследование — колонками, как в кейсе' },
-  { id: 'assistant', name: 'ИИ-помощник', hint: 'главное сейчас, риск стать критическим, кому передать, команды Джарвису' },
-  { id: 'transfers', name: 'История передач', hint: 'цепочки команд у инцидентов, которые передают по кругу' },
-  { id: 'stats', name: 'Смена в цифрах', hint: 'решено, время до передачи, сроки, поток жалоб' },
-  { id: 'events', name: 'Лента событий', hint: 'что произошло только что' },
-  { id: 'map', name: 'Карта жалоб', hint: 'прежняя карта России с инцидентами' },
-  { id: 'rotate', name: 'Сменяемая панель', hint: 'по очереди: ИИ-помощник, история передач, смена в цифрах, лента' },
+export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom';
+export type BlockCat = 'incidents' | 'summary' | 'ai' | 'own';
+export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
+  { id: 'incidents', name: 'Инциденты' },
+  { id: 'summary', name: 'Сводка' },
+  { id: 'ai', name: 'ИИ и персонажи' },
+  { id: 'own', name: 'Своё' },
+];
+export const BLOCKS: { id: BlockId; name: string; hint: string; cat: BlockCat; icon: string }[] = [
+  { id: 'action', name: 'Требует действия', hint: 'всё, чем заняться сейчас — по срочности', cat: 'incidents', icon: 'bell' },
+  { id: 'work', name: 'В работе у команд', hint: 'таблица: сколько в работе, срок, передачи, команда', cat: 'incidents', icon: 'table' },
+  { id: 'groups', name: 'Четыре группы', hint: 'группы кейса колонками', cat: 'incidents', icon: 'columns' },
+  { id: 'group', name: 'Одна группа', hint: 'критические, на координаторах, высокий или исследование', cat: 'incidents', icon: 'list' },
+  { id: 'risk', name: 'Риск стать критическим', hint: 'кто может перерасти в «Наивысший» и почему', cat: 'incidents', icon: 'flame' },
+  { id: 'route', name: 'Кому передать', hint: 'что на координаторах и какую команду советует ИИ', cat: 'incidents', icon: 'send' },
+  { id: 'transfers', name: 'История передач', hint: 'цепочки команд у тех, кого передают по кругу', cat: 'incidents', icon: 'swap' },
+  { id: 'counters', name: 'Счётчики групп', hint: 'четыре группы крупными цифрами', cat: 'summary', icon: 'hash' },
+  { id: 'stats', name: 'Смена в цифрах', hint: 'решено, сроки, время до передачи, поток жалоб', cat: 'summary', icon: 'chart' },
+  { id: 'teams', name: 'Команды', hint: 'у каких команд больше всего открытых', cat: 'summary', icon: 'users' },
+  { id: 'clock', name: 'Часы', hint: 'крупное время и дата', cat: 'summary', icon: 'clock' },
+  { id: 'events', name: 'Лента событий', hint: 'что произошло только что', cat: 'summary', icon: 'activity' },
+  { id: 'map', name: 'Карта жалоб', hint: 'карта России с инцидентами', cat: 'summary', icon: 'map' },
+  { id: 'assistant', name: 'ИИ-помощник', hint: 'главное сейчас, риск, кому передать, команды Джарвису', cat: 'ai', icon: 'bot' },
+  { id: 'character', name: 'Персонаж', hint: 'Джарвис, Ника, Капитан или Дед Мороз комментируют обстановку', cat: 'ai', icon: 'smile' },
+  { id: 'rotate', name: 'Сменяемая панель', hint: 'по очереди: помощник, передачи, цифры, лента', cat: 'ai', icon: 'repeat' },
+  { id: 'note', name: 'Заметка', hint: 'свой текст: дежурные телефоны, напоминание смене', cat: 'own', icon: 'note' },
+  { id: 'custom', name: 'Свой блок', hint: 'придуманный ChatGPT по вашему описанию', cat: 'own', icon: 'sparkles' },
 ];
 export const BLOCK_NAME: Record<BlockId, string> = Object.fromEntries(BLOCKS.map((b) => [b.id, b.name])) as Record<BlockId, string>;
 
@@ -171,11 +187,24 @@ export interface DashColumn {
   block: BlockId;
   width: number; // доля ширины, 1–3
   scale?: number; // размер текста блока, 0.7–1.6
-  opts?: Record<string, boolean | number>; // собственные настройки блока
+  opts?: Record<string, boolean | number | string>; // собственные настройки блока
 }
-export type PresetId = 'case' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
-export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashColumn[]; filter?: DashGroup | null; density?: 'normal' | 'large' }[] = [
+export type PresetId = 'case' | 'board' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
+export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashColumn[]; grid?: { block: BlockId; x: number; y: number; w: number; h: number; opts?: Record<string, boolean | number | string> }[]; filter?: DashGroup | null; density?: 'normal' | 'large' }[] = [
   { id: 'case', name: 'Кейс: три экрана', hint: 'слева сменяемая панель, в центре — что требует действия, справа — в работе у команд', columns: [{ block: 'rotate', width: 1 }, { block: 'action', width: 1.5 }, { block: 'work', width: 1.4 }] },
+  {
+    id: 'board',
+    name: 'Свободное поле',
+    hint: 'персонаж, риск, что требует действия, критические и работа команд — блоками на поле',
+    columns: [],
+    grid: [
+      { block: 'character', x: 0, y: 0, w: 3, h: 5, opts: { persona: 'jarvis' } },
+      { block: 'risk', x: 0, y: 5, w: 3, h: 7 },
+      { block: 'action', x: 3, y: 0, w: 5, h: 12 },
+      { block: 'group', x: 8, y: 0, w: 4, h: 5, opts: { group: 'coord' } },
+      { block: 'work', x: 8, y: 5, w: 4, h: 7 },
+    ],
+  },
   { id: 'groups', name: 'Четыре группы', hint: 'группы кейса колонками и ИИ-помощник', columns: [{ block: 'groups', width: 3 }, { block: 'assistant', width: 1 }] },
   { id: 'ai', name: 'ИИ-центр', hint: 'помощник, действия и история передач', columns: [{ block: 'assistant', width: 1.1 }, { block: 'action', width: 1.5 }, { block: 'transfers', width: 1 }] },
   { id: 'critical', name: 'Только критичное', hint: 'критические крупно и их история', columns: [{ block: 'action', width: 2 }, { block: 'transfers', width: 1 }], filter: 'crit', density: 'large' },
@@ -201,4 +230,7 @@ export type DashOp =
   | { op: 'settings'; open: boolean }
   | { op: 'customStyle'; style: import('./dashStyles.ts').DashStyle; preset?: PresetId | null; density?: 'normal' | 'large' | null }
   | { op: 'removeStyle'; id: string }
+  | { op: 'add'; block: BlockId; x?: number; y?: number; w?: number; h?: number; opts?: Record<string, boolean | number | string>; custom?: import('./dashCustom.ts').CustomSpec }
+  | { op: 'item'; id: string; patch: Partial<import('./dashGrid.ts').GridItem> }
+  | { op: 'remove'; id: string }
   | { op: 'reset' };

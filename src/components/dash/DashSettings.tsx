@@ -1,17 +1,16 @@
 // «Настройки дашборда»: раскладка блоков (готовая или своя), стиль из 26, тревоги, Джарвис и поведение.
 // Всё сохраняется в этом браузере и сразу доходит до окна стены.
 import { useState } from 'react';
-import { ArrowLeft, ArrowRight, Lock, Plus, RotateCcw, Sparkles, Trash2, Unlock, X } from 'lucide-react';
-import { BLOCKS, DASH_GROUPS, PRESETS, type BlockId, type DashGroup } from '../../../shared/dash';
+import { Lock, Plus, RotateCcw, Sparkles, Unlock, X } from 'lucide-react';
+import { BLOCK_NAME, DASH_GROUPS, PRESETS, type DashGroup } from '../../../shared/dash';
+import { readingOrder } from '../../../shared/dashGrid';
 import { DASH_STYLES, type DashStyle } from '../../../shared/dashStyles';
-import { DEFAULT_DASH, applyDashOp, dashEvent, setDash, useDash } from '../../lib/dashLayout';
+import { DEFAULT_DASH, applyDashOp, dashEvent, presetItems, setDash, useDash } from '../../lib/dashLayout';
 import { applyDesign, askDesign, type DesignTurn } from '../../lib/dashDesign';
 import { PersonaPicker, jarvisPrefs, setJarvisPref } from '../Jarvis';
 
 export function DashSettings({ onClose }: { onClose: () => void }) {
   const d = useDash();
-  const cols = d.columns;
-  const setCols = (next: typeof cols) => setDash({ preset: 'custom', columns: next });
   return (
     <div className="dset-wrap" onClick={onClose}>
       <aside className="dset" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Настройки дашборда">
@@ -62,59 +61,52 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
 
         {d.preset !== 'legacy' && (
           <section>
-            <h3>Своя раскладка — колонки слева направо</h3>
-            <div className="dset-cols">
-              {cols.map((c, k) => (
-                <div key={k} className="dset-col">
-                  <span className="dset-n">{k + 1}</span>
-                  <select value={c.block} onChange={(e) => applyDashOp({ op: 'replace', at: k, block: e.target.value as BlockId })} aria-label={`Блок в колонке ${k + 1}`}>
-                    {BLOCKS.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                  <label className="dset-w" title="Ширина колонки">
-                    <input type="range" min={0.6} max={3} step={0.05} value={c.width} onChange={(e) => setCols(cols.map((x, n) => (n === k ? { ...x, width: +e.target.value } : x)))} aria-label={`Ширина колонки ${k + 1}`} />
-                    <b className="num">{c.width.toFixed(1)}</b>
-                  </label>
-                  <button disabled={k === 0} onClick={() => applyDashOp({ op: 'swap', a: k, b: k - 1 })} aria-label="Левее">
-                    <ArrowLeft size={14} />
-                  </button>
-                  <button disabled={k === cols.length - 1} onClick={() => applyDashOp({ op: 'swap', a: k, b: k + 1 })} aria-label="Правее">
-                    <ArrowRight size={14} />
-                  </button>
-                  <button disabled={cols.length <= 1} onClick={() => setCols(cols.filter((_, n) => n !== k))} aria-label="Убрать колонку">
-                    <Trash2 size={14} />
-                  </button>
-                  <small className="dset-hint">
-                    {BLOCKS.find((b) => b.id === c.block)?.hint}{' '}
-                    <button
-                      className="dset-link"
-                      onClick={() => {
-                        dashEvent({ type: 'edit', on: true, k });
-                        onClose();
-                      }}
-                    >
-                      Настроить блок на стене →
-                    </button>
+            <h3>
+              Блоки на поле <small>{d.items.length} · поле 12×12</small>
+            </h3>
+            <div className="dset-items">
+              {readingOrder(d.items).map((it) => (
+                <div key={it.id} className="dset-item">
+                  <b>{it.custom?.title ?? BLOCK_NAME[it.block]}</b>
+                  <small className="num">
+                    {it.w}×{it.h}
                   </small>
+                  <button
+                    className="dset-link"
+                    onClick={() => {
+                      dashEvent({ type: 'edit', on: true, id: it.id });
+                      onClose();
+                    }}
+                  >
+                    настроить
+                  </button>
+                  <button className="dset-link" disabled={d.items.length <= 1} onClick={() => applyDashOp({ op: 'remove', id: it.id })}>
+                    убрать
+                  </button>
                 </div>
               ))}
             </div>
             <div className="dset-row">
-              <button className="dset-btn" disabled={cols.length >= 4} onClick={() => setCols([...cols, { block: BLOCKS.find((b) => !cols.some((c) => c.block === b.id))?.id ?? 'events', width: 1 }])}>
-                <Plus size={14} /> Добавить колонку
-              </button>
               <button
                 className="dset-btn on"
+                onClick={() => {
+                  dashEvent({ type: 'gallery', open: true, at: null });
+                  onClose();
+                }}
+              >
+                <Plus size={14} /> Добавить блок
+              </button>
+              <button
+                className="dset-btn"
                 onClick={() => {
                   dashEvent({ type: 'edit', on: true });
                   onClose();
                 }}
               >
-                Изменить блоки прямо на стене
+                Двигать и растягивать на стене
               </button>
+            </div>
+            <div className="dset-row">
               <label className="dset-check">
                 <input type="checkbox" checked={d.counters} onChange={(e) => setDash({ counters: e.target.checked })} /> Шапка со счётчиками групп
               </label>
@@ -231,7 +223,7 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
 
         </fieldset>
         <footer className="dset-f">
-          <button className="dset-btn" onClick={() => setDash({ ...DEFAULT_DASH, columns: DEFAULT_DASH.columns.map((c) => ({ ...c })) })}>
+          <button className="dset-btn" onClick={() => setDash({ ...DEFAULT_DASH, items: presetItems('case') })}>
             <RotateCcw size={14} /> Вернуть всё по умолчанию
           </button>
         </footer>

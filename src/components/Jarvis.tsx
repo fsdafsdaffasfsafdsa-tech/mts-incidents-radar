@@ -23,7 +23,8 @@ type Action =
   | { type: 'show'; what: string }
   | { type: 'report' }
   | { type: 'dash'; cmd: DashOp }
-  | { type: 'design'; prompt: string };
+  | { type: 'design'; prompt: string }
+  | { type: 'block'; prompt: string; character: boolean };
 interface Status {
   llm: boolean;
   tts: boolean;
@@ -451,6 +452,10 @@ function runActions(actions: Action[]) {
         // Стена в отдельном окне получит изменение сама; иначе возвращаемся на главный экран — дашборд.
         if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && isWorkOpen() && getState().tab !== 'wall') closeWork();
         setTimeout(() => applyDashOp(a.cmd), 60);
+        break;
+      case 'block':
+        if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && isWorkOpen() && getState().tab !== 'wall') closeWork();
+        void import('../lib/dashDesign').then((m) => m.makeBlockNow(a.prompt, a.character));
         break;
       case 'design':
         if (!new URLSearchParams(location.search).has('wall') && !wallWindowOpen() && isWorkOpen() && getState().tab !== 'wall') closeWork();

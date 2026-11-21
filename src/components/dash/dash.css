@@ -2320,3 +2320,21 @@ body.dash-resizing * {
   text-overflow: ellipsis;
   display: block;
 }
+
+.dset-items {
+  display: grid;
+  gap: 6px;
+}
+.dset-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+.dset-item small {
+  color: var(--text-3);
+}

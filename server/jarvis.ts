@@ -18,7 +18,7 @@ import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
 import { myShiftWork } from '../shared/shift.ts';
 import type { DashOp } from '../shared/dash.ts';
 import { personaById } from '../shared/personas.ts';
-import { DASH_NOTE, DASH_TOOL, DESIGN_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
+import { BLOCK_TOOL, DASH_NOTE, DASH_TOOL, DESIGN_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
 
 const MIN = 60_000;
 export const key = () => process.env.OPENROUTER_API_KEY || '';
@@ -49,7 +49,8 @@ export type ClientAction =
   | { type: 'show'; what: Show } // прокрутить карточку к разделу, который изменился, и подсветить
   | { type: 'report' } // собрать и скачать отчёт смены в PDF
   | { type: 'dash'; cmd: DashOp } // перестроить видеостену (дашборд)
-  | { type: 'design'; prompt: string }; // придумать оформление стены по описанию (ChatGPT, в браузере)
+  | { type: 'design'; prompt: string } // придумать оформление стены по описанию (ChatGPT, в браузере)
+  | { type: 'block'; prompt: string; character: boolean }; // собрать свой блок или персонажа (ChatGPT) и поставить на поле
 export type Show = 'top' | 'who' | 'route' | 'level' | 'p1' | 'signal' | 'chat' | 'decide';
 export interface JarvisAsk {
   text: string;
@@ -393,6 +394,8 @@ class Exec {
         return v('Перестраиваю видеостену', 'Перестроил видеостену');
       case 'design_dashboard':
         return v('Придумываю оформление стены', 'Придумал оформление стены');
+      case 'create_block':
+        return a.character === true ? v('Придумываю персонажа', 'Придумал персонажа') : v('Собираю новый блок', 'Собрал новый блок');
     }
     return v('Работаю', 'Сделал');
   }
@@ -462,6 +465,16 @@ class Exec {
         this.actions.push({ type: 'design', prompt });
         this.done.push(`Стена: ChatGPT придумывает оформление «${prompt.slice(0, 60)}»`);
         return 'оформление придумывается и появится на стене через несколько секунд';
+      }
+      case 'create_block': {
+        if (!this.dash.allowed && this.mode !== 'control') throw new Error('перестраивать дашборд Джарвису не разрешено — включите это в настройках дашборда');
+        if (this.dash.ctx?.locked) throw new Error('интерфейс закреплён за сотрудником — сначала открепите его в настройках дашборда');
+        const prompt = String(a.prompt ?? '').trim();
+        if (!prompt) throw new Error('опишите, какой блок нужен');
+        const character = a.character === true;
+        this.actions.push({ type: 'block', prompt, character });
+        this.done.push(`Стена: ChatGPT собирает ${character ? 'персонажа' : 'блок'} «${prompt.slice(0, 50)}»`);
+        return 'блок собирается и появится на стене через несколько секунд (персонаж с портретом — около минуты)';
       }
       case 'shift_report':
         this.control();
@@ -660,7 +673,7 @@ async function llm(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefi
     ...q.history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }) as Msg),
     { role: 'user', content: q.text.slice(0, 500) },
   ];
-  const tools = [...INFO_TOOLS, ...(q.mode === 'control' ? CONTROL_TOOLS : []), ...(dashOk ? [DASH_TOOL, DESIGN_TOOL] : [])];
+  const tools = [...INFO_TOOLS, ...(q.mode === 'control' ? CONTROL_TOOLS : []), ...(dashOk ? [DASH_TOOL, DESIGN_TOOL, BLOCK_TOOL] : [])];
   let nudged = false;
   emit({ type: 'step', id: 'think', text: 'Думаю над ответом', state: 'run' });
   for (let round = 0; round < 6; round++) {
@@ -737,7 +750,7 @@ function rules(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined)
   };
 
   // Команды видеостене: «покажи только критические», «поменяй местами блоки», «сделай неон»…
-  const dashReply = dashRules(text, q.dash ?? null, (a) => (a.op === '__design' ? tryRun('design_dashboard', { prompt: a.prompt }) : tryRun('dashboard', a)), q.tab === 'wall');
+  const dashReply = dashRules(text, q.dash ?? null, (a) => (a.op === '__design' ? tryRun('design_dashboard', { prompt: a.prompt }) : a.op === '__block' ? tryRun('create_block', { prompt: a.prompt, character: a.character }) : tryRun('dashboard', a)), q.tab === 'wall');
   if (dashReply) return say(dashReply);
   if (/кому .*(дать|переда|отда|поруч)|кто .*(возьм|подойд)/.test(text)) {
     const i = focus();

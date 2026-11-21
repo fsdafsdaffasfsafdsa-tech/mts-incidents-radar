@@ -1,15 +1,17 @@
 // Дашборд координатора — видеостена по кейсу. Видно с расстояния; блоки, стиль и поведение настраиваются
 // в «Настройках дашборда» или голосом через Джарвиса. Прежняя стена — раскладка «Прежняя стена».
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowLeftRight, ArrowRight, BellRing, Bot, CheckCircle2, Expand, LayoutGrid, MonitorUp, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowLeftRight, BellRing, Bot, CheckCircle2, Expand, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import type { FeedEvent, Incident } from '../../../shared/types';
-import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, type DashColumn, fmtShort, groupsOf, riskOf, transferCount, transfers, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
+import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, fmtShort, groupsOf, riskOf, transferCount, transfers, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
 import type { DashStyle } from '../../../shared/dashStyles';
 import { personaById } from '../../../shared/personas';
 import { openIncident, setTab, teamName, useStore } from '../../store';
 import { fmtClock } from '../../lib/format';
 import { useNow } from '../../lib/hooks';
-import { applyDashOp, currentStyle, getDash, openWallWindow, openWork, setDash, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
+import { applyDashOp, currentStyle, dashEvent, getDash, openWallWindow, openWork, setDash, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
+import { GRID_COLS, GRID_ROWS, fit, free, type GridItem, type Rect } from '../../../shared/dashGrid';
+import { BlockGallery, CharacterBlock, ClockBlock, CountersBlock, CustomBlock, GroupBlock, NoteBlock, RiskBlock, RouteBlock, TeamsBlock } from './blocks2';
 import { BLOCK_OPTS } from './blockOpts';
 import { Jarvis, jarvisAsk, jarvisPrefs, jarvisReady } from '../Jarvis';
 import { RFMap } from '../RFMap';
@@ -17,17 +19,19 @@ import { Spark } from '../kit';
 import { WallPage } from '../WallPage';
 import { DashSettings } from './DashSettings';
 import './dash.css';
+import './dash-grid.css';
 
 const MIN = 60_000;
-type Opts = Record<string, boolean | number> | undefined;
-const ob = (o: Opts, k: string, def = true) => (typeof o?.[k] === 'boolean' ? (o[k] as boolean) : def);
-const on = (o: Opts, k: string, def: number) => (typeof o?.[k] === 'number' ? (o[k] as number) : def);
-const PRIO: Record<Incident['priority'], string> = { P1: 'Критический', P2: 'Высокий', P3: 'Средний', P4: 'Низкий' };
+export type Opts = Record<string, boolean | number | string> | undefined;
+export const ob = (o: Opts, k: string, def = true) => (typeof o?.[k] === 'boolean' ? (o[k] as boolean) : def);
+export const on = (o: Opts, k: string, def: number) => (typeof o?.[k] === 'number' ? (o[k] as number) : def);
+export const os = (o: Opts, k: string, def: string) => (typeof o?.[k] === 'string' ? (o[k] as string) : def);
+export const PRIO: Record<Incident['priority'], string> = { P1: 'Критический', P2: 'Высокий', P3: 'Средний', P4: 'Низкий' };
 const shortId = (id: string) => id.replace(/^INC0*/, 'INC ');
-const who = (i: Incident) =>
+export const who = (i: Incident) =>
   i.status === 'coordinators' ? `На координаторах${i.coordinatorName ? ` · ведёт ${i.coordinatorName}` : ''}` : `${teamName(i.teamId)}${i.assigneeName ? ` · ${i.assigneeName}` : ' · никто не взял'}`;
-const frac = (i: Incident, now: number) => Math.min(1, Math.max(0, (now - i.createdAt) / Math.max(MIN, i.slaDeadline - i.createdAt)));
-const leftText = (i: Incident, now: number) => (i.slaDeadline - now > 0 ? fmtShort(i.slaDeadline - now) : `−${fmtShort(now - i.slaDeadline)}`);
+export const frac = (i: Incident, now: number) => Math.min(1, Math.max(0, (now - i.createdAt) / Math.max(MIN, i.slaDeadline - i.createdAt)));
+export const leftText = (i: Incident, now: number) => (i.slaDeadline - now > 0 ? fmtShort(i.slaDeadline - now) : `−${fmtShort(now - i.slaDeadline)}`);
 
 /** Текст на кнопке цвета акцента: тёмный на светлом акценте (золото, жёлтый), белый — на тёмном. */
 function onColor(c: string): string {
@@ -95,13 +99,15 @@ export function Dashboard({ standalone = false, home = false }: { standalone?: b
   const [settings, setSettings] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [designing, setDesigning] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ on: boolean; k: number | null }>({ on: false, k: null });
+  const [editing, setEditing] = useState<Editing>({ on: false, id: null });
+  const [gallery, setGallery] = useState<{ open: boolean; at: { x: number; y: number } | null }>({ open: false, at: null });
   useDashEvents(
     useCallback((e) => {
       if (e.type === 'settings') setSettings(e.open);
       if (e.type === 'focus') setFocusId(e.id);
       if (e.type === 'designing') setDesigning(e.text);
-      if (e.type === 'edit') setEditing({ on: e.on, k: e.k ?? null });
+      if (e.type === 'edit') setEditing({ on: e.on, id: e.id ?? null });
+      if (e.type === 'gallery') setGallery({ open: e.open, at: e.at ?? null });
     }, []),
   );
   if (d.preset === 'legacy')
@@ -119,10 +125,11 @@ export function Dashboard({ standalone = false, home = false }: { standalone?: b
     );
   return (
     <>
-      <DashWall d={d} standalone={standalone} home={home} settings={settings} setSettings={setSettings} focusId={focusId} setFocusId={setFocusId} editing={d.locked ? { on: false, k: null } : editing} setEditing={setEditing} />
+      <DashWall d={d} standalone={standalone} home={home} settings={settings} setSettings={setSettings} focusId={focusId} setFocusId={setFocusId} editing={d.locked ? { on: false, id: null } : editing} setEditing={setEditing} />
+      {gallery.open && !d.locked && <BlockGallery at={gallery.at} onClose={() => setGallery({ open: false, at: null })} />}
       {designing && (
         <div className="dash-designing" role="status">
-          <Sparkles size={16} /> ChatGPT придумывает оформление: «{designing.length > 70 ? `${designing.slice(0, 68)}…` : designing}»
+          <Sparkles size={16} /> {/^(ChatGPT|GPT)/.test(designing) ? designing : `ChatGPT придумывает оформление: «${designing.length > 70 ? `${designing.slice(0, 68)}…` : designing}»`}
         </div>
       )}
     </>
@@ -138,7 +145,7 @@ function WorkButton() {
   );
 }
 
-function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocusId, editing, setEditing }: { d: DashLayout; standalone: boolean; home: boolean; settings: boolean; setSettings: (v: boolean) => void; focusId: string | null; setFocusId: (v: string | null) => void; editing: { on: boolean; k: number | null }; setEditing: (v: { on: boolean; k: number | null }) => void }) {
+function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocusId, editing, setEditing }: { d: DashLayout; standalone: boolean; home: boolean; settings: boolean; setSettings: (v: boolean) => void; focusId: string | null; setFocusId: (v: string | null) => void; editing: Editing; setEditing: (v: Editing) => void }) {
   const incidents = useStore((s) => s.incidents);
   const now = useNow(1000);
   const style = currentStyle(d);
@@ -152,13 +159,17 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
     return () => document.removeEventListener('fullscreenchange', f);
   }, []);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && (setFocusId(null), alerts.dismiss(), setEditing({ on: false, k: null }));
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && (setFocusId(null), alerts.dismiss(), setEditing({ on: false, id: null }));
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, [alerts, setFocusId, setEditing]);
   const ctx: BlockCtx = { snap, now, d, style, open, standalone };
-  const inWall = new Set(d.columns.map((c) => c.block));
-  const colsRef = useRef<HTMLDivElement>(null);
+  const inWall = new Set<BlockId>(d.items.map((c) => c.block));
+  // Пока меняем блоки — шар помощника не закрывает правый нижний угол поля.
+  useEffect(() => {
+    document.body.classList.toggle('dash-editing', editing.on);
+    return () => document.body.classList.remove('dash-editing');
+  }, [editing.on]);
   return (
     <div
       className={`dash ${standalone || home ? 'standalone' : ''} ${home ? 'home' : ''} ${alerts.top?.kind === 'crit' ? 'dash-alarm' : ''}`}
@@ -174,41 +185,16 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
       {alerts.list.length > 0 && <AlertStrip list={alerts.list} now={now} onClose={alerts.dismiss} onOpen={(id) => setFocusId(id)} />}
       {editing.on && (
         <div className="dash-editbar">
-          <b>Изменение блоков</b>
-          <span>тяните границу между блоками · нажмите на блок — его настройки</span>
+          <b>Свободное поле</b>
+          <span>тяните блок за шапку · угол — размер · пустая клетка — добавить сюда · клик по блоку — его настройки</span>
           <span className="db-sp" />
-          <button disabled={d.columns.length >= 4} onClick={() => setDash({ preset: 'custom', columns: [...d.columns, { block: (['events', 'transfers', 'stats', 'assistant', 'map', 'groups', 'work', 'action'] as BlockId[]).find((b) => !inWall.has(b)) ?? 'events', width: 1 }] })}>
-            + Колонка
-          </button>
-          <button className="on" onClick={() => setEditing({ on: false, k: null })}>
+          <button onClick={() => dashEvent({ type: 'gallery', open: true, at: null })}>+ Добавить блок</button>
+          <button className="on" onClick={() => setEditing({ on: false, id: null })}>
             Готово
           </button>
         </div>
       )}
-      <div ref={colsRef} className={`dash-cols ${editing.on ? 'editing' : ''}`} style={{ gridTemplateColumns: d.columns.map((c) => `minmax(0, ${c.width}fr)`).join(' ') }}>
-        {d.columns.map((c, k) => (
-          <section
-            key={`${k}-${c.block}`}
-            className={`dash-col b-${c.block} ${editing.on ? 'edit' : ''} ${editing.k === k ? 'sel' : ''}`}
-            style={c.scale && c.scale !== 1 ? { fontSize: `${c.scale}em` } : undefined}
-            onClickCapture={
-              editing.on
-                ? (e) => {
-                    if ((e.target as Element).closest('.dce')) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setEditing({ on: true, k });
-                  }
-                : undefined
-            }
-          >
-            <Block id={c.block} ctx={ctx} skip={inWall} o={c.opts} />
-            {editing.on && <ColBar k={k} n={d.columns.length} c={c} onEdit={() => setEditing({ on: true, k })} />}
-            {editing.on && k < d.columns.length - 1 && <Splitter k={k} colsRef={colsRef} />}
-            {editing.on && editing.k === k && <BlockEditor k={k} c={c} onClose={() => setEditing({ on: true, k: null })} />}
-          </section>
-        ))}
-      </div>
+      <GridField d={d} ctx={ctx} inWall={inWall} editing={editing} setEditing={setEditing} />
       {d.ticker && <DashTicker />}
       {focusId && <FocusCard id={focusId} now={now} onClose={() => setFocusId(null)} />}
       {settings && <DashSettings onClose={() => setSettings(false)} />}
@@ -217,8 +203,11 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
           <button onClick={() => setSettings(true)} title="Блоки, стиль, тревоги, Джарвис">
             <Settings2 size={15} /> Настройки
           </button>
-          <button className={editing.on ? 'on' : ''} disabled={d.locked} onClick={() => setEditing({ on: !editing.on, k: null })} title={d.locked ? 'Интерфейс закреплён — открепите в настройках' : 'Тянуть границы между блоками, настраивать каждый блок'}>
+          <button className={editing.on ? 'on' : ''} disabled={d.locked} onClick={() => setEditing({ on: !editing.on, id: null })} title={d.locked ? 'Интерфейс закреплён — открепите в настройках' : 'Свободное поле: двигать, растягивать, добавлять блоки'}>
             <SlidersHorizontal size={15} /> Изменить блоки
+          </button>
+          <button disabled={d.locked} onClick={() => dashEvent({ type: 'gallery', open: true, at: null })} title="Выбрать и добавить блок на стену">
+            <Plus size={15} /> Добавить блок
           </button>
           {!standalone && (
             <button onClick={openWallWindow} title="Открыть в отдельном окне — перенести на экран стены">
@@ -303,7 +292,7 @@ function DashHeader({ snap, now, d, home, garland }: { snap: DashSnapshot; now: 
 }
 
 // ─── блоки ────────────────────────────────────────────────────────────────
-interface BlockCtx {
+export interface BlockCtx {
   snap: DashSnapshot;
   now: number;
   d: DashLayout;
@@ -311,8 +300,26 @@ interface BlockCtx {
   open: (i: Incident) => void;
   standalone: boolean;
 }
-function Block({ id, ctx, skip, o }: { id: BlockId; ctx: BlockCtx; skip: Set<BlockId>; o?: Opts }) {
+function Block({ id, ctx, skip, o, it }: { id: BlockId; ctx: BlockCtx; skip: Set<BlockId>; o?: Opts; it?: GridItem }) {
   switch (id) {
+    case 'clock':
+      return <ClockBlock now={ctx.now} />;
+    case 'counters':
+      return <CountersBlock ctx={ctx} />;
+    case 'group':
+      return <GroupBlock ctx={ctx} o={o} />;
+    case 'character':
+      return <CharacterBlock ctx={ctx} o={o} spec={it?.custom} />;
+    case 'risk':
+      return <RiskBlock ctx={ctx} />;
+    case 'route':
+      return <RouteBlock ctx={ctx} />;
+    case 'teams':
+      return <TeamsBlock ctx={ctx} />;
+    case 'note':
+      return <NoteBlock o={o} />;
+    case 'custom':
+      return it?.custom ? it.custom.kind === 'character' ? <CharacterBlock ctx={ctx} o={o} spec={it.custom} /> : <CustomBlock ctx={ctx} spec={it.custom} /> : null;
     case 'action':
       return <ActionBlock ctx={ctx} o={o} />;
     case 'work':
@@ -341,7 +348,7 @@ function Block({ id, ctx, skip, o }: { id: BlockId; ctx: BlockCtx; skip: Set<Blo
   }
 }
 
-function BlockHead({ title, count, right, icon }: { title: string; count?: number; right?: React.ReactNode; icon?: React.ReactNode }) {
+export function BlockHead({ title, count, right, icon }: { title: string; count?: number; right?: React.ReactNode; icon?: React.ReactNode }) {
   return (
     <div className="db-head">
       {icon}
@@ -397,7 +404,7 @@ function PagerFoot({ p, total }: { p: ReturnType<typeof useFitPager>; total: num
   );
 }
 
-function GroupTags({ i, skip }: { i: Incident; skip?: DashGroup }) {
+export function GroupTags({ i, skip }: { i: Incident; skip?: DashGroup }) {
   const g = groupsOf(i).filter((x) => x !== skip);
   if (!g.length) return null;
   return (
@@ -1040,90 +1047,52 @@ function AlertStrip({ list, now, onClose, onOpen }: { list: Alert[]; now: number
 }
 
 // ─── «Изменить блоки»: панель колонки, граница-ползунок, настройки блока ───
-function ColBar({ k, n, c, onEdit }: { k: number; n: number; c: DashColumn; onEdit: () => void }) {
-  return (
-    <div className="dce dce-bar">
-      <button className="dce-name" onClick={onEdit} title="Настройки этого блока">
-        <SlidersHorizontal size={14} /> {BLOCK_NAME[c.block]}
-      </button>
-      <button disabled={k === 0} onClick={() => applyDashOp({ op: 'swap', a: k, b: k - 1 })} aria-label="Левее">
-        <ArrowLeft size={14} />
-      </button>
-      <button disabled={k === n - 1} onClick={() => applyDashOp({ op: 'swap', a: k, b: k + 1 })} aria-label="Правее">
-        <ArrowRight size={14} />
-      </button>
-      <button disabled={n <= 1} onClick={() => setDash((d) => ({ preset: 'custom', columns: d.columns.filter((_, x) => x !== k) }))} aria-label="Убрать блок">
-        <Trash2 size={14} />
-      </button>
-    </div>
-  );
-}
+
 
 /** Граница между колонками: тянешь мышью — колонки делят место. */
-function Splitter({ k, colsRef }: { k: number; colsRef: React.RefObject<HTMLDivElement | null> }) {
-  const down = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const secs = colsRef.current?.querySelectorAll<HTMLElement>(':scope > .dash-col');
-    if (!secs || !secs[k + 1]) return;
-    const a = secs[k].getBoundingClientRect().width;
-    const b = secs[k + 1].getBoundingClientRect().width;
-    const start = getDash().columns.map((c) => ({ ...c }));
-    const fa = start[k].width;
-    const fb = start[k + 1].width;
-    const x0 = e.clientX;
-    let raf = 0;
-    const move = (ev: PointerEvent) => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const dx = Math.max(-a + 140, Math.min(b - 140, ev.clientX - x0));
-        const total = fa + fb;
-        let na = (total * (a + dx)) / (a + b);
-        na = Math.max(0.6, Math.min(3, Math.min(total - 0.6, na)));
-        const cols = start.map((c, x) => (x === k ? { ...c, width: +na.toFixed(2) } : x === k + 1 ? { ...c, width: +(total - na).toFixed(2) } : c));
-        setDash({ preset: 'custom', columns: cols });
-      });
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      document.body.classList.remove('dash-resizing');
-    };
-    document.body.classList.add('dash-resizing');
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  };
-  return <div className="dce dce-split" onPointerDown={down} title="Тяните, чтобы поменять ширину" role="separator" aria-orientation="vertical" />;
-}
+
 
 /** Настройки одного блока: что в нём, ширина, размер текста и его собственные переключатели. */
-function BlockEditor({ k, c, onClose }: { k: number; c: DashColumn; onClose: () => void }) {
-  const set = (patch: Partial<DashColumn>) => setDash((d) => ({ preset: 'custom', columns: d.columns.map((x, n) => (n === k ? { ...x, ...patch } : x)) }));
-  const setOpt = (key: string, v: boolean | number) => set({ opts: { ...(c.opts ?? {}), [key]: v } });
-  const scale = c.scale ?? 1;
+/** Настройки одного блока: что в нём, размер на поле, размер текста и его собственные переключатели. */
+function BlockEditor({ it, onClose }: { it: GridItem; onClose: () => void }) {
+  const set = (patch: Partial<GridItem>) => applyDashOp({ op: 'item', id: it.id, patch });
+  const setOpt = (key: string, v: boolean | number | string) => set({ opts: { ...(it.opts ?? {}), [key]: v } });
+  const scale = it.scale ?? 1;
+  const tryRect = (r: Partial<GridItem>) => {
+    const next = { ...it, ...r };
+    if (free(getDash().items, next, it.id)) set(r);
+  };
   return (
-    <div className="dce dce-pop" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="dce dce-pop" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <header>
-        <b>{BLOCK_NAME[c.block]}</b>
+        <b>{it.custom?.title ?? BLOCK_NAME[it.block]}</b>
         <button onClick={onClose} aria-label="Закрыть">
           <X size={16} />
         </button>
       </header>
+      {it.block !== 'custom' && (
+        <label>
+          Что в блоке
+          <select value={it.block} onChange={(e) => set({ block: e.target.value as BlockId, opts: undefined })}>
+            {BLOCKS.filter((b) => b.id !== 'custom').map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label>
-        Что в блоке
-        <select value={c.block} onChange={(e) => applyDashOp({ op: 'replace', at: k, block: e.target.value as BlockId })}>
-          {BLOCKS.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
+        <span>
+          Ширина <b className="num">{it.w} из 12</b>
+        </span>
+        <input type="range" min={2} max={12} step={1} value={it.w} onChange={(e) => tryRect({ w: +e.target.value, x: Math.min(it.x, 12 - +e.target.value) })} />
       </label>
       <label>
         <span>
-          Ширина <b className="num">{c.width.toFixed(1)}</b>
+          Высота <b className="num">{it.h} из 12</b>
         </span>
-        <input type="range" min={0.6} max={3} step={0.05} value={c.width} onChange={(e) => set({ width: +e.target.value })} />
+        <input type="range" min={2} max={12} step={1} value={it.h} onChange={(e) => tryRect({ h: +e.target.value, y: Math.min(it.y, 12 - +e.target.value) })} />
       </label>
       <label>
         <span>
@@ -1131,30 +1100,146 @@ function BlockEditor({ k, c, onClose }: { k: number; c: DashColumn; onClose: () 
         </span>
         <input type="range" min={0.7} max={1.6} step={0.05} value={scale} onChange={(e) => set({ scale: +e.target.value })} />
       </label>
-      {(BLOCK_OPTS[c.block] ?? []).map((o) =>
+      {(BLOCK_OPTS[it.block] ?? []).map((o) =>
         o.type === 'bool' ? (
           <label key={o.key} className="dce-check">
-            <input type="checkbox" checked={ob(c.opts, o.key, o.def as boolean)} onChange={(e) => setOpt(o.key, e.target.checked)} /> {o.label}
+            <input type="checkbox" checked={ob(it.opts, o.key, o.def)} onChange={(e) => setOpt(o.key, e.target.checked)} /> {o.label}
           </label>
-        ) : (
+        ) : o.type === 'range' ? (
           <label key={o.key}>
             <span>
               {o.label}{' '}
               <b className="num">
-                {on(c.opts, o.key, o.def as number)}
+                {on(it.opts, o.key, o.def)}
                 {o.unit ?? ''}
               </b>
             </span>
-            <input type="range" min={o.min} max={o.max} step={o.step ?? 1} value={on(c.opts, o.key, o.def as number)} onChange={(e) => setOpt(o.key, +e.target.value)} />
+            <input type="range" min={o.min} max={o.max} step={o.step ?? 1} value={on(it.opts, o.key, o.def)} onChange={(e) => setOpt(o.key, +e.target.value)} />
+          </label>
+        ) : o.type === 'choice' ? (
+          <label key={o.key}>
+            {o.label}
+            <select value={os(it.opts, o.key, o.def)} onChange={(e) => setOpt(o.key, e.target.value)}>
+              {o.choices.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label key={o.key}>
+            {o.label}
+            <textarea rows={4} value={os(it.opts, o.key, o.def)} onChange={(e) => setOpt(o.key, e.target.value.slice(0, 1500))} />
           </label>
         ),
       )}
       <footer>
-        <button onClick={() => set({ opts: undefined, scale: 1 })}>Сбросить блок</button>
+        <button onClick={() => set({ opts: undefined, scale: 1 })}>Сбросить</button>
+        <button onClick={() => applyDashOp({ op: 'remove', id: it.id })}>Убрать</button>
         <button className="on" onClick={onClose}>
           Готово
         </button>
       </footer>
+    </div>
+  );
+}
+
+type Editing = { on: boolean; id: string | null };
+
+/** Свободное поле 12×12: блоки где угодно; в режиме изменения — перенос, размер, добавление в пустую клетку. */
+function GridField({ d, ctx, inWall, editing, setEditing }: { d: DashLayout; ctx: BlockCtx; inWall: Set<BlockId>; editing: Editing; setEditing: (v: Editing) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<{ id: string; r: Rect; ok: boolean } | null>(null);
+  const cell = () => {
+    const el = ref.current!;
+    const box = el.getBoundingClientRect();
+    const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+    return { box, cw: (box.width + gap) / GRID_COLS, ch: (box.height + gap) / GRID_ROWS };
+  };
+  const start = (e: React.PointerEvent, it: GridItem, mode: 'move' | 'size') => {
+    e.preventDefault();
+    e.stopPropagation();
+    const { cw, ch } = cell();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let last: { r: Rect; ok: boolean } | null = null;
+    const move = (ev: PointerEvent) => {
+      const dx = Math.round((ev.clientX - x0) / cw);
+      const dy = Math.round((ev.clientY - y0) / ch);
+      const r = mode === 'move' ? fit({ x: it.x + dx, y: it.y + dy, w: it.w, h: it.h }) : fit({ x: it.x, y: it.y, w: it.w + dx, h: it.h + dy });
+      const ok = free(getDash().items, r, it.id);
+      last = { r, ok };
+      setDrag({ id: it.id, r, ok });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      document.body.classList.remove('dash-resizing');
+      if (last?.ok) applyDashOp({ op: 'item', id: it.id, patch: last.r });
+      setDrag(null);
+    };
+    document.body.classList.add(mode === 'move' ? 'dash-moving' : 'dash-resizing');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', () => {
+      document.body.classList.remove('dash-moving');
+      up();
+    }, { once: true });
+  };
+  const busy = new Set<number>();
+  for (const it of d.items) for (let y = it.y; y < it.y + it.h; y++) for (let x = it.x; x < it.x + it.w; x++) busy.add(y * GRID_COLS + x);
+  const area = (r: Rect) => ({ gridColumn: `${r.x + 1} / span ${r.w}`, gridRow: `${r.y + 1} / span ${r.h}` });
+  const sel = editing.on ? d.items.find((i) => i.id === editing.id) : undefined;
+  return (
+    <div ref={ref} className={`dash-grid ${editing.on ? 'editing' : ''}`}>
+      {editing.on &&
+        Array.from({ length: GRID_COLS * GRID_ROWS }, (_, k) =>
+          busy.has(k) ? null : (
+            <button key={`c${k}`} className="dg-cell" style={{ gridColumn: (k % GRID_COLS) + 1, gridRow: Math.floor(k / GRID_COLS) + 1 }} onClick={() => dashEvent({ type: 'gallery', open: true, at: { x: k % GRID_COLS, y: Math.floor(k / GRID_COLS) } })} title="Добавить блок сюда">
+              <Plus size={14} />
+            </button>
+          ),
+        )}
+      {d.items.map((it) => (
+        <section
+          key={it.id}
+          className={`dash-col b-${it.block} ${editing.on ? 'edit' : ''} ${editing.id === it.id ? 'sel' : ''} ${drag?.id === it.id ? 'dragging' : ''}`}
+          style={{ ...area(it), ...(it.scale && it.scale !== 1 ? { fontSize: `${it.scale}em` } : {}) }}
+          onClickCapture={
+            editing.on
+              ? (e) => {
+                  if ((e.target as Element).closest('.dce')) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setEditing({ on: true, id: it.id });
+                }
+              : undefined
+          }
+        >
+          <Block id={it.block} ctx={ctx} skip={inWall} o={it.opts} it={it} />
+          {editing.on && (
+            <>
+              <div className="dce dce-bar" onPointerDown={(e) => start(e, it, 'move')} title="Тяните, чтобы переставить">
+                <GripHorizontal size={14} />
+                <span>{it.custom?.title ?? BLOCK_NAME[it.block]}</span>
+                <button onPointerDown={(e) => e.stopPropagation()} onClick={() => setEditing({ on: true, id: it.id })} aria-label="Настройки блока">
+                  <Settings2 size={13} />
+                </button>
+                <button onPointerDown={(e) => e.stopPropagation()} onClick={() => applyDashOp({ op: 'remove', id: it.id })} aria-label="Убрать блок">
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              <div className="dce dce-size" onPointerDown={(e) => start(e, it, 'size')} title="Тяните, чтобы изменить размер" />
+            </>
+          )}
+        </section>
+      ))}
+      {drag && <div className={`dg-ghost ${drag.ok ? 'ok' : 'bad'}`} style={area(drag.r)} />}
+      {sel && (
+        <div className="dce-pop-wrap" style={area({ x: sel.x + sel.w + 3 <= GRID_COLS ? sel.x + sel.w : Math.max(0, sel.x - 3), y: 0, w: 3, h: GRID_ROWS })}>
+          <BlockEditor it={sel} onClose={() => setEditing({ on: true, id: null })} />
+        </div>
+      )}
     </div>
   );
 }

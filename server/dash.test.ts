@@ -5,6 +5,8 @@ import { attention, dashSnapshot, groupsOf, transferCount, transfers, type Block
 import { dashRules, toDashOp } from './jarvis-dash.ts';
 import { contrast, toStyle } from './design.ts';
 import { PERSONAS, personaById } from '../shared/personas.ts';
+import { addItem, columnsToItems, free, normalize, overlap, removeItem, swapItems } from '../shared/dashGrid.ts';
+import { applyFilter, cleanSpec } from '../shared/dashCustom.ts';
 import { DASH_STYLES, findDashStyle } from '../shared/dashStyles.ts';
 import { Point } from './point.ts';
 import { RAW } from './catalog.ts';
@@ -127,6 +129,42 @@ test('закреплённую стену Джарвис не перестраи
   const p = new Point();
   assert.throws(() => toDashOp({ op: 'style', style: 'neon' }, { preset: 'case', columns: ['action'], style: 'graphite', filter: null, density: 'normal', locked: true }, p), /закреплён/);
   assert.equal(toDashOp({ op: 'focus', id: '' }, { preset: 'case', columns: ['action'], style: 'graphite', filter: null, density: 'normal', locked: true }, p).cmd.op, 'focus');
+});
+
+test('свободное поле: колонки → блоки, добавление в пустое место или делением, без наложений', () => {
+  const cols = columnsToItems([{ block: 'rotate', width: 1 }, { block: 'action', width: 1.5 }, { block: 'work', width: 1.4 }]);
+  assert.equal(cols.reduce((s, i) => s + i.w, 0), 12, 'колонки занимают всю ширину');
+  assert.ok(cols.every((i) => i.y === 0 && i.h === 12));
+  // поле занято целиком — новый блок делит самый большой пополам
+  const more = addItem(cols, { block: 'clock' }, { w: 3, h: 3 });
+  assert.equal(more.length, 4);
+  for (const a of more) for (const b of more) if (a !== b) assert.equal(overlap(a, b), false, `${a.block} и ${b.block} не налезают`);
+  // в пустую клетку — туда и ставится
+  const half = [{ id: 'a', block: 'action' as const, x: 0, y: 0, w: 6, h: 12 }];
+  const put = addItem(half, { block: 'note', x: 8, y: 2 }, { w: 3, h: 4 });
+  const note = put.find((i) => i.block === 'note')!;
+  assert.deepEqual([note.x, note.y], [8, 2]);
+  // убрали — сосед забрал место; поменяли местами — поменялись прямоугольники
+  const two = [{ id: 'l', block: 'action' as const, x: 0, y: 0, w: 6, h: 12 }, { id: 'r', block: 'work' as const, x: 6, y: 0, w: 6, h: 12 }];
+  assert.equal(removeItem(two, 'r')[0].w, 12);
+  const sw = swapItems(two, 'l', 'r');
+  assert.equal(sw.find((i) => i.id === 'l')!.x, 6);
+  // налезающее при загрузке — переносится в свободное место
+  const fixed = normalize([{ id: '1', block: 'action', x: 0, y: 0, w: 6, h: 6 }, { id: '2', block: 'work', x: 3, y: 3, w: 6, h: 6 }]);
+  assert.equal(overlap(fixed[0], fixed[1]), false);
+  assert.equal(free(fixed, { x: 0, y: 0, w: 2, h: 2 }), false);
+});
+
+test('свой блок от ChatGPT: опасное отбрасывается, фильтр работает', () => {
+  assert.equal(cleanSpec({ kind: 'script', title: 'x' }), null, 'неизвестный вид — нет');
+  const s = cleanSpec({ kind: 'list', title: 'Просроченные высокие', filter: { priority: ['P2', 'P9'], overdue: true, status: ['hack'] }, limit: 999 })!;
+  assert.deepEqual(s.filter, { priority: ['P2'], overdue: true, status: [] });
+  assert.equal(s.limit, 20);
+  const ch = cleanSpec({ kind: 'character', character: { name: 'Кот', style: 'строго', avatar: '<img src=x>', color: 'red' } })!;
+  assert.equal(ch.character!.avatar, undefined, 'вместо картинки — только портрет из набора, эмодзи или data:image');
+  assert.equal(cleanSpec({ kind: 'character', character: { name: 'Кот', avatar: '🐱' } })!.character!.avatar, '🐱');
+  const list = [inc({ id: 'x', priority: 'P2', slaDeadline: now - MIN }), inc({ id: 'y', priority: 'P2' }), inc({ id: 'z', priority: 'P3', slaDeadline: now - MIN })];
+  assert.deepEqual(applyFilter(list, s.filter, now, () => '').map((i) => i.id), ['x']);
 });
 
 test('стилей больше двадцати, у всех разные id, голосом находятся по названию', () => {

@@ -18,6 +18,7 @@ import { ItsmFile } from './itsm-file.ts';
 import { actorLine, ask as askJarvis, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
 import { parseDashCtx } from './jarvis-dash.ts';
 import { design as designDash } from './design.ts';
+import { characterSays, drawAvatar, makeBlock } from './blockgen.ts';
 import { reviewFor, reviewList } from './review.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,12 +102,12 @@ function json(res: http.ServerResponse, code: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+async function readBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<Record<string, unknown>> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 64 * 1024) throw new Error('Слишком большой запрос');
+    if (size > limit) throw new Error('Слишком большой запрос');
     chunks.push(chunk);
   }
   const raw = Buffer.concat(chunks).toString('utf8');
@@ -242,11 +243,35 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
         const raw = getMeta(db, k);
         return json(res, 200, { prefs: raw ? JSON.parse(raw) : null });
       }
-      const body = await readBody(req);
+      const body = await readBody(req, 1024 * 1024);
       const raw = JSON.stringify(body.prefs ?? null);
-      if (raw.length > 120_000) return json(res, 413, { error: 'слишком большие настройки' });
+      if (raw.length > 900_000) return json(res, 413, { error: 'слишком большие настройки' });
       setMeta(db, k, raw);
       return json(res, 200, { ok: true });
+    }
+    // ─── Видеостена: свой блок, портрет персонажа и его реплики (ChatGPT) ───
+    if (p === '/api/dash/block' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      try {
+        return json(res, 200, await makeBlock(str(body.prompt).slice(0, 600), body.character === true));
+      } catch (err) {
+        return json(res, 502, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (p === '/api/dash/avatar' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      try {
+        return json(res, 200, await drawAvatar(str(body.prompt).slice(0, 300)));
+      } catch (err) {
+        return json(res, 502, { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    if (p === '/api/dash/say' && post) {
+      pointOnly();
+      const body = await readBody(req);
+      return json(res, 200, await characterSays(point, str(body.name).slice(0, 30) || 'Помощник', str(body.style).slice(0, 200) || 'коротко и по делу'));
     }
     // ─── Видеостена: дизайн по описанию (ChatGPT) ───
     if (p === '/api/dash/design' && post) {

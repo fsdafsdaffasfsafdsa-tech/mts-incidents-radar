@@ -1,0 +1,641 @@
+/* ═══ Свободное поле 12×12, галерея «Добавить блок», новые блоки ═══ */
+.dash-grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: repeat(12, minmax(0, 1fr));
+  gap: var(--d-gap);
+}
+.dash-grid > .dash-col {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.dash-grid > .dash-col > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.dash .dg-cell {
+  border: 1px dashed color-mix(in srgb, var(--d-accent) 35%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--d-muted);
+  opacity: 0.45;
+  display: grid;
+  place-items: center;
+  cursor: copy;
+  padding: 0;
+}
+.dash .dg-cell:hover {
+  opacity: 1;
+  color: var(--d-accent);
+  background: color-mix(in srgb, var(--d-accent) 12%, transparent);
+}
+.dg-ghost {
+  z-index: 24;
+  pointer-events: none;
+  border: 3px dashed var(--d-accent);
+  border-radius: var(--d-radius);
+  background: color-mix(in srgb, var(--d-accent) 14%, transparent);
+}
+.dg-ghost.bad {
+  border-color: var(--d-crit);
+  background: color-mix(in srgb, var(--d-crit) 14%, transparent);
+}
+.dash-col.dragging {
+  opacity: 0.45;
+}
+.dash-grid .dce-bar {
+  left: 0.4em;
+  right: 0.4em;
+  top: 0.4em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: grab;
+  padding: 3px 4px 3px 8px;
+  color: var(--d-text);
+}
+.dash-grid .dce-bar > span {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-grid .dce-bar button {
+  height: 26px;
+  padding: 0 7px;
+}
+.dce-size {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 22px;
+  height: 22px;
+  z-index: 26;
+  cursor: nwse-resize;
+  border-right: 4px solid var(--d-accent);
+  border-bottom: 4px solid var(--d-accent);
+  border-radius: 0 0 9px 0;
+}
+.dce-size:hover {
+  width: 30px;
+  height: 30px;
+}
+body.dash-moving,
+body.dash-moving * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+body.dash-resizing,
+body.dash-resizing * {
+  cursor: nwse-resize !important;
+}
+.dce-pop-wrap {
+  position: relative;
+  z-index: 35;
+  pointer-events: none;
+  min-height: 0;
+}
+.dce-pop-wrap > .dce-pop {
+  pointer-events: auto;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  transform: none;
+  width: auto;
+  max-height: 100%;
+}
+.dce-pop textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--d-line);
+  background: var(--d-panel2);
+  color: var(--d-text);
+  font: inherit;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+/* ─── новые блоки ─── */
+.db-clock {
+  display: grid;
+  place-content: center;
+  text-align: center;
+  gap: 0.2em;
+  container-type: size;
+}
+.db-clock b {
+  font-size: clamp(2em, 30cqh, 9em);
+  line-height: 1;
+}
+.db-clock span {
+  color: var(--d-muted);
+}
+.db-counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5em, 1fr));
+  gap: 0.5em;
+}
+.dk {
+  display: grid;
+  place-content: center;
+  text-align: center;
+  padding: 0.5em;
+  border-radius: calc(var(--d-radius) * 0.7);
+  background: var(--d-panel2);
+  border-top: 0.25em solid var(--gc, var(--d-line));
+}
+.dk b {
+  font-size: 2.6em;
+  line-height: 1;
+  color: var(--gc);
+}
+.dk span {
+  color: var(--d-muted);
+  font-size: 0.9em;
+}
+.dk.g-crit {
+  --gc: var(--d-crit);
+}
+.dk.g-crit.on {
+  background: var(--d-crit-bg);
+}
+.dk.g-coord {
+  --gc: var(--d-warn);
+}
+.dk.g-high {
+  --gc: var(--d-high);
+}
+.dk.g-research {
+  --gc: var(--d-accent);
+}
+.db-group .dg-list {
+  flex: 1;
+}
+.db-char {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  justify-items: center;
+  text-align: center;
+  gap: 0.4em;
+}
+.dch-ava {
+  height: 100%;
+  max-height: 14em;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--pc) 22%, var(--d-panel2));
+  box-shadow: 0 0 0 0.25em color-mix(in srgb, var(--pc) 50%, transparent), 0 0 2em color-mix(in srgb, var(--pc) 30%, transparent);
+  animation: da-breathe 4s ease-in-out infinite;
+}
+.dch-ava img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.dch-ava em {
+  font-style: normal;
+  font-size: 4em;
+}
+.dch-name {
+  font-size: 1.1em;
+}
+.dch-say {
+  margin: 0;
+  padding: 0.6em 0.8em;
+  border-radius: 0.8em;
+  background: var(--d-panel2);
+  border: 1px solid var(--d-line);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dtm {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 2em;
+  gap: 0.5em;
+  align-items: center;
+  font-size: 0.92em;
+}
+.dtm span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dtm i {
+  display: block;
+  height: 0.6em;
+  min-width: 0.3em;
+  border-radius: 99px;
+  background: var(--d-accent);
+}
+.dtm i.late {
+  background: var(--d-warn);
+}
+.dtm b {
+  text-align: right;
+}
+.db-note p {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 1.1em;
+  line-height: 1.45;
+  overflow: hidden;
+}
+.db-bigcount {
+  display: grid;
+  place-content: center;
+  text-align: center;
+  container-type: size;
+}
+.db-bigcount b {
+  font-size: clamp(2em, 45cqh, 10em);
+  line-height: 1;
+  color: var(--d-accent);
+}
+.db-bigcount span {
+  color: var(--d-muted);
+}
+/* узкая группа: срок уходит под название, название не пропадает */
+.dg,
+.db-group {
+  container-type: inline-size;
+}
+@container (max-width: 250px) {
+  .dg-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .dg-row .dg-left {
+    grid-column: 2;
+    justify-self: start;
+    font-size: 0.9em;
+  }
+}
+
+/* ─── галерея «Добавить блок» ─── */
+.gal-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.5);
+  backdrop-filter: blur(3px);
+  font-family: var(--font);
+  color: var(--text);
+}
+.gal {
+  width: min(1120px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.45);
+  overflow: hidden;
+  animation: dset-in 0.2s ease-out;
+}
+.gal-h {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.gal-h > b {
+  font-size: 18px;
+}
+.gal-h nav {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+.gal-h nav button,
+.gal-x {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.gal-h nav button.on {
+  border-color: var(--coord, #ff3150);
+  box-shadow: 0 0 0 1px var(--coord, #ff3150);
+}
+.gal-body {
+  overflow-y: auto;
+  padding: 6px 18px 18px;
+}
+.gal-body h4 {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.gal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.gal-card {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s;
+}
+.gal-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--coord, #ff3150);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
+}
+.gal-card.on {
+  border-color: var(--coord, #ff3150);
+}
+.gal-card.gpt {
+  background: linear-gradient(135deg, color-mix(in srgb, #10a37f 16%, var(--panel-2)), var(--panel-2));
+}
+.gal-t {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gal-t svg {
+  color: var(--coord, #ff3150);
+  flex: none;
+}
+.gal-card small {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.gal-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+}
+.gal-sub button {
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.gal-sub button:hover {
+  border-color: var(--coord, #ff3150);
+}
+.gal-persona {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.gal-persona img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+/* наброски блоков */
+.gp {
+  height: 86px;
+  border-radius: 10px;
+  background: #151922;
+  padding: 8px;
+  display: grid;
+  gap: 5px;
+  overflow: hidden;
+  color: #fff;
+}
+.gp i {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.28);
+}
+.gp-list span {
+  display: grid;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.07);
+  border-left: 3px solid #f0a020;
+}
+.gp-list span.hot {
+  border-left-color: #ff3150;
+  background: rgb(255 49 80 / 0.18);
+}
+.gp-clock {
+  place-content: center;
+  font: 700 30px var(--mono);
+}
+.gp-counters {
+  grid-template-columns: repeat(4, 1fr);
+}
+.gp-counters b {
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.07);
+  font: 800 22px var(--mono);
+}
+.gp-counters .g-crit {
+  color: #ff3150;
+}
+.gp-counters .g-coord {
+  color: #ffae3d;
+}
+.gp-counters .g-high {
+  color: #ff8a3d;
+}
+.gp-counters .g-research {
+  color: #7aa8ff;
+}
+.gp-char {
+  grid-template-columns: 62px 1fr;
+  align-items: center;
+}
+.gp-char img {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.gp-char span {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.08);
+}
+.gp-cols {
+  grid-template-columns: repeat(4, 1fr);
+}
+.gp-cols span {
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  padding: 5px;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.07);
+  border-top: 3px solid #ff3150;
+}
+.gp-cols span:nth-child(2) {
+  border-top-color: #ffae3d;
+}
+.gp-cols span:nth-child(3) {
+  border-top-color: #ff8a3d;
+}
+.gp-cols span:nth-child(4) {
+  border-top-color: #7aa8ff;
+}
+.gp-bars {
+  align-content: center;
+}
+.gp-bars i {
+  height: 10px;
+  background: #5b8cff;
+}
+.gp-map {
+  background: radial-gradient(circle at 30% 40%, #ff8a3d 0 6px, transparent 7px), radial-gradient(circle at 60% 55%, #ff3150 0 8px, transparent 9px), radial-gradient(circle at 75% 35%, #f0c84a 0 5px, transparent 6px), linear-gradient(160deg, #1d2840, #121826);
+}
+.gp-note {
+  background: #fff4b8;
+  align-content: start;
+}
+.gp-note i {
+  background: rgb(80 60 0 / 0.35);
+}
+.gp-gpt {
+  place-items: center;
+  background: linear-gradient(135deg, #10a37f, #0b6e56);
+}
+.gal-gpt {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+}
+.gal-gpt p {
+  margin: 0;
+  color: var(--text-2);
+}
+.gal-gpt textarea {
+  min-height: 80px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.gal-ideas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.gal-ideas button {
+  padding: 5px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.gal-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.gal-act {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gal-act button.on {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 0;
+  background: #10a37f;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.gal-act button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.gal-spin {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 3px solid #10a37f;
+  border-right-color: transparent;
+  animation: jv-spin 0.9s linear infinite;
+}
+.gal-err {
+  margin: 0 18px 10px;
+  color: var(--p1, #ff3150);
+}
+.gal-f {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 13px;
+}
+.gal-f button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+body.dash-editing .jv {
+  opacity: 0.18;
+  pointer-events: none;
+}
+body.dash-editing .jv * {
+  pointer-events: none !important;
+}

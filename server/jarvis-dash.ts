@@ -67,7 +67,16 @@ export const DESIGN_TOOL = {
   },
 };
 
-export const DASH_NOTE = `Видеостену (дашборд координатора) перестраивай инструментом dashboard — это главный экран пункта. Примеры: «поменяй местами левый и правый блоки» → op=swap, position=left, position2=right; «покажи только критические» → op=filter, group=crit; «покажи все» → group=all; «добавь карту» → op=show, block=map; «убери ленту» → op=hide, block=events; «замени справа на историю передач» → op=replace, position=right, block=transfers; «сделай неон» → op=style; «крупнее» → op=density, value=large; «покажи крупно самый срочный» → op=focus, id=top; «раскладка четыре группы» → op=preset; «верни как было» → op=reset; «настройки дашборда» → op=settings. Если просят своё оформление словами, которого нет в списке стилей, — design_dashboard с описанием. После действия скажи одной короткой фразой, что изменилось на стене.`;
+export const BLOCK_TOOL = {
+  type: 'function',
+  function: {
+    name: 'create_block',
+    description: 'Собрать новый блок для стены по описанию словами (ChatGPT): список, число, полосы, заметку — или нового персонажа (character=true), который будет комментировать обстановку; ему GPT нарисует портрет. Для готовых блоков используй dashboard op=show.',
+    parameters: { type: 'object', properties: { prompt: { type: 'string', description: 'что должно быть в блоке или какой персонаж — словами человека' }, character: { type: 'boolean' } }, required: ['prompt'] },
+  },
+};
+
+export const DASH_NOTE = `Видеостену (дашборд координатора) перестраивай инструментом dashboard — это главный экран пункта. Примеры: «поменяй местами левый и правый блоки» → op=swap, position=left, position2=right; «покажи только критические» → op=filter, group=crit; «покажи все» → group=all; «добавь карту» → op=show, block=map; «убери ленту» → op=hide, block=events; «замени справа на историю передач» → op=replace, position=right, block=transfers; «сделай неон» → op=style; «крупнее» → op=density, value=large; «покажи крупно самый срочный» → op=focus, id=top; «раскладка четыре группы» → op=preset; «верни как было» → op=reset; «настройки дашборда» → op=settings. Если просят своё оформление словами, которого нет в списке стилей, — design_dashboard с описанием. Если просят новый блок, которого нет среди готовых, или нового персонажа — create_block. После действия скажи одной короткой фразой, что изменилось на стене.`;
 
 export function dashContextLine(c: DashCtx | null): string {
   if (!c) return '';
@@ -162,6 +171,12 @@ export function toDashOp(a: Record<string, unknown>, c: DashCtx | null, point: P
 
 // ─── команды стене без модели ──────────────────────────────────────────────
 const BLOCK_WORDS: [RegExp, BlockId][] = [
+  [/час[ыа]|время/, 'clock'],
+  [/счётчик|счетчик|цифры групп/, 'counters'],
+  [/риск/, 'risk'],
+  [/кому передать|подсказк.*передат/, 'route'],
+  [/команд[ыа] /, 'teams'],
+  [/заметк/, 'note'],
   [/карт/, 'map'],
   [/лент|событ/, 'events'],
   [/помощник|ассистент/, 'assistant'],
@@ -184,6 +199,8 @@ export function dashRules(t: string, c: DashCtx | null, run: (a: Record<string, 
   if (/прежн|стар(ую|ая) стен|как раньше/.test(t)) return ok(run({ op: 'preset', preset: 'legacy' }), 'Включил прежнюю стену, сэр.');
   const style = findDashStyle(t);
   if (style && (/стил|оформлен/.test(t) || ((aboutWall || onWall) && /сделай|включи|поставь/.test(t)))) return ok(run({ op: 'style', style: style.id }), `Стиль «${style.name}», сэр.`);
+  if (/(создай|добавь|придумай|сделай|нарисуй).*(персонаж)/.test(t)) return ok(run({ op: '__block', prompt: t, character: true }), 'Придумываю персонажа через ChatGPT. Портрет нарисую примерно за минуту.');
+  if (/(создай|придумай|собери|сделай)( мне)? (новый |свой )?блок/.test(t)) return ok(run({ op: '__block', prompt: t, character: false }), 'Собираю новый блок через ChatGPT, через несколько секунд он появится на стене.');
   if (/(придумай|нарисуй|сделай|создай|оформи).*(дизайн|оформлени|стил|в цветах|в духе)/.test(t) && !style) return ok(run({ op: '__design', prompt: t }), 'Придумываю оформление через ChatGPT, сэр. Через несколько секунд стена изменится.');
   if (/раскладк|режим|вид стены/.test(t)) {
     const p = /четыре групп|групп/.test(t) ? 'groups' : /ии.?центр|помощник/.test(t) ? 'ai' : /критичн/.test(t) ? 'critical' : /ноч/.test(t) ? 'night' : /карт/.test(t) ? 'map' : /кейс|три экрана|основн/.test(t) ? 'case' : null;

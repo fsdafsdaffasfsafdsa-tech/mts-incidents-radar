@@ -1,13 +1,15 @@
-// Настройки дашборда (видеостены): раскладка блоков, стиль, тревоги, Джарвис. Хранятся в браузере
+// Настройки дашборда (видеостены): блоки на свободном поле, стиль, тревоги, Джарвис. Хранятся в браузере
 // и сразу доходят до окна стены, открытого отдельно (событие storage) — Джарвис в окне дежурного
 // перестраивает стену на соседнем экране.
 import { useEffect, useState } from 'react';
 import { BLOCKS, PRESETS, type BlockId, type DashColumn, type DashGroup, type DashOp, type PresetId } from '../../shared/dash';
 import { DASH_STYLE_IDS, dashStyleById, type DashStyle } from '../../shared/dashStyles';
+import { DEFAULT_SIZE, addItem, columnsToItems, newId, normalize, readingOrder, removeItem, swapItems, widen, type GridItem } from '../../shared/dashGrid';
+import { cleanSpec } from '../../shared/dashCustom';
 
 export interface DashLayout {
   preset: PresetId | 'custom';
-  columns: DashColumn[];
+  items: GridItem[]; // блоки на поле 12×12
   counters: boolean; // полоса счётчиков сверху
   ticker: boolean; // бегущая строка снизу
   filter: DashGroup | null;
@@ -16,7 +18,7 @@ export interface DashLayout {
   rotateSec: number; // сменяемая панель
   pageSec: number; // листание длинных списков
   onlyFile: boolean; // только инциденты из файла ITSM (без инцидентов из жалоб)
-  banners: boolean; // тревоги баннером на всю стену
+  banners: boolean; // тревоги на стене
   sound: boolean; // звук тревоги
   jarvis: boolean; // шар Джарвиса на отдельном экране стены
   jarvisEdit: boolean; // Джарвис может перестраивать стену
@@ -25,10 +27,15 @@ export interface DashLayout {
 }
 
 const KEY = 'radar.dash.v1';
-const MAX_COLS = 4;
+export const presetItems = (id: PresetId): GridItem[] => {
+  const p = PRESETS.find((x) => x.id === id);
+  if (!p) return [];
+  if (p.grid) return p.grid.map((g, k) => ({ ...g, id: newId() + k, ...(g.opts ? { opts: { ...g.opts } } : {}) }));
+  return columnsToItems(p.columns);
+};
 export const DEFAULT_DASH: DashLayout = {
   preset: 'case',
-  columns: PRESETS[0].columns.map((c) => ({ ...c })),
+  items: presetItems('case'),
   counters: true,
   ticker: true,
   filter: null,
@@ -46,23 +53,45 @@ export const DEFAULT_DASH: DashLayout = {
 };
 
 const blockIds = new Set(BLOCKS.map((b) => b.id));
-function clean(x: Partial<DashLayout> | null): DashLayout {
-  const d = { ...DEFAULT_DASH, ...(x ?? {}) };
-  d.columns = (Array.isArray(d.columns) ? d.columns : DEFAULT_DASH.columns).filter((c) => blockIds.has(c.block)).map((c) => ({ block: c.block, width: clamp(Number(c.width) || 1, 0.6, 3), ...(c.scale ? { scale: clamp(Number(c.scale) || 1, 0.7, 1.6) } : {}), ...(c.opts && typeof c.opts === 'object' ? { opts: Object.fromEntries(Object.entries(c.opts).filter(([, v]) => typeof v === 'boolean' || typeof v === 'number')) } : {}) })).slice(0, MAX_COLS);
-  if (!d.columns.length && d.preset !== 'legacy') d.columns = DEFAULT_DASH.columns.map((c) => ({ ...c }));
+const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+function cleanOpts(o: unknown) {
+  if (!o || typeof o !== 'object') return undefined;
+  const e = Object.entries(o as Record<string, unknown>).filter(([, v]) => typeof v === 'boolean' || typeof v === 'number' || (typeof v === 'string' && v.length <= 2000));
+  return e.length ? (Object.fromEntries(e) as Record<string, boolean | number | string>) : undefined;
+}
+function clean(x: (Partial<DashLayout> & { columns?: DashColumn[] }) | null): DashLayout {
+  const d = { ...DEFAULT_DASH, ...(x ?? {}) } as DashLayout & { columns?: DashColumn[] };
+  // прежний формат — колонки: переводим в блоки на поле
+  let items: GridItem[] = Array.isArray(d.items) && (x?.items?.length ?? 0) > 0 ? d.items : Array.isArray(x?.columns) && x!.columns!.length ? columnsToItems(x!.columns!.filter((c) => blockIds.has(c.block))) : DEFAULT_DASH.items;
+  items = items
+    .filter((i) => i && blockIds.has(i.block))
+    .map((i) => {
+      const it: GridItem = { id: typeof i.id === 'string' && i.id ? i.id : newId(), block: i.block, x: Number(i.x) || 0, y: Number(i.y) || 0, w: Number(i.w) || 4, h: Number(i.h) || 6 };
+      if (i.scale) it.scale = clamp(Number(i.scale) || 1, 0.7, 1.6);
+      const o = cleanOpts(i.opts);
+      if (o) it.opts = o;
+      if (i.custom) {
+        const c = cleanSpec(i.custom);
+        if (c) it.custom = c;
+      }
+      return it;
+    })
+    .slice(0, 24);
+  d.items = normalize(items);
+  if (!d.items.length && d.preset !== 'legacy') d.items = presetItems('case');
+  delete d.columns;
   d.customStyles = (Array.isArray(d.customStyles) ? d.customStyles : []).filter((s) => s && typeof s.id === 'string' && s.custom).slice(-12);
   if (!DASH_STYLE_IDS.includes(d.style) && !d.customStyles.some((s) => s.id === d.style)) d.style = DEFAULT_DASH.style;
   d.rotateSec = clamp(d.rotateSec, 8, 120);
   d.pageSec = clamp(d.pageSec, 6, 60);
   return d;
 }
-const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
 function read(): DashLayout {
   try {
     return clean(JSON.parse(localStorage.getItem(KEY) ?? 'null') as Partial<DashLayout> | null);
   } catch {
-    return { ...DEFAULT_DASH };
+    return clean(null);
   }
 }
 let state: DashLayout = read();
@@ -71,7 +100,7 @@ function emit() {
   subs.forEach((f) => f());
 }
 export const getDash = () => state;
-export function setDash(patch: Partial<DashLayout> | ((d: DashLayout) => Partial<DashLayout>)) {
+export function setDash(patch: (Partial<DashLayout> & { columns?: DashColumn[] }) | ((d: DashLayout) => Partial<DashLayout>)) {
   const p = typeof patch === 'function' ? patch(state) : patch;
   state = clean({ ...state, ...p });
   try {
@@ -105,7 +134,13 @@ export function useDash(): DashLayout {
 }
 
 // ─── что-то разовое: крупно показать инцидент, открыть настройки, проверить тревогу ───
-type Ev = { type: 'focus'; id: string | null } | { type: 'settings'; open: boolean } | { type: 'test-alarm'; kind: 'crit' | 'resolved' | 'coord' } | { type: 'designing'; text: string | null } | { type: 'edit'; on: boolean; k?: number | null };
+type Ev =
+  | { type: 'focus'; id: string | null }
+  | { type: 'settings'; open: boolean }
+  | { type: 'test-alarm'; kind: 'crit' | 'resolved' | 'coord' }
+  | { type: 'designing'; text: string | null }
+  | { type: 'edit'; on: boolean; id?: string | null }
+  | { type: 'gallery'; open: boolean; at?: { x: number; y: number } | null };
 const evSubs = new Set<(e: Ev) => void>();
 const CH = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('radar.dash') : null;
 CH?.addEventListener('message', (m) => evSubs.forEach((f) => f(m.data as Ev)));
@@ -120,54 +155,63 @@ export function useDashEvents(f: (e: Ev) => void) {
   }, [f]);
 }
 
-/** Применить действие (от Джарвиса или из настроек). Возвращает, что получилось, — человеческим языком. */
+const sizeOf = (b: BlockId) => DEFAULT_SIZE[b] ?? { w: 4, h: 6 };
+/** Применить действие (от Джарвиса, из настроек или с поля). Возвращает, что получилось, — человеческим языком. */
 export function applyDashOp(o: DashOp): string {
   const d = state;
   if (d.locked && o.op !== 'focus' && o.op !== 'settings') return 'интерфейс закреплён — сначала открепите его в настройках дашборда';
-  const cols = d.columns.map((c) => ({ ...c }));
-  const custom = (columns: DashColumn[], extra: Partial<DashLayout> = {}) => setDash({ preset: 'custom', columns, ...extra });
+  const ordered = readingOrder(d.items);
+  const at = (k: number) => ordered[k < 0 ? ordered.length + k : k];
+  const put = (items: GridItem[], extra: Partial<DashLayout> = {}) => setDash({ preset: 'custom', items, ...extra });
   switch (o.op) {
     case 'preset': {
       const p = PRESETS.find((x) => x.id === o.preset);
       if (!p) return 'нет такой раскладки';
-      setDash({ preset: p.id, columns: p.columns.length ? p.columns.map((c) => ({ ...c })) : d.columns, filter: p.filter ?? null, density: p.density ?? 'normal' });
+      setDash({ preset: p.id, items: p.columns.length || p.grid ? presetItems(p.id) : d.items, filter: p.filter ?? null, density: p.density ?? 'normal' });
       return `раскладка «${p.name}»`;
     }
-    case 'show': {
-      if (cols.some((c) => c.block === o.block)) return 'уже на стене';
-      if (cols.length >= MAX_COLS) cols[cols.length - 1] = { block: o.block, width: 1 };
-      else cols.splice(o.at ?? cols.length, 0, { block: o.block, width: 1 });
-      custom(cols);
+    case 'show':
+    case 'add': {
+      if (o.op === 'show' && d.items.some((i) => i.block === o.block)) return 'уже на стене';
+      const size = sizeOf(o.block);
+      const extra = o.op === 'add' ? { opts: o.opts, custom: o.custom, ...(o.x !== undefined ? { x: o.x, y: o.y } : {}), w: o.w ?? size.w, h: o.h ?? size.h } : { w: size.w, h: size.h };
+      const next = addItem(d.items, { block: o.block, ...extra }, size);
+      if (next.length === d.items.length) return 'на поле нет места — уменьшите или уберите блок';
+      put(next);
       return 'добавил блок';
     }
     case 'hide': {
-      const next = cols.filter((c) => c.block !== o.block);
-      if (!next.length) return 'последний блок не убрать';
-      custom(next);
+      const it = d.items.find((i) => i.block === o.block);
+      if (!it) return 'этого блока нет на стене';
+      if (d.items.length <= 1) return 'последний блок не убрать';
+      put(removeItem(d.items, it.id));
       return 'убрал блок';
     }
+    case 'remove':
+      if (d.items.length <= 1) return 'последний блок не убрать';
+      put(removeItem(d.items, o.id));
+      return 'убрал блок';
+    case 'item':
+      put(d.items.map((i) => (i.id === o.id ? { ...i, ...o.patch, id: i.id } : i)));
+      return 'изменил блок';
     case 'swap': {
-      const a = o.a < 0 ? cols.length + o.a : o.a;
-      const b = o.b < 0 ? cols.length + o.b : o.b;
-      if (!cols[a] || !cols[b]) return 'нет таких колонок';
-      [cols[a], cols[b]] = [cols[b], cols[a]];
-      custom(cols);
+      const A = at(o.a);
+      const B = at(o.b);
+      if (!A || !B || A === B) return 'нет таких блоков';
+      put(swapItems(d.items, A.id, B.id));
       return 'поменял местами';
     }
     case 'replace': {
-      const at = o.at < 0 ? cols.length + o.at : o.at;
-      if (!cols[at]) return 'нет такой колонки';
-      const dup = cols.findIndex((c) => c.block === o.block);
-      if (dup >= 0 && dup !== at) [cols[dup], cols[at]] = [cols[at], cols[dup]];
-      else cols[at] = { block: o.block, width: cols[at].width, scale: cols[at].scale };
-      custom(cols);
+      const T = at(o.at);
+      if (!T) return 'нет такого блока';
+      const dup = d.items.find((i) => i.block === o.block && i.id !== T.id);
+      put(dup ? swapItems(d.items, dup.id, T.id) : d.items.map((i) => (i.id === T.id ? { id: i.id, block: o.block, x: i.x, y: i.y, w: i.w, h: i.h, scale: i.scale } : i)));
       return 'заменил блок';
     }
     case 'wider': {
-      const c = cols.find((x) => x.block === o.block);
-      if (!c) return 'этого блока нет на стене';
-      c.width = clamp(c.width + o.by, 0.6, 3);
-      custom(cols);
+      const it = d.items.find((i) => i.block === o.block);
+      if (!it) return 'этого блока нет на стене';
+      put(widen(d.items, it.id, Math.round(o.by * 3) || (o.by > 0 ? 1 : -1)));
       return o.by > 0 ? 'сделал шире' : 'сделал уже';
     }
     case 'filter':
@@ -175,7 +219,8 @@ export function applyDashOp(o: DashOp): string {
       return o.group ? 'фильтр по группе' : 'показываю все группы';
     case 'customStyle': {
       const list = [...d.customStyles.filter((s) => s.id !== o.style.id), { ...o.style, custom: true }].slice(-12);
-      setDash({ customStyles: list, style: o.style.id, ...(o.preset ? (() => { const p = PRESETS.find((x) => x.id === o.preset); return p && p.columns.length ? { preset: p.id, columns: p.columns.map((c) => ({ ...c })) } : {}; })() : {}), ...(o.density ? { density: o.density } : {}) });
+      const p = o.preset ? PRESETS.find((x) => x.id === o.preset) : undefined;
+      setDash({ customStyles: list, style: o.style.id, ...(p && (p.columns.length || p.grid) ? { preset: p.id, items: presetItems(p.id) } : {}), ...(o.density ? { density: o.density } : {}) });
       return `свой стиль «${o.style.name}»`;
     }
     case 'removeStyle':
@@ -198,7 +243,7 @@ export function applyDashOp(o: DashOp): string {
       dashEvent({ type: 'settings', open: o.open });
       return o.open ? 'открыл настройки дашборда' : 'закрыл настройки';
     case 'reset':
-      setDash({ ...DEFAULT_DASH, columns: DEFAULT_DASH.columns.map((c) => ({ ...c })), style: d.style });
+      setDash({ ...DEFAULT_DASH, items: presetItems('case'), style: d.style, customStyles: d.customStyles });
       return 'вернул раскладку по умолчанию';
   }
 }
@@ -234,8 +279,8 @@ export const wallWindowOpen = () => !!wallWin && !wallWin.closed;
 /** Стиль стены: готовый или придуманный ChatGPT. */
 export const currentStyle = (d: DashLayout) => d.customStyles.find((s) => s.id === d.style) ?? dashStyleById(d.style);
 
-/** Коротко для Джарвиса: что сейчас на стене. */
+/** Коротко для Джарвиса: что сейчас на стене (блоки в порядке чтения: слева направо). */
 export function dashSummary() {
   const d = state;
-  return { preset: d.preset, columns: d.columns.map((c) => c.block as BlockId), style: d.style, filter: d.filter, density: d.density, locked: d.locked };
+  return { preset: d.preset, columns: readingOrder(d.items).map((i) => i.block), style: d.style, filter: d.filter, density: d.density, locked: d.locked };
 }
