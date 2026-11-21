@@ -1,7 +1,7 @@
 // Дашборд координатора — видеостена по кейсу. Видно с расстояния; блоки, стиль и поведение настраиваются
 // в «Настройках дашборда» или голосом через Джарвиса. Прежняя стена — раскладка «Прежняя стена».
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Mic, AlarmClockOff, ArrowLeftRight, ArrowUp, BellRing, CheckCircle2, Hand, Inbox, RotateCcw, Search, Timer, TrendingUp, Wrench, Zap, type LucideIcon, Expand, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
+import { Mic, Layers, AlarmClockOff, ArrowLeftRight, BellRing, CheckCircle2, Hand, Inbox, RotateCcw, Search, Timer, TrendingUp, Wrench, Zap, type LucideIcon, Expand, GripHorizontal, LayoutGrid, MonitorUp, Plus, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import type { FeedEvent, Incident } from '../../../shared/types';
 import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, dashSnapshot, fmtShort, groupsOf, riskOf, transferCount, transfers, urgencyScore, waitingTake, type Attention, type BlockId, type DashGroup, type DashSnapshot } from '../../../shared/dash';
 import type { DashStyle } from '../../../shared/dashStyles';
@@ -22,11 +22,12 @@ import { AttentionStrip, useAttention } from './attention';
 import { UrgentShow } from './urgentShow';
 import { NowBlock } from './blocks3';
 import { DeadlinesBlock } from './deadlines';
-import { FavsBlock2, TeamAvatar, oneLine, serviceIcon } from './wall2';
+import { FavsBlock2, oneLine, serviceIcon } from './wall2';
 import { JarvisBlock } from './jarvisBlock';
 import { TeamLoadBlock } from './teams';
 import { CounterHeader } from './header';
 import { MailBlock } from './mail';
+import { useBump, useFlip } from './anim';
 import './dash.css';
 import './dash-grid.css';
 import './dash-fav.css';
@@ -340,11 +341,16 @@ function Block({ id, ctx, skip, o, it }: { id: BlockId; ctx: BlockCtx; skip: Set
 }
 
 export function BlockHead({ title, count, right, icon }: { title: string; count?: number; right?: React.ReactNode; icon?: React.ReactNode }) {
+  const bump = useBump<HTMLSpanElement>(count); // число поменялось — короткий «прыжок»
   return (
     <div className="db-head">
       {icon}
       <h2>{title}</h2>
-      {count !== undefined && <span className="db-count num">{count}</span>}
+      {count !== undefined && (
+        <span ref={bump} className="db-count num">
+          {count}
+        </span>
+      )}
       <span className="db-sp" />
       {right}
     </div>
@@ -464,49 +470,32 @@ const shortLeft = (left: number) => {
 };
 
 /**
- * Строка списка (вариант 4): сама строка заливается цветом по мере того, как уходит срок, — сразу видно, что горит.
- * Значок сервиса, «Сервис · Город», значок причины, аватар команды (у нераспределённых — совет ИИ), короткое время.
- * Без кнопок: на большом экране действует Джарвис голосом.
+ * Строка списка: только инцидент — значок сервиса, «Сервис · Город» и сколько до срока (у «снова жалобы» — сколько жалоб).
+ * Цвет строки — насколько горит: чем краснее, тем выше в списке. Без кнопок: на большом экране действует Джарвис.
  */
-function FillRow({ i, att, now, onClick, off, above = false, focus = false }: { i: Incident; att?: Attention; now: number; onClick: () => void; off?: boolean; above?: boolean; focus?: boolean }) {
+function FillRow({ i, att, h, now, onClick, off, focus = false }: { i: Incident; att?: Attention; h: number; now: number; onClick: () => void; off?: boolean; focus?: boolean }) {
   const recur = i.status === 'resolved' && i.recur ? i.recur : null;
   const Icon = serviceIcon(i);
   const left = i.slaDeadline - now;
-  const tone = recur || left <= 0 ? 'over' : left < 30 * MIN ? 'hot' : left < 2 * 60 * MIN ? 'warm' : 'ok';
-  const fill = recur || left <= 0 ? 1 : frac(i, now);
-  const why = above ? { icon: ArrowUp, text: 'Важнее критического' } : att ? (() => {
-        const hit = WHY.find(([re]) => re.test(att.reason));
-        return hit ? { icon: hit[1], text: att.reason } : null;
-      })() : null;
-  const aiTeam = i.status === 'coordinators' && i.ai?.teamId ? teamName(i.ai.teamId) : null;
   return (
     <div
       role="button"
       data-inc={i.id}
+      data-flip={i.id}
+      data-level={h}
       tabIndex={off ? -1 : 0}
-      className={`dfr p-${i.priority} t-${tone} ${i.status === 'coordinators' ? 'route' : ''} ${recur ? 'recur' : ''} ${off ? 'off' : ''} ${focus ? 'jv-focus' : ''}`}
+      className={`dfr h-${h} p-${i.priority} ${off ? 'off' : ''} ${focus ? 'jv-focus' : ''}`}
       onClick={onClick}
-      title={`${i.title}\n${PRIO[i.priority]} · ${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}\n${who(i)}${aiTeam ? `\nИИ советует: ${aiTeam}` : ''}${att ? `\n${att.reason}` : ''}`}
+      title={`${i.title}
+${PRIO[i.priority]} · ${i.productName || i.service} · возник ${fmtClock(i.createdAt)} · ${i.stateText}
+${who(i)}${att ? `
+${att.reason}` : ''}`}
       aria-hidden={off || undefined}
     >
-      <span className="dfr-fill" style={{ width: `${Math.round(fill * 100)}%` }} />
       <span className="dfr-ic">
         <Icon />
       </span>
       <b className="dfr-title">{oneLine(i)}</b>
-      {why && (
-        <span className={`dfr-why t-${above ? 'crit' : att!.tone}`} title={why.text}>
-          <why.icon />
-        </span>
-      )}
-      {aiTeam ? (
-        <span className="dc3-ai" title={`ИИ советует передать: ${aiTeam}`}>
-          <TeamAvatar i={{ ...i, status: 'assigned', teamId: i.ai!.teamId! } as Incident} />
-          <Sparkles className="dc3-spark" />
-        </span>
-      ) : i.status !== 'coordinators' && !recur ? (
-        <TeamAvatar i={i} />
-      ) : null}
       <span className="dfr-time num">
         {recur ? (
           <>
@@ -521,23 +510,41 @@ function FillRow({ i, att, now, onClick, off, above = false, focus = false }: { 
 }
 
 /**
- * «Кому распределить» (вариант 4): строки с заливкой по сроку. Сверху — ждут распределения, затем важные
- * (критические, высокие, «снова жалобы») — эти не листаются; остальное листается. Внизу — вопрос Джарвиса.
+ * «Кому распределить»: все инциденты, требующие действия, одним списком — сверху самые красные (насколько горит:
+ * уровень, срок, «снова жалобы»). Без прокрутки и листания: показываем, сколько помещается, а остальное —
+ * одной строкой «ещё N · горит M» (их зачитает Джарвис). Внизу — вопрос Джарвиса.
  */
 function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now, d } = ctx;
-  const isPinned = (x: { inc: Incident; att: Attention }) => x.inc.priority === 'P1' || x.inc.priority === 'P2' || x.inc.status === 'resolved' || (snap.topCrit > 0 && x.att.score > snap.topCrit);
-  const toRoute = snap.action.filter((x) => x.inc.status === 'coordinators');
-  const pinned = snap.action.filter((x) => x.inc.status !== 'coordinators' && isPinned(x));
-  const rest = snap.action.filter((x) => x.inc.status !== 'coordinators' && !isPinned(x));
-  const p = useFitPager(rest.length, on(o, 'page', d.pageSec));
-  const above = (x: { inc: Incident; att: Attention }) => snap.topCrit > 0 && x.inc.priority !== 'P1' && x.att.score > snap.topCrit;
+  const list = snap.action
+    .map((x) => ({ ...x, h: heatFor(x.inc, x.att.score) }))
+    .sort((a, b) => b.h - a.h || b.att.score - a.att.score || a.inc.slaDeadline - b.inc.slaDeadline);
+  // сколько строк помещается в блок (меряем по уже стоящим строкам)
+  const box = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(list.length);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const h = el.clientHeight;
+    let n = 0;
+    for (const c of Array.from(el.children) as HTMLElement[]) {
+      if (c.offsetTop + c.offsetHeight <= h + 2) n++;
+      else break;
+    }
+    if (n !== fit) setFit(Math.max(1, n));
+  });
+  useFlip(box); // строки плавно переезжают, когда меняется порядок; новые въезжают; стал горячее — вспышка
+  const over = list.length > fit;
+  const cut = over ? Math.max(1, fit - 1) : list.length;
+  const rest = list.slice(cut);
+  const restHot = rest.filter((x) => x.h >= 3).length;
   const work = useJarvisWork(); // о каком инциденте говорит Джарвис — подсвечиваем строку
   const jvFocus = jarvisBusyRecently(now) ? work.focusId : null;
-  const row = (x: { inc: Incident; att: Attention }, off?: boolean) => <FillRow key={x.inc.id} i={x.inc} att={x.att} now={now} above={above(x)} off={off} focus={jvFocus === x.inc.id} onClick={() => ctx.open(x.inc)} />;
+  const toRoute = snap.action.filter((x) => x.inc.status === 'coordinators');
   const withAi = toRoute.filter((x) => x.inc.ai?.teamId).length;
-  const recurN = pinned.filter((x) => x.inc.status === 'resolved').length;
+  const recurN = snap.action.filter((x) => x.inc.status === 'resolved').length;
   const ask = withAi ? `«Передать ${withAi} по совету ИИ?»` : toRoute.length ? '«Подобрать команды?»' : recurN ? '«Вернуть в работу?»' : null;
+  const row = (x: (typeof list)[number], off?: boolean) => <FillRow key={x.inc.id} i={x.inc} att={x.att} h={x.h} now={now} off={off} focus={jvFocus === x.inc.id} onClick={() => ctx.open(x.inc)} />;
   return (
     <div className={`db db-action ${ob(o, 'compact', false) ? 'compact' : ''}`}>
       <BlockHead title={d.filter ? GROUP_NAME[d.filter] : 'Кому распределить'} count={snap.action.length} icon={<BellRing size={18} />} />
@@ -546,15 +553,19 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
           <CheckCircle2 />
         </div>
       )}
-      <div className="db-pin dfr-list">
-        {toRoute.map((x) => row(x))}
-        {pinned.map((x) => row(x))}
+      <div className="db-list dfr-list" ref={box}>
+        {list.slice(0, cut).map((x) => row(x))}
+        {over && (
+          <div className={`dfr dfr-more ${restHot ? 'hot' : ''}`} data-flip="more" data-level={restHot} title={rest.map((x) => x.inc.title).join('\n')}>
+            <span className="dfr-ic">
+              <Layers />
+            </span>
+            <b className="dfr-title">ещё {rest.length}</b>
+            {restHot > 0 && <span className="dfr-time num">горит {restHot}</span>}
+          </div>
+        )}
+        {rest.map((x) => row(x, true))}
       </div>
-      {rest.length > 0 && <div className="dfr-sep" aria-hidden />}
-      <div className="db-list dfr-list" ref={p.box}>
-        {rest.slice(p.start).map((x, k) => row(x, k >= p.fit))}
-      </div>
-      <PagerFoot p={p} total={rest.length} />
       {ask && (
         <div className="dn4-jv dfr-jv" title="Ответьте голосом — Джарвис сделает">
           <span className="dn4-mic">

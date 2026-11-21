@@ -954,6 +954,36 @@ export class Point {
     return s;
   }
 
+  /**
+   * Написать руководителю команды по инциденту (голосом через Джарвиса или с пункта): сообщение уходит ему лично
+   * и видно в переписке инцидента; открытый сигнал по инциденту при этом считается переданным руководителю.
+   */
+  messageLead(id: string, actor: string, text: string) {
+    const inc = this.need(id);
+    const team = teamById(inc.teamId);
+    if (!team || inc.teamId === POINT_ID) throw new Error('инцидент ещё не у команды — сначала передайте его');
+    const lead = personById(team.leadId);
+    const t = text.trim().slice(0, 600);
+    if (!t) throw new Error('пустое сообщение');
+    const now = Date.now();
+    const c = { id: `M${now.toString(36)}${Math.floor(Math.random() * 1e4)}`, at: now, author: actor, personId: null, side: 'point' as const, teamId: null, text: `Руководителю${lead ? ` (${lead.name})` : ''}: ${t}` };
+    inc.comments = [...(inc.comments ?? []), c].slice(-200);
+    inc.leadNotifiedAt = now;
+    inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: написал руководителю команды${lead ? ` ${lead.name}` : ''} — «${t.slice(0, 160)}»` });
+    for (const s of this.signals.values())
+      if (s.incidentId === inc.id && s.status === 'open') {
+        s.status = 'notified';
+        s.notifiedAt = now;
+        s.notifiedBy = actor;
+        this.emit({ type: 'signal', data: s });
+      }
+    const h = this.hidden.get(inc.id);
+    if (h && lead && !this.isOnline(lead.id)) h.leadAt = now + between(90, 200) * 1000; // демо: руководитель отреагирует сам
+    this.touch(inc, now);
+    this.pushFeed('signal', inc, `Руководителю «${team.name}»: ${t.slice(0, 80)}`, actor);
+    return { team: team.name, lead: lead?.name ?? null };
+  }
+
   closeSignal(signalId: string, actor: string) {
     const s = this.signals.get(signalId);
     if (!s) throw new Error('Сигнал не найден');

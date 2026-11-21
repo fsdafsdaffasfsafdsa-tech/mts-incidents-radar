@@ -60,7 +60,11 @@ export function JarvisBlock({ ctx, brief }: { ctx: BlockCtx; brief: string | nul
         ))}
       </div>
       <p className="jvb-phrase" key={phrase}>
-        {phrase}
+        {phrase.split(' ').map((w, k) => (
+          <span key={k} className="jvb-w" style={{ animationDelay: `${Math.min(k, 30) * 45}ms` }}>
+            {w}{' '}
+          </span>
+        ))}
       </p>
       {state === 'speaking' && <small className="jvb-hint">скажите «стоп» — замолчу</small>}
     </div>

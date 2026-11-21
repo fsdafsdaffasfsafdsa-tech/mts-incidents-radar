@@ -3,12 +3,14 @@
 // Цвет — приоритет инцидента. Шкала растянута у «сейчас» (сейчас · 1ч · 4ч · 1д · 3д · 7д): сроки бывают
 // и через час, и через неделю. Полосы укорачиваются в реальном времени. Кнопок нет — подробности по щелчку
 // на полосу (для мыши) или голосом у Джарвиса.
+import { useRef } from 'react';
 import { CheckCircle2, Users } from 'lucide-react';
 import type { Incident, Priority } from '../../../shared/types';
 import { teamName } from '../../store';
 import { BlockHead, type BlockCtx } from './Dashboard';
 import { TeamAvatar } from './wall2';
 import { NOW_X, TICKS, cd, isStuck, xOf } from './scale';
+import { useFlip } from './anim';
 
 const WEIGHT: Record<Priority, number> = { P1: 8, P2: 4, P3: 2, P4: 1 };
 const TEAMS = 3; // сколько команд помещается в блок
@@ -31,13 +33,15 @@ function teamsOf(work: Incident[], now: number): Team[] {
 export function TeamLoadBlock({ ctx }: { ctx: BlockCtx }) {
   const { now } = ctx;
   const teams = teamsOf(ctx.snap.work, now).slice(0, TEAMS);
+  const rows = useRef<HTMLDivElement>(null);
+  useFlip(rows); // команды меняются местами плавно; новая въезжает; просроченных больше — вспышка
   return (
     <div className="db db-tl">
       <BlockHead title="Команды" count={ctx.snap.work.length} icon={<Users size={18} />} />
       {teams.length ? (
-        <div className="tm-rows">
+        <div className="tm-rows" ref={rows}>
           {teams.map((t) => (
-            <div key={t.id} className="tm-row" title={teamName(t.id)}>
+            <div key={t.id} className="tm-row" data-flip={t.id} data-level={t.list.filter((i) => i.slaDeadline <= now).length} title={teamName(t.id)}>
               <span className="tm-who">
                 <TeamAvatar i={t.list[0]} />
                 <b>{teamName(t.id).split(' · ')[0]}</b>

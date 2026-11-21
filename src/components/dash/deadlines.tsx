@@ -3,10 +3,12 @@
 // У плитки заголовок со словом и числом, под ним точки-инциденты цвета приоритета: внутри плитки правее — больше
 // времени до срока, выше — серьёзнее. По всем открытым инцидентам (на пункте и у команд). Кнопок нет —
 // подробности по щелчку на точку (для мыши) или голосом у Джарвиса.
+import { useRef } from 'react';
 import { CheckCircle2, Clock, Flame, Hourglass, Timer, type LucideIcon } from 'lucide-react';
 import type { Incident, Priority } from '../../../shared/types';
 import { BlockHead, type BlockCtx } from './Dashboard';
 import { HOUR, cd, isStuck, xOf } from './scale';
+import { useFlip } from './anim';
 
 const URGENT = 4 * HOUR; // меньше — срочно
 const IMPACT: Record<Priority, number> = { P1: 0.85, P2: 0.6, P3: 0.35, P4: 0.12 };
@@ -41,18 +43,22 @@ export function DeadlinesBlock({ ctx }: { ctx: BlockCtx }) {
     const bottom = (q === 'hot' || q === 'imp' ? ((p.y - 50) / 50) * 100 : (p.y / 50) * 100) + jitter(p.i.id);
     return { left: `${Math.max(6, Math.min(94, left))}%`, bottom: `${Math.max(12, Math.min(86, bottom))}%`, ['--sz' as string]: p.i.priority === 'P1' ? 1.3 : 1 };
   };
+  const tiles = useRef<HTMLDivElement>(null);
+  useFlip(tiles); // в плитке стало больше — вспышка цвета плитки
   return (
     <div className="db db-dl">
       <BlockHead title="Сроки" icon={<Timer size={18} />} />
-      <div className="mx-tiles">
+      <div className="mx-tiles" ref={tiles}>
         {Q_ORDER.map((q) => {
           const M = Q_META[q];
           return (
-            <div key={q} className={`mx-tile ${M.cls} ${byQ[q].length ? 'on' : ''}`} title={byQ[q].map((p) => p.i.title).join('\n') || 'нет'}>
+            <div key={q} data-flip={q} data-level={byQ[q].length} className={`mx-tile ${M.cls} ${byQ[q].length ? 'on' : ''}`} title={byQ[q].map((p) => p.i.title).join('\n') || 'нет'}>
               <span className="mx-th">
                 <M.icon />
                 {M.word}
-                <b className="num">{byQ[q].length}</b>
+                <b className="num" key={byQ[q].length}>
+                  {byQ[q].length}
+                </b>
               </span>
               <div className="mx-tf">
                 {byQ[q].map((p) => (

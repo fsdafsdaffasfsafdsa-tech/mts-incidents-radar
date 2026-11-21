@@ -215,8 +215,17 @@ export const jarvisAsk = (text: string, opts: { quiet?: boolean } = {}) => bridg
 /** Джарвис на этом экране есть (шар смонтирован) — можно задавать вопросы. */
 export const jarvisReady = () => !!bridge;
 
-// ─── объявления: всё, что происходит, говорит Джарвис — по очереди, без повторов, не перебивая ───
-const annQueue: { text: string; id: string; key: string }[] = [];
+// ─── объявления: всё, что происходит, говорит Джарвис — по одному: следующую проблему — только когда
+// с текущей разобрались (дежурный ответил Джарвису, подтвердил, инцидент сдвинулся) или прошло 2 минуты ───
+const annQueue: { text: string; id: string; key: string; st: string | null; at: number }[] = [];
+const ANN_WAIT = 120_000; // дольше не держим очередь — говорим следующее
+const ANN_STALE = 10 * 60_000; // объявление старше — уже не актуально
+let annAck = 0; // когда дежурный последний раз подтвердил (Esc, «принял», действие)
+window.addEventListener('radar:ack', () => (annAck = Date.now()));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') annAck = Date.now();
+});
+const statusOf = (id: string) => (id ? getState().incidents.get(id)?.status ?? null : null);
 const annRecent = new Map<string, number>();
 let annRunning = false;
 const canAnnounce = () => getState().me?.role === 'coordinator' && jarvisPrefs.speak && jarvisPrefs.announce && !jarvisPause.sleep;
@@ -232,12 +241,7 @@ function enqueueAnnounce(text: string, id: string, key = `inc:${id}`) {
   const now = Date.now();
   if ((annRecent.get(key) ?? 0) > now - 45_000 || annQueue.some((x) => x.key === key)) return;
   annRecent.set(key, now);
-  annQueue.push({ text: withAddress(text), id, key });
-  // много сразу — первые два целиком, остальное одной фразой
-  if (annQueue.length > 3) {
-    const extra = annQueue.splice(2);
-    annQueue.push({ text: withAddress(`ещё ${extra.length} ${extra.length < 5 ? 'события' : 'событий'} — они на стене. Что будем делать?`), id: extra[0].id, key: `many:${now}` });
-  }
+  annQueue.push({ text: withAddress(text), id, key, st: statusOf(id), at: now });
   void runAnnounce();
 }
 // ─── что Джарвис объявил сам — для блока Джарвиса на стене (лента разговора) ───
@@ -257,17 +261,29 @@ export function useJarvisSaid() {
   }, []);
   return jarvisSaid;
 }
+/** Объявление ещё актуально: не устарело и инцидент не сдвинулся с тех пор (иначе с ним уже разобрались). */
+const annFresh = (a: (typeof annQueue)[number]) => Date.now() - a.at < ANN_STALE && (!a.id || (getState().incidents.has(a.id) && statusOf(a.id) === a.st));
+/** Ждём, пока с объявленным разберутся: дежурный поговорил с Джарвисом и тот закончил, подтвердил, инцидент сдвинулся. */
+async function waitHandled(a: (typeof annQueue)[number], spokeAt: number) {
+  while (Date.now() - spokeAt < ANN_WAIT && annQueue.length && canAnnounce()) {
+    if (jarvisWork.at > spokeAt && !jarvisWork.busy) return;
+    if (annAck > spokeAt) return;
+    if (a.id && statusOf(a.id) !== a.st) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
 async function runAnnounce() {
   if (annRunning) return;
   annRunning = true;
   try {
     while (annQueue.length) {
       const a = annQueue.shift()!;
-      if (!canAnnounce()) continue;
+      if (!canAnnounce() || !annFresh(a)) continue;
       logSaid(a.text, a.id);
       if (bridge) await bridge.announce(a.text, a.id);
       else await say(a.text);
-      await new Promise((r) => setTimeout(r, 500));
+      await waitHandled(a, Date.now()); // следующую проблему — только после этой
+      await new Promise((r) => setTimeout(r, 1500));
     }
   } finally {
     annRunning = false;

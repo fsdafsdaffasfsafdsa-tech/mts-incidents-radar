@@ -11,6 +11,7 @@ import { fmtClock } from '../../lib/format';
 import { announceText } from '../Jarvis';
 import { BlockHead, type BlockCtx } from './Dashboard';
 import { oneLine, serviceIcon } from './wall2';
+import { useFlip } from './anim';
 
 const URG = { high: 0, normal: 1, low: 2 } as const;
 const HOUR = 3_600_000;
@@ -68,6 +69,8 @@ export function MailBlock({ ctx }: { ctx: BlockCtx }) {
     .slice(0, 4);
   const max = Math.max(1, ...groups.map((g) => g.list.length));
   const open = openId ? mail.find((m) => m.id === openId) : undefined;
+  const feed = useRef<HTMLDivElement>(null);
+  useFlip(feed); // строки переезжают, новая въезжает, писем стало больше — вспышка
   return (
     <div className="db db-mail">
       <BlockHead
@@ -99,12 +102,12 @@ export function MailBlock({ ctx }: { ctx: BlockCtx }) {
         }
       />
       {groups.length || loose.length ? (
-        <div className="ml-feed">
+        <div className="ml-feed" ref={feed}>
           {groups.map((g, k) => (
             <BarRow key={g.inc.id} inc={g.inc} n={g.list.length} frac={g.list.length / max} delay={k * 0.08} onClick={() => setOpenId(g.list[0].id)} />
           ))}
           {loose.length > 0 && (
-            <div className="ml-row ml-bar loose" title="Письма без инцидента">
+            <div className="ml-row ml-bar loose" data-flip="loose" data-level={loose.length} title="Письма без инцидента">
               <span className="ml-bar-fill" style={{ width: `${Math.min(1, loose.length / max) * 100}%` }} />
               <Inbox className="ml-row-ic" />
               <b className="muted">без инцидента</b>
@@ -139,7 +142,7 @@ export function MailBlock({ ctx }: { ctx: BlockCtx }) {
 function BarRow({ inc, n, frac, delay, onClick }: { inc: Incident; n: number; frac: number; delay: number; onClick: () => void }) {
   const I = serviceIcon(inc);
   return (
-    <div role="button" tabIndex={0} className={`ml-row ml-bar p-${inc.priority}`} style={{ animationDelay: `${delay}s` }} onClick={onClick} title={`${inc.title} · писем: ${n}`}>
+    <div role="button" tabIndex={0} data-flip={inc.id} data-level={n} className={`ml-row ml-bar p-${inc.priority}`} style={{ animationDelay: `${delay}s` }} onClick={onClick} title={`${inc.title} · писем: ${n}`}>
       <span className="ml-bar-fill" style={{ width: `${frac * 100}%` }} />
       <I className="ml-row-ic" />
       <b>{oneLine(inc)}</b>

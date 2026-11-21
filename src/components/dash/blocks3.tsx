@@ -2,12 +2,14 @@
 // дежурный на смене один, поэтому «кто ведёт» на пункте не показываем.
 // «Взять сейчас»: две шкалы — срок и масштаб (жалобы), сервис, крупное время, шаги «пункт → команда → решено»
 // и вопрос Джарвиса. «Сроки» — радар: зона просрочки с числом, три дорожки, точки (тесные — кластером).
+import { useRef } from 'react';
 import { CheckCircle2, Clock, Inbox, Mic, RotateCcw, Target, Users, type LucideIcon } from 'lucide-react';
 import type { Incident } from '../../../shared/types';
 import { complaintsWord, heatFor } from '../../../shared/attention';
 import { teamName, useStore } from '../../store';
 import { BlockHead, Ring, Why, frac, type BlockCtx } from './Dashboard';
 import { TeamAvatar, oneLine, serviceIcon, shortPlace, splitTitle } from './wall2';
+import { useFlip } from './anim';
 
 const MIN = 60_000;
 
@@ -55,6 +57,8 @@ const STEPS: { icon: LucideIcon; name: string }[] = [
 /** «Взять сейчас», вариант 4д: шкала срока и шкала масштаба, сервис, время, шаги и вопрос Джарвиса. Без кнопок. */
 export function NowBlock({ ctx }: { ctx: BlockCtx }) {
   const { snap, now } = ctx;
+  const next = useRef<HTMLDivElement>(null);
+  useFlip(next); // очередь «следующие» переезжает плавно, новый въезжает
   const p1Threshold = useStore((s) => s.config?.rules.p1 ?? 120);
   // сначала то, что ждёт решения дежурного; потом — остальное по срочности
   const mine = (i: Incident) => i.status === 'coordinators' || i.status === 'resolved' || (!!i.p1Proposal && i.priority !== 'P1');
@@ -144,11 +148,11 @@ export function NowBlock({ ctx }: { ctx: BlockCtx }) {
         </span>
         <b>{jarvisQuestion(i, now)}</b>
       </div>
-      <div className="dn-next">
+      <div className="dn-next" ref={next}>
         {order.slice(1, 4).map((x) => {
           const NI = serviceIcon(x.inc);
           return (
-            <div key={x.inc.id} className={`dn-row dn3-row p-${x.inc.priority}`} data-heat={heatFor(x.inc, x.att.score)} onClick={() => ctx.open(x.inc)} title={x.inc.title}>
+            <div key={x.inc.id} data-flip={x.inc.id} data-level={heatFor(x.inc, x.att.score)} className={`dn-row dn3-row p-${x.inc.priority}`} data-heat={heatFor(x.inc, x.att.score)} onClick={() => ctx.open(x.inc)} title={x.inc.title}>
               <NI className="dn-row-ic" />
               <b>{oneLine(x.inc)}</b>
               {x.inc.status === 'resolved' && x.inc.recur ? (
