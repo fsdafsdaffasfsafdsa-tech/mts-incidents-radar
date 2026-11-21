@@ -1,13 +1,14 @@
 // Новые блоки свободного поля и галерея «Добавить блок»: часы, счётчики, одна группа, персонаж, риск,
 // кому передать, команды, заметка и свой блок, придуманный ChatGPT (в том числе новый персонаж с портретом).
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowLeftRight, BarChart3, Bell, Bot, Clock3, Columns3, Flame, Hash, List, Map as MapIcon, NotebookPen, Repeat, Send, Smile, Sparkles, Table2, Users, X } from 'lucide-react';
+import { Activity, ArrowLeftRight, BarChart3, Bell, Bot, Check, Clock3, Columns3, Eye, Flame, Hash, List, Map as MapIcon, NotebookPen, Repeat, Send, Smile, Sparkles, Star, Table2, Users, X } from 'lucide-react';
 import type { Incident } from '../../../shared/types';
 import { BLOCKS, BLOCK_CATS, DASH_GROUPS, GROUP_NAME, riskOf, waitingTake, NOT_TAKEN_MIN, type BlockId, type DashGroup } from '../../../shared/dash';
 import { DEFAULT_SIZE } from '../../../shared/dashGrid';
 import { applyFilter, type CustomSpec } from '../../../shared/dashCustom';
 import { PERSONAS, personaById } from '../../../shared/personas';
-import { teamName } from '../../store';
+import { markSeen, teamName } from '../../store';
+import { openFav } from '../FavDialog';
 import { fmtClock } from '../../lib/format';
 import { applyDashOp, dashEvent } from '../../lib/dashLayout';
 import { makeCustomBlock } from '../../lib/dashDesign';
@@ -207,11 +208,26 @@ export function CharacterBlock({ ctx, o, spec }: { ctx: BlockCtx; o?: Opts; spec
   const ch = spec?.character;
   const name = ch?.name ?? p.name;
   const style = ch?.style ?? p.style;
+  const color = ch?.color ?? p.color;
   const text = useSay(name, style, on(o, 'every', 60));
   const fallback = ctx.snap.action[0] ? `Главное — «${ctx.snap.action[0].inc.title}»: ${ctx.snap.action[0].att.reason.toLowerCase()}.` : 'Всё спокойно.';
+  // Фигура на прозрачном фоне: у встроенных — готовая, у нарисованных ChatGPT — если фон удалось вырезать.
+  const fig = ch ? (ch.cut && ch.avatar?.startsWith('data:image/') ? ch.avatar : null) : p.cutout;
+  if (fig)
+    return (
+      <div className="db db-char cut" style={{ ['--pc' as string]: color }}>
+        <p className="dch-bubble" key={text || fallback}>
+          <small>{name}</small>
+          <span>{text || fallback}</span>
+        </p>
+        <div className="dch-stage">
+          <img className="dch-fig" src={fig} alt={name} draggable={false} />
+        </div>
+      </div>
+    );
   return (
     <div className="db db-char">
-      <Avatar src={ch?.avatar ?? p.id} name={name} color={ch?.color ?? p.color} />
+      <Avatar src={ch?.avatar ?? p.id} name={name} color={color} />
       <b className="dch-name">{name}</b>
       <p className="dch-say">{text || fallback}</p>
     </div>
@@ -300,6 +316,8 @@ const ICONS: Record<string, React.ReactNode> = {
   repeat: <Repeat size={22} />,
   note: <NotebookPen size={22} />,
   sparkles: <Sparkles size={22} />,
+  eye: <Eye size={22} />,
+  star: <Star size={22} />,
 };
 /** Маленький набросок блока — чтобы было видно, как он выглядит. */
 function Preview({ id }: { id: BlockId }) {
@@ -318,7 +336,7 @@ function Preview({ id }: { id: BlockId }) {
     case 'character':
       return (
         <div className="gp gp-char">
-          <img src="/personas/nika.webp" alt="" />
+          <img src="/personas/nika-cut.webp" alt="" />
           <span>{lines(2)}</span>
         </div>
       );
@@ -499,3 +517,78 @@ export function BlockGallery({ at, onClose }: { at: { x: number; y: number } | n
 }
 
 export { GroupTags, fmtShort };
+
+// ─── «Не забыть»: подсовывает важные некритические, на которые давно никто не смотрел ───
+export function ForgotBlock({ ctx }: { ctx: BlockCtx }) {
+  // то, что и так вверху «Требует действия», здесь не повторяем
+  const top = new Set(ctx.snap.action.slice(0, 3).map((x) => x.inc.id));
+  const list = ctx.snap.forgotten.filter((x) => !top.has(x.inc.id));
+  const [k, setK] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setK((x) => x + 1), 12_000);
+    return () => clearInterval(t);
+  }, []);
+  if (!list.length)
+    return (
+      <div className="db db-forgot">
+        <BlockHead title="Не забыть" icon={<Eye size={18} />} />
+        <div className="db-empty small">Ничего не забыто — всё важное под присмотром</div>
+      </div>
+    );
+  const cur = list[k % Math.min(list.length, 5)];
+  const i = cur.inc;
+  const left = i.slaDeadline - ctx.now;
+  return (
+    <div className="db db-forgot">
+      <BlockHead title="Не забыть" count={list.length} icon={<Eye size={18} />} />
+      <button key={i.id} className={`dfg p-${i.priority}`} onClick={() => ctx.open(i)} title="Открыть — и он перестанет подсовываться">
+        <span className="dfg-why">
+          без внимания {fmtShort(cur.idle)}
+          {ctx.snap.topCrit > 0 && cur.score > ctx.snap.topCrit ? ' · важнее критического' : ''}
+        </span>
+        <b>{i.title}</b>
+        <small>{who(i)}</small>
+        <span className={`dfg-sla num ${left < 30 * MIN ? 'hot' : ''}`}>{left > 0 ? `до срока ${fmtShort(left)}` : `просрочен ${fmtShort(-left)}`}</span>
+      </button>
+      <span className="dfg-act">
+        <button onClick={() => markSeen(i.id)} title="Посмотрел — убрать из «Не забыть»">
+          <Check size={14} /> Посмотрел
+        </button>
+        <button onClick={() => openFav(i.id)} title="В избранное смены с заметкой">
+          <Star size={14} /> В избранное
+        </button>
+        {list.length > 1 && <span className="num">ещё {list.length - 1}</span>}
+      </span>
+    </div>
+  );
+}
+
+// ─── Избранное смены: закреплённые инциденты с заметками и напоминаниями ───
+export function FavsBlock({ ctx }: { ctx: BlockCtx }) {
+  const list = ctx.snap.pinned;
+  return (
+    <div className="db db-favs">
+      <BlockHead title="Избранное смены" count={list.length} icon={<Star size={18} />} />
+      {!list.length && <div className="db-empty small">Закрепите важное звёздочкой на карточке — заметку и напоминание увидит вся смена</div>}
+      {list.map((i) => {
+        const p = i.pin!;
+        const due = p.remindAt ? p.remindAt - ctx.now : null;
+        return (
+          <div key={i.id} className={`dfv p-${i.priority} ${i.status === 'resolved' ? 'done' : ''}`}>
+            <button className="dfv-main" onClick={() => ctx.open(i)}>
+              <b>{i.status === 'resolved' ? '✓ ' : ''}{i.title}</b>
+              {p.note && <em>«{p.note}»</em>}
+              <small>
+                {p.by.split(' ')[0]} · {i.status === 'resolved' ? 'решён' : leftText(i, ctx.now)}
+                {due !== null ? (due > 0 ? ` · напомнит через ${fmtShort(due)}` : ' · пора!') : ''}
+              </small>
+            </button>
+            <button className="dfv-star" onClick={() => openFav(i.id)} aria-label="Изменить избранное">
+              <Star size={15} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

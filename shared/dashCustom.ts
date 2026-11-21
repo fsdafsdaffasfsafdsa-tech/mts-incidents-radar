@@ -22,7 +22,7 @@ export interface CustomSpec {
   sort?: 'deadline' | 'priority' | 'created' | 'complaints';
   limit?: number;
   note?: string;
-  character?: { name: string; style: string; avatar?: string; color?: string };
+  character?: { name: string; style: string; avatar?: string; color?: string; cut?: boolean }; // cut — фон картинки вырезан
 }
 
 const PRIOS: Priority[] = ['P1', 'P2', 'P3', 'P4'];
@@ -63,7 +63,7 @@ export function cleanSpec(o: unknown): CustomSpec | null {
   if (kind === 'note') spec.note = str(x.note, 600) || '…';
   if (kind === 'character') {
     const c = (x.character && typeof x.character === 'object' ? x.character : {}) as Record<string, unknown>;
-    spec.character = { name: str(c.name, 30) || 'Персонаж', style: str(c.style, 200) || 'дружелюбно и коротко', avatar: safeAvatar(c.avatar), color: COLOR.test(String(c.color)) ? String(c.color) : undefined };
+    spec.character = { name: str(c.name, 30) || 'Персонаж', style: str(c.style, 200) || 'дружелюбно и коротко', avatar: safeAvatar(c.avatar), color: COLOR.test(String(c.color)) ? String(c.color) : undefined, ...(c.cut === true ? { cut: true } : {}) };
   }
   return spec;
 }

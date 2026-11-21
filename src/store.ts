@@ -547,7 +547,19 @@ export function setTab(tab: string) {
   writePref(`radar.tab.${state.me?.role ?? ''}`, tab);
 }
 /** Открыть инцидент: переходим на вкладку, где с ним работают. */
+/** Ссылка «открыть в ITSM»: адрес из ITSM_URL на сервере или встроенная ITSM-карточка (демо). */
+export const itsmLink = (id: string) => (state.config?.itsmUrl ?? '/itsm/{id}').replace('{id}', encodeURIComponent(id));
+
+/** Избранное смены: закрепить инцидент с заметкой и напоминанием (видно всем дежурным). */
+export const pinIncident = (id: string, note: string, remindMin: number | null) => post(`/api/incidents/${encodeURIComponent(id)}/pin`, { note, remindMin }).catch(() => undefined);
+export const unpinIncident = (id: string) => post(`/api/incidents/${encodeURIComponent(id)}/unpin`).catch(() => undefined);
+/** Дежурный посмотрел инцидент — «Не забыть» перестаёт его подсовывать. */
+export const markSeen = (id: string) => {
+  if (state.me?.role === 'coordinator') void post(`/api/incidents/${encodeURIComponent(id)}/seen`).catch(() => undefined);
+};
+
 export function openIncident(id: string) {
+  markSeen(id);
   const inc = state.incidents.get(id);
   const role = state.me?.role;
   if (inc && role === 'coordinator' && state.tab === 'desk') {

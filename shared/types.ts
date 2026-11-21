@@ -64,6 +64,14 @@ export interface Crew {
   arrived: boolean;
 }
 
+/** Избранное смены: инцидент закреплён дежурным с заметкой и, по желанию, напоминанием. */
+export interface IncidentPin {
+  by: string;
+  at: number;
+  note: string;
+  remindAt: number | null;
+}
+
 export interface Incident {
   id: string;
   title: string;
@@ -101,6 +109,10 @@ export interface Incident {
   routedAt?: number | null; // когда передан команде (от этого считаются таймеры автоэскалации)
   escalation?: number; // ступень автоэскалации: 0 — нет, 1 — напомнили, 2 — руководителю, 3 — предложена дежурная смена
   comments?: IncidentComment[];
+  // ─── свои поля Радара (ментор разрешил дополнять формат выгрузки) ───
+  pin?: IncidentPin | null; // избранное смены: кто закрепил, заметка, напоминание
+  attentionAt?: number | null; // когда дежурный последний раз смотрел инцидент
+  attentionBy?: string | null;
   startedAt: number | null;
   priority: Priority;
   status: Status;

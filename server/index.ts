@@ -16,6 +16,7 @@ import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
 import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
+import { RAW } from './catalog.ts';
 import { actorLine, ask as askJarvis, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
 import { parseDashCtx } from './jarvis-dash.ts';
 import { design as designDash } from './design.ts';
@@ -59,10 +60,22 @@ seedUsers(
   DEMO_PASSWORD,
 );
 
+// Исходные записи выгрузки (как в файле) — для ITSM-карточки по клику; плюс описание полей из файла атрибутов.
+const rawById = new Map<string, Record<string, unknown>>(RAW.map((r) => [r.id, r as unknown as Record<string, unknown>]));
+const ATTRS: { api_source: string; description: string; possible_values: string }[] = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'data', 'incidents_attributes.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+})();
 const itsm = new ItsmFile(
   path.resolve(root, process.env.INCIDENTS_FILE || 'data/incidents.json'),
   path.join(root, 'data', 'character_problems.json'),
-  (records, initial) => point.ingest(records, initial),
+  (records, initial) => {
+    for (const r of records) rawById.set(r.id, r as unknown as Record<string, unknown>);
+    point.ingest(records, initial);
+  },
 );
 itsm.start();
 
@@ -181,7 +194,7 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       return;
     }
 
-    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve|comment)$/);
+    let m = p.match(/^\/api\/incidents\/([\w-]+)\/(route|complaints|level|p1|resolve|comment|pin|unpin|seen)$/);
     if (m) {
       const [, id, what] = m;
       const inc = point.incidents.get(id);
@@ -207,6 +220,9 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       }
       if (what === 'p1') return json(res, 200, body.confirm ? point.setLevel(id, 'P1', actor, 'подтверждено дежурным по предложению ИИ') : point.dismissP1(id, actor));
       if (what === 'resolve') return json(res, 200, point.resolveAtPoint(id, actor));
+      if (what === 'pin') return json(res, 200, point.pin(id, actor, str(body.note), Number(body.remindMin) || null));
+      if (what === 'unpin') return json(res, 200, point.unpin(id, actor));
+      if (what === 'seen') return json(res, 200, point.seen(id, actor));
     }
 
     // ─── Джарвис: голосовой помощник дежурного ───
@@ -237,6 +253,19 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
         send({ type: 'error', error: err instanceof Error ? err.message : String(err) });
       }
       return void res.end();
+    }
+    // ─── ITSM-карточка инцидента (демо ITSM по клику с дашборда) ───
+    m = p.match(/^\/api\/itsm\/([\w-]+)$/);
+    if (m) {
+      pointOnly();
+      const inc = point.incidents.get(m[1]);
+      const record = rawById.get(m[1]) ?? null;
+      if (!inc && !record) return json(res, 404, { error: 'Инцидент не найден' });
+      return json(res, 200, {
+        record,
+        attributes: ATTRS,
+        radar: inc ? { title: inc.title, status: inc.status, priority: inc.priority, team: inc.groupName, assignee: inc.assigneeName, slaDeadline: inc.slaDeadline, createdAt: inc.createdAt, origin: inc.origin, pin: inc.pin ?? null, attentionAt: inc.attentionAt ?? null, attentionBy: inc.attentionBy ?? null, history: inc.history.slice(-12) } : null,
+      });
     }
     // ─── Настройки, закреплённые за сотрудником (стена, персонаж, голос) ───
     if (p === '/api/prefs') {

@@ -171,6 +171,8 @@ export function toDashOp(a: Record<string, unknown>, c: DashCtx | null, point: P
 
 // ─── команды стене без модели ──────────────────────────────────────────────
 const BLOCK_WORDS: [RegExp, BlockId][] = [
+  [/блок.{0,12}избранн/, 'favs'],
+  [/блок.{0,12}(не забыть|забыт)/, 'forgot'],
   [/час[ыа]|время/, 'clock'],
   [/счётчик|счетчик|цифры групп/, 'counters'],
   [/риск/, 'risk'],

@@ -17,6 +17,8 @@ import { Settings } from './components/Settings';
 import { Alarm, ForecastWatch } from './components/Alarm';
 import { Jarvis } from './components/Jarvis';
 import { Scenario } from './components/Scenario';
+import { FavDialog } from './components/FavDialog';
+import { ItsmPage } from './components/ItsmPage';
 
 export function App() {
   const theme = useStore((s) => s.theme);
@@ -61,6 +63,8 @@ export function App() {
   const atPoint = me.role === 'coordinator';
   // Отдельное окно для экрана стены: адрес с ?wall — только видеостена, без шапки.
   if (atPoint && loaded && new URLSearchParams(location.search).has('wall')) return <StandaloneWall />;
+  // Переход «в ITSM» с дашборда: встроенная ITSM-карточка (демо), если настоящий ITSM не задан.
+  if (location.pathname.startsWith('/itsm/')) return <ItsmPage id={decodeURIComponent(location.pathname.slice(6))} />;
   // После входа дежурный видит дашборд; всё рабочее место (вкладки, карточки, справочник) — по кнопке.
   if (atPoint && loaded && !workOpen)
     return (
@@ -68,6 +72,7 @@ export function App() {
         <DashHome />
         <Settings />
         <Jarvis />
+        <FavDialog />
       </>
     );
 
@@ -102,6 +107,7 @@ export function App() {
       {atPoint && loaded && <ForecastWatch />}
       {atPoint && loaded && <Jarvis />}
       {atPoint && loaded && <Scenario />}
+      {atPoint && loaded && <FavDialog />}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Incident } from '../shared/types.ts';
-import { attention, dashSnapshot, groupsOf, transferCount, transfers, type BlockId } from '../shared/dash.ts';
+import { attention, dashSnapshot, groupsOf, isImportant, lastAttention, transferCount, transfers, urgencyScore, type BlockId } from '../shared/dash.ts';
 import { dashRules, toDashOp } from './jarvis-dash.ts';
 import { contrast, toStyle } from './design.ts';
 import { PERSONAS, personaById } from '../shared/personas.ts';
@@ -25,7 +25,7 @@ test('группы кейса: один инцидент сразу в неск�
   assert.deepEqual(groupsOf(inc({ priority: 'P4' })), []);
 });
 
-test('порядок «требует действия»: критический на координаторах → критический ждёт → на координаторах → срок → не берут', () => {
+test('порядок «требует действия»: критический на координаторах → критический ждёт → срок через 10 минут → на координаторах → не берут', () => {
   const list = [
     inc({ id: 'late', slaDeadline: now + 10 * MIN }),
     inc({ id: 'coord', status: 'coordinators' }),
@@ -37,12 +37,62 @@ test('порядок «требует действия»: критический
   const s = dashSnapshot(list, now);
   assert.deepEqual(
     s.action.map((x) => x.inc.id),
-    ['p1coord', 'p1wait', 'coord', 'late', 'nottaken'],
+    ['p1coord', 'p1wait', 'late', 'coord', 'nottaken'],
   );
   assert.equal(s.counts.crit, 2);
   assert.equal(s.counts.coord, 2);
   assert.equal(s.counts.notTaken, 1);
   assert.equal(attention(list[5], now), null, 'спокойный инцидент в работе действия не требует');
+});
+
+test('кейс: высокий со сроком через 10 минут срочнее критического с запасом в 5 часов', () => {
+  const list = [inc({ id: 'p1calm', priority: 'P1', status: 'in_progress' }), inc({ id: 'p2short', priority: 'P2', status: 'in_progress', slaDeadline: now + 10 * MIN })];
+  const s = dashSnapshot(list, now);
+  assert.equal(s.action[0].inc.id, 'p2short', 'короткий срок важнее уровня');
+  assert.ok(s.action[0].att.score > s.topCrit, 'на стене встанет над критическими с пометкой «Важнее критического»');
+  assert.equal(s.action[0].att.reason, 'Срок близко');
+  // а критический со сроком через 10 минут всё равно выше такого же высокого
+  const p1short = inc({ priority: 'P1', status: 'in_progress', slaDeadline: now + 10 * MIN });
+  assert.ok(urgencyScore(p1short, now) > urgencyScore(list[1], now));
+  // просроченный выше, чем срок через час
+  assert.ok(urgencyScore(inc({ priority: 'P3', slaDeadline: now - MIN }), now) > urgencyScore(inc({ priority: 'P3', slaDeadline: now + 60 * MIN }), now));
+});
+
+test('«Не забыть»: важный некритический без внимания 20+ минут, пока не посмотрели', () => {
+  const forgot = inc({ id: 'f', priority: 'P2', status: 'in_progress', createdAt: now - 60 * MIN });
+  const fresh = inc({ id: 'g', priority: 'P2', status: 'in_progress', createdAt: now - 60 * MIN, attentionAt: now - 5 * MIN });
+  const calm = inc({ id: 'h', priority: 'P4', status: 'in_progress', createdAt: now - 60 * MIN });
+  const crit = inc({ id: 'k', priority: 'P1', status: 'in_progress', createdAt: now - 60 * MIN });
+  assert.equal(isImportant(calm, now), false, 'низкий в работе с запасом — не важный');
+  assert.equal(isImportant(crit, now), false, 'критические и так на виду');
+  const s = dashSnapshot([forgot, fresh, calm, crit], now);
+  assert.deepEqual(s.forgotten.map((x) => x.inc.id), ['f']);
+  assert.equal(Math.round(s.forgotten[0].idle / MIN), 60);
+  // действие дежурного в истории тоже считается вниманием
+  const acted = inc({ priority: 'P2', status: 'in_progress', createdAt: now - 60 * MIN, history: [{ at: now - 3 * MIN, kind: 'coordinator', text: 'Иванов: передано команде «Биллинг»' }] as Incident['history'] });
+  assert.equal(lastAttention(acted), now - 3 * MIN);
+});
+
+test('избранное смены: закрепить с заметкой и напоминанием, «посмотрел», убрать', () => {
+  const p = new Point();
+  p['seed']();
+  const target = [...p.incidents.values()].find((i) => i.status !== 'resolved' && i.priority !== 'P1')!;
+  p.pin(target.id, 'Иванов Иван', 'жду ответа Billing', 30);
+  const inc1 = p.incidents.get(target.id)!;
+  assert.equal(inc1.pin?.note, 'жду ответа Billing');
+  assert.equal(inc1.pin?.by, 'Иванов Иван');
+  assert.ok(inc1.pin?.remindAt && Math.round((inc1.pin.remindAt - Date.now()) / MIN) === 30);
+  assert.ok(inc1.attentionAt, 'закрепил — значит, посмотрел');
+  const snap = dashSnapshot(p.incidents.values(), Date.now());
+  assert.ok(snap.pinned.some((i) => i.id === target.id));
+  assert.ok(!snap.forgotten.some((x) => x.inc.id === target.id), 'закреплённый не попадает в «Не забыть»');
+  assert.equal(transfers(inc1).length, transfers({ ...inc1, history: inc1.history.slice(0, -1) }).length, 'запись об избранном не считается передачей');
+  p.unpin(target.id, 'Иванов Иван');
+  assert.equal(p.incidents.get(target.id)!.pin, null);
+  const before = p.incidents.get(target.id)!.attentionAt;
+  p.seen(target.id, 'Петров');
+  assert.equal(p.incidents.get(target.id)!.attentionAt, before, '«посмотрел» не чаще раза в минуту');
+  p.stop();
 });
 
 test('фильтр по группе и решённые критические видны 15 минут', () => {
@@ -100,6 +150,9 @@ test('Джарвис без модели понимает команды сте�
   assert.deepEqual(said('покажи крупно самый срочный').got, { op: 'focus', id: 'top' });
   assert.deepEqual(said('раскладка четыре группы').got, { op: 'preset', preset: 'groups' });
   assert.deepEqual(said('верни прежнюю стену').got, { op: 'preset', preset: 'legacy' });
+  assert.deepEqual(said('добавь блок избранное').got, { op: 'show', block: 'favs' });
+  assert.deepEqual(said('добавь блок не забыть').got, { op: 'show', block: 'forgot' });
+  assert.equal(said('что в избранном').reply, null, 'вопрос об избранном — не команда стене');
   assert.equal(said('кому передать этот инцидент').reply, null, 'обычные вопросы не перехватывает');
 });
 

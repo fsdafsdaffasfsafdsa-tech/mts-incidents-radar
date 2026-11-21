@@ -169,4 +169,6 @@ export const DEFAULT_SIZE: Partial<Record<BlockId, { w: number; h: number }>> = 
   map: { w: 6, h: 8 },
   groups: { w: 8, h: 8 },
   custom: { w: 4, h: 6 },
+  forgot: { w: 3, h: 5 },
+  favs: { w: 4, h: 4 },
 };

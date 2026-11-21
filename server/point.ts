@@ -785,6 +785,38 @@ export class Point {
     return inc;
   }
 
+  /** Избранное смены: закрепить инцидент с заметкой и напоминанием (своё поле Радара — видно всем дежурным). */
+  pin(id: string, actor: string, note: string, remindMin: number | null) {
+    const inc = this.need(id);
+    const now = Date.now();
+    const had = !!inc.pin;
+    inc.pin = { by: actor, at: now, note: note.slice(0, 300), remindAt: remindMin && remindMin > 0 ? now + Math.min(24 * 60, remindMin) * MIN : null };
+    inc.attentionAt = now;
+    inc.attentionBy = actor;
+    inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: ${had ? 'изменил избранное' : 'в избранное'}${note ? ` — «${note.slice(0, 80)}»` : ''}${inc.pin.remindAt ? `, напомнить через ${remindMin} мин` : ''}` });
+    this.touch(inc, now);
+    return inc;
+  }
+  unpin(id: string, actor: string) {
+    const inc = this.need(id);
+    if (!inc.pin) return inc;
+    const now = Date.now();
+    inc.pin = null;
+    inc.history.push({ at: now, kind: 'coordinator', actor, text: `${actor}: убрал из избранного` });
+    this.touch(inc, now);
+    return inc;
+  }
+  /** Дежурный посмотрел инцидент — «Не забыть» перестаёт его подсовывать (не чаще раза в минуту). */
+  seen(id: string, actor: string) {
+    const inc = this.need(id);
+    const now = Date.now();
+    if (inc.attentionAt && now - inc.attentionAt < 60_000) return inc;
+    inc.attentionAt = now;
+    inc.attentionBy = actor;
+    this.touch(inc, now);
+    return inc;
+  }
+
   resolveAtPoint(id: string, actor: string) {
     const inc = this.need(id);
     if (inc.status !== 'resolved') this.finish(inc, actor);

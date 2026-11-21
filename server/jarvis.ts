@@ -17,6 +17,7 @@ import { RULES } from './complaints.ts';
 import { FORECAST_TEXT, forecast } from '../shared/forecast.ts';
 import { myShiftWork } from '../shared/shift.ts';
 import type { DashOp } from '../shared/dash.ts';
+import { dashSnapshot, fmtShort } from '../shared/dash.ts';
 import { personaById } from '../shared/personas.ts';
 import { BLOCK_TOOL, DASH_NOTE, DASH_TOOL, DESIGN_TOOL, briefByRules, briefContext, dashContextLine, dashRules, toDashOp, type DashCtx } from './jarvis-dash.ts';
 
@@ -254,6 +255,24 @@ function details(point: Point, inc: Incident) {
   return lines.join('\n');
 }
 
+const hhmm = (t: number) => new Date(t).toLocaleTimeString('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
+/** Что кейс просит не упустить: срочнее критического, забытые важные, избранное смены. */
+function caseView(point: Point, now: number) {
+  const snap = dashSnapshot(point.incidents.values(), now);
+  const above = snap.topCrit > 0 ? snap.action.filter((x) => x.inc.priority !== 'P1' && x.att.score > snap.topCrit).slice(0, 3) : [];
+  return { above, forgotten: snap.forgotten.slice(0, 4), pinned: snap.pinned.slice(0, 6) };
+}
+const pinLine = (i: Incident, now: number) =>
+  `id=${i.id}; «${i.title}»; ${i.status === 'resolved' ? 'уже решён' : left(i, now)}; закрепил ${i.pin!.by}${i.pin!.note ? `; заметка: «${i.pin!.note}»` : ''}${i.pin!.remindAt ? `; напомнить в ${hhmm(i.pin!.remindAt)}` : ''}`;
+function caseLines(point: Point, now: number): string[] {
+  const v = caseView(point, now);
+  const out: string[] = [];
+  if (v.above.length) out.push('Срочнее самого срочного критического (короткий срок важнее уровня):', ...v.above.map((x) => `- ${shortLine(x.inc, now)}; почему: ${x.att.reason}`));
+  if (v.forgotten.length) out.push('«Не забыть» — важные некритические, на которые никто не смотрел 20+ минут:', ...v.forgotten.map((x) => `- ${shortLine(x.inc, now)}; без внимания ${fmtShort(x.idle)}`));
+  out.push(v.pinned.length ? 'Избранное смены (закрепили дежурные, с заметками):' : 'Избранное смены пусто.', ...v.pinned.map((i) => `- ${pinLine(i, now)}`));
+  return out;
+}
+
 function contextText(point: Point, me: Me, q: JarvisAsk) {
   const now = Date.now();
   const all = openList(point);
@@ -272,6 +291,7 @@ function contextText(point: Point, me: Me, q: JarvisAsk) {
     'Горящие инциденты:',
     ...hot(point, now).map((i) => `- ${shortLine(i, now, point)}`),
   ];
+  lines.push(...caseLines(point, now));
   if (point.clusters.length) lines.push('Подозрительные всплески жалоб (ещё не инциденты):', ...point.clusters.slice(0, 4).map((c) => `- key=${c.key}; ${c.service}, ${regionById(c.regionId)?.name}: ${c.count} за 10 мин при норме ${c.expected.toFixed(1)}`));
   if (sig.length) lines.push('Сигналы:', ...sig.slice(0, 5).map((s) => `- инцидент ${s.incidentId}: ${s.text}`));
   if (focus) lines.push('', 'ИНЦИДЕНТ В ФОКУСЕ РАЗГОВОРА («он», «его», «этот»):', details(point, focus));
@@ -390,6 +410,10 @@ class Exec {
         return `${v('Пишу в переписку', 'Написал в переписку')} «${t(a.id)}»`;
       case 'create_from_cluster':
         return v('Создаю инцидент из всплеска жалоб', 'Создал инцидент из всплеска');
+      case 'pin_incident':
+        return `${v('Добавляю в избранное', 'Добавил в избранное')} «${t(a.id)}»`;
+      case 'unpin_incident':
+        return `${v('Убираю из избранного', 'Убрал из избранного')} «${t(a.id)}»`;
       case 'dashboard':
         return v('Перестраиваю видеостену', 'Перестроил видеостену');
       case 'design_dashboard':
@@ -577,6 +601,22 @@ class Exec {
         this.done.push(`Написал в переписку «${inc.title}»`);
         return 'ok';
       }
+      case 'pin_incident': {
+        this.control();
+        const inc = this.inc(a.id);
+        const m = typeof a.remind_min === 'number' && a.remind_min > 0 ? Math.min(720, Math.round(a.remind_min)) : null;
+        const note = String(a.note ?? inc.pin?.note ?? '').trim().slice(0, 300);
+        p.pin(inc.id, this.me.name, note, m);
+        this.done.push(`Добавил в избранное «${inc.title}»${m ? `, напомню через ${m} мин` : ''}`);
+        return 'ok';
+      }
+      case 'unpin_incident': {
+        this.control();
+        const inc = this.inc(a.id);
+        p.unpin(inc.id, this.me.name);
+        this.done.push(`Убрал из избранного «${inc.title}»`);
+        return 'ok';
+      }
       case 'create_from_cluster': {
         this.control();
         const inc = p.createFromCluster(String(a.key), this.me.name);
@@ -638,6 +678,8 @@ const CONTROL_TOOLS = [
   fn('notify_lead', 'Указать руководителю команды по открытому сигналу инцидента', ID, ['id']),
   fn('add_comment', 'Написать сообщение команде в переписку инцидента', { ...ID, text: { type: 'string' } }, ['id', 'text']),
   fn('create_from_cluster', 'Создать инцидент из подозрительного всплеска жалоб', { key: { type: 'string' } }, ['key']),
+  fn('pin_incident', 'Добавить инцидент в избранное смены (или изменить заметку): заметку и напоминание видит вся смена', { ...ID, note: { type: 'string', description: 'короткая заметка для смены' }, remind_min: { type: 'number', description: 'через сколько минут напомнить; 0 — без напоминания' } }, ['id']),
+  fn('unpin_incident', 'Убрать инцидент из избранного смены', ID, ['id']),
 ];
 
 const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощник дежурного координирующего пункта ИТ. Пункт получает жалобы абонентов, собирает инциденты и передаёт их в ~900 команд.
@@ -652,6 +694,8 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 - «Кому дать?», «кому передать?» — назови команду из совета ИИ и почему (и кто из дежурных подходит вести, если инцидент без дежурного). Пока не попросят — не передавай.
 - «Выдай», «давай», «передавай», «да, отдай» после твоего предложения — выполни именно то, что предложил.
 - «Он», «его», «этот» — инцидент в фокусе разговора или открытый на экране.
+- Главная мысль кейса: за критическими не потерять важные некритические. «Что я упускаю?», «что забыл?» — по разделу «Не забыть»; «что важнее критического?» — по разделу «Срочнее критического» (короткий срок у высокого может быть важнее критического). Спрашивают про общую обстановку — коротко упомяни и их, если есть.
+- «Что в избранном?» — по разделу «Избранное смены»: что закреплено и какие заметки. «Закрепи», «в избранное», «напомни через N минут» — pin_incident с заметкой со слов дежурного; «убери из избранного» — unpin_incident.
 - Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.
 - Пометки «(Сделано: …)» в истории — действия, которые уже выполнены на самом деле. Не оспаривай их и не повторяй без просьбы.`;
 /** Системная подсказка под выбранного персонажа: имя, обращение и характер. */
@@ -790,6 +834,39 @@ function rules(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefined)
   if (/перемот|прокрут|как развивал/.test(text)) {
     const r = tryRun('replay', { on: !/стоп|останов/.test(text) });
     return say(r.startsWith('!') ? `Не могу: ${r.slice(1)}.` : 'Перемотка за последний час, сэр.');
+  }
+  const cv = caseView(point, now);
+  if (/(убери|удали|сними).*(избранн|закреп)/.test(text)) {
+    const i = focus();
+    if (!i) return say('Что убрать из избранного, сэр?');
+    const r = tryRun('unpin_incident', { id: i.id });
+    return say(r.startsWith('!') ? `Не вышло: ${r.slice(1)}.` : `Убрал из избранного, сэр: «${i.title}».`);
+  }
+  if (/(добав|закрепи|запомни|в избранн).*(избранн|закреп|его|этот|напомн)|^закрепи|напомни через/.test(text)) {
+    const i = focus();
+    if (!i) return say('Какой инцидент закрепить, сэр? Откройте его или назовите.');
+    const m = /через (\d+)\s*(мин|час|ч)/.exec(text);
+    const min = m ? Number(m[1]) * (m[2].startsWith('ч') ? 60 : 1) : 0;
+    const r = tryRun('pin_incident', { id: i.id, remind_min: min });
+    return say(r.startsWith('!') ? `Не вышло: ${r.slice(1)}.` : `В избранном смены, сэр: «${i.title}»${min ? `. Напомню через ${min} мин` : ''}.`);
+  }
+  if (/избранн|закреплен/.test(text)) {
+    if (!cv.pinned.length) return say('В избранном пусто, сэр. Закрепите важное звёздочкой на карточке или скажите «закрепи».');
+    const top = cv.pinned[0];
+    ex.focus = top.id;
+    return say(`В избранном ${cv.pinned.length}. ${top.title}${top.pin!.note ? ` — «${top.pin!.note}»` : ''}${cv.pinned[1] ? `, и ещё «${cv.pinned[1].title}»` : ''}.`);
+  }
+  if (/забыл|забыт|не забыть|упуска|без внимания|пропуска/.test(text)) {
+    if (!cv.forgotten.length) return say('Ничего важного не забыто, сэр: на всё смотрели за последние 20 минут.');
+    const x = cv.forgotten[0];
+    ex.focus = x.inc.id;
+    return say(`Без внимания ${fmtShort(x.idle)}: «${x.inc.title}», ${left(x.inc, now)}.${cv.forgotten.length > 1 ? ` Всего таких ${cv.forgotten.length}.` : ''}`);
+  }
+  if (/важнее критич|срочнее критич|опаснее критич/.test(text)) {
+    if (!cv.above.length) return say('Сейчас критические — самое срочное, сэр. Ничего важнее них нет.');
+    const x = cv.above[0];
+    ex.focus = x.inc.id;
+    return say(`Да, сэр: «${x.inc.title}» — ${x.att.reason.toLowerCase()}, ${left(x.inc, now)}. Это срочнее любого критического сейчас.`);
   }
   const wantsExplain = /объясни|расскажи|что с ним|ситуац|подробн/.test(text);
   if (/открой|покажи|перейди|найди/.test(text)) {

@@ -1,0 +1,445 @@
+/* ═══ кейс: «важнее критического», «не забыть», избранное смены ═══ */
+
+/* карточка: звёздочка избранного — между текстом и сроком */
+.dc {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+.dc-star {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 1.9em;
+  height: 1.9em;
+  border-radius: 50%;
+  color: var(--d-muted);
+  opacity: 0.35;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+.dc:hover .dc-star,
+.dc-star:focus-visible {
+  opacity: 1;
+}
+.dc-star:hover {
+  background: color-mix(in srgb, var(--d-warn) 18%, transparent);
+  color: var(--d-warn);
+}
+.dc-star.on {
+  opacity: 1;
+  color: var(--d-warn);
+}
+.dc-star.on svg {
+  fill: currentColor;
+}
+.dash[data-dark='0'] .dc.big .dc-star {
+  color: rgb(255 255 255 / 0.85);
+}
+
+/* «важнее критического» — короткий срок важнее уровня: заметная рамка и чип */
+.dc-above {
+  padding: 0.1em 0.5em;
+  border-radius: 0.4em;
+  background: var(--d-high);
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.95em;
+  letter-spacing: 0.01em;
+}
+.dc:has(.dc-above) {
+  border-color: var(--d-high);
+  box-shadow: 0 0 0 1px var(--d-high), 0 0 1.4em color-mix(in srgb, var(--d-high) 25%, transparent);
+}
+
+/* «Не забыть» */
+.db-forgot {
+  gap: 0.55em;
+}
+.db-empty.small {
+  font-size: 0.92em;
+  padding: 0.8em 0.4em;
+}
+.dfg {
+  --pc: var(--d-high);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.3em;
+  width: 100%;
+  padding: 0.8em 0.9em;
+  border: 1px solid color-mix(in srgb, var(--pc) 45%, var(--d-line));
+  border-left: 0.35em solid var(--pc);
+  border-radius: calc(var(--d-radius) * 0.8);
+  background: color-mix(in srgb, var(--pc) 8%, var(--d-panel2));
+  color: var(--d-text);
+  text-align: left;
+  cursor: pointer;
+  animation: dash-in 0.35s ease-out;
+}
+.dfg-why {
+  align-self: flex-start;
+  padding: 0.1em 0.5em;
+  border-radius: 0.4em;
+  background: color-mix(in srgb, var(--pc) 18%, transparent);
+  color: var(--pc);
+  font-weight: 800;
+  font-size: 0.85em;
+}
+.dfg b {
+  font-size: 1.15em;
+  line-height: 1.22;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dfg small {
+  color: var(--d-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dfg-sla {
+  font-weight: 700;
+}
+.dfg-sla.hot {
+  color: var(--d-crit);
+}
+.dfg-act {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  flex-wrap: wrap;
+}
+.dash .dfg-act button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.4em 0.75em;
+  border: 1px solid var(--d-line);
+  border-radius: 99px;
+  background: var(--d-panel2);
+  color: var(--d-text);
+  font: inherit;
+  font-size: 0.88em;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dash .dfg-act button:hover {
+  border-color: var(--d-accent);
+}
+.dfg-act .num {
+  margin-left: auto;
+  color: var(--d-muted);
+  font-size: 0.85em;
+}
+
+/* Избранное смены */
+.db-favs {
+  gap: 0.4em;
+  overflow: auto;
+}
+.dfv {
+  --pc: var(--d-low);
+  display: flex;
+  align-items: stretch;
+  gap: 0.2em;
+  border: 1px solid var(--d-line);
+  border-left: 0.3em solid var(--pc);
+  border-radius: calc(var(--d-radius) * 0.7);
+  background: var(--d-panel2);
+  flex: none;
+}
+.dfv.done {
+  border-left-color: var(--d-ok);
+  opacity: 0.7;
+}
+.dash .dfv-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.15em;
+  padding: 0.5em 0.6em;
+  border: 0;
+  background: transparent;
+  color: var(--d-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.dfv-main b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dfv-main em {
+  font-style: normal;
+  color: var(--d-text);
+  opacity: 0.85;
+  font-size: 0.92em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dfv-main small {
+  color: var(--d-muted);
+  font-size: 0.82em;
+}
+.dash .dfv-star {
+  flex: none;
+  width: 2.2em;
+  border: 0;
+  background: transparent;
+  color: var(--d-warn);
+  cursor: pointer;
+}
+.dfv-star svg {
+  fill: currentColor;
+}
+
+/* полоса уведомлений держит место всегда — стена не прыгает под курсором, когда уведомление приходит или уходит */
+.dash-alerts {
+  height: 3.2em;
+  min-height: 3.2em;
+}
+.dash-alerts.idle {
+  animation: none;
+  align-items: center;
+  padding: 0 0.9em;
+  border: 1px dashed var(--d-line);
+  border-radius: calc(var(--d-radius) * 0.8);
+}
+.dal-idle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  color: var(--d-muted);
+  font-size: 0.88em;
+  opacity: 0.8;
+}
+.dal-idle svg {
+  color: var(--d-ok);
+}
+
+/* уведомления: пояснение второй строкой и цвета новых видов */
+.dal-t em {
+  font-style: normal;
+  font-size: 0.85em;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dal.k-remind {
+  background: var(--d-warn);
+  color: #1b1405;
+  animation: dash-pulse 2.4s ease-in-out infinite;
+}
+.dal.k-fav {
+  background: color-mix(in srgb, var(--d-warn) 70%, var(--d-panel));
+  color: #1b1405;
+}
+.dal.k-forgot {
+  background: var(--d-high);
+}
+
+/* ═══ персонаж — просто фигура на стене, без рамки и круга ═══ */
+.dash .db.db-char.cut {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: 'say' 'fig';
+  justify-items: center;
+  align-items: end;
+  gap: 0.35em;
+  padding: 0.3em 0.3em 0;
+  overflow: visible;
+}
+.dch-stage {
+  grid-area: fig;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+/* мягкое свечение цвета персонажа за спиной — чтобы фигура «стояла» в сцене, а не была наклейкой */
+.dch-stage::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: min(100%, 95cqh);
+  aspect-ratio: 1.1;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--pc) 34%, transparent), transparent);
+  pointer-events: none;
+}
+.dch-fig {
+  position: relative;
+  height: 100%;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+  /* обрез по пояс растворяется, а не режется линией */
+  -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 99%);
+  mask-image: linear-gradient(to bottom, #000 78%, transparent 99%);
+  filter: drop-shadow(0 0.5em 1.1em rgb(0 0 0 / 0.28));
+  transform-origin: 50% 100%;
+  animation: dch-idle 6s ease-in-out infinite;
+  user-select: none;
+}
+@keyframes dch-idle {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  35% {
+    transform: translateY(-0.18em) rotate(-0.6deg);
+  }
+  70% {
+    transform: translateY(0.05em) rotate(0.5deg);
+  }
+}
+/* реплика — облачком с хвостиком к персонажу */
+.dch-bubble {
+  grid-area: say;
+  position: relative;
+  z-index: 1;
+  justify-self: stretch;
+  margin: 0;
+  padding: 0.6em 0.85em 0.7em;
+  border-radius: 1.1em;
+  background: var(--d-panel);
+  color: var(--d-text);
+  border: 1px solid color-mix(in srgb, var(--pc) 50%, var(--d-line));
+  box-shadow: 0 0.35em 1.2em rgb(0 0 0 / 0.22);
+  line-height: 1.35;
+  font-size: 0.98em;
+  animation: dch-pop 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+.dch-bubble > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dch-bubble small {
+  display: block;
+  margin-bottom: 0.15em;
+  color: var(--pc);
+  font-weight: 800;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dch-bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -0.5em;
+  width: 0.9em;
+  height: 0.9em;
+  background: var(--d-panel);
+  border-right: 1px solid color-mix(in srgb, var(--pc) 50%, var(--d-line));
+  border-bottom: 1px solid color-mix(in srgb, var(--pc) 50%, var(--d-line));
+  transform: translateX(-50%) rotate(45deg);
+}
+@keyframes dch-pop {
+  from {
+    opacity: 0;
+    transform: translateY(0.4em) scale(0.96);
+  }
+}
+/* контейнер — ячейка поля: по её пропорциям выбираем, как поставить персонажа */
+.dash-col:has(> .db-char.cut) {
+  container-type: size;
+}
+/* широкий блок — персонаж слева, реплика справа, хвостик к нему */
+@container (min-aspect-ratio: 5 / 4) {
+  .dash .db.db-char.cut {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    grid-template-areas: 'fig say';
+    align-items: center;
+    gap: 0.9em;
+  }
+  .dch-stage {
+    align-self: end;
+  }
+  .dch-bubble::after {
+    left: -0.5em;
+    top: 50%;
+    bottom: auto;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--pc) 50%, var(--d-line));
+    border-left: 1px solid color-mix(in srgb, var(--pc) 50%, var(--d-line));
+    transform: translateY(-50%) rotate(45deg);
+  }
+}
+.dash-col.edit .db.db-char.cut {
+  outline-offset: -2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dch-fig,
+  .dch-bubble {
+    animation: none;
+  }
+}
+
+/* помощник: фигура персонажа выглядывает рядом с репликой */
+.da-char {
+  align-items: end;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.da-fig {
+  width: auto;
+  height: 7.2em;
+  max-width: 6.5em;
+  object-fit: contain;
+  object-position: center bottom;
+  align-self: end;
+  -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
+  mask-image: linear-gradient(to bottom, #000 80%, transparent);
+  filter: drop-shadow(0 0.3em 0.6em rgb(0 0 0 / 0.25));
+  transform-origin: 50% 100%;
+  animation: dch-idle 6s ease-in-out infinite;
+}
+.da-fig.busy {
+  animation: da-nod 0.8s ease-in-out infinite;
+}
+@keyframes da-nod {
+  50% {
+    transform: translateY(-0.12em) rotate(-1.2deg);
+  }
+}
+.da-char .da-bubble {
+  align-self: center;
+  padding-bottom: 0.7em;
+}
+
+/* галерея: превью персонажа — тоже фигура, а не кружок */
+.gp.gp-char {
+  align-items: end;
+  padding-bottom: 0;
+}
+.gp-char img {
+  width: 62px;
+  height: 100%;
+  max-height: 84px;
+  border-radius: 0;
+  object-fit: contain;
+  object-position: center bottom;
+  -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
+  mask-image: linear-gradient(to bottom, #000 80%, transparent);
+}
+.gp-char span {
+  align-self: center;
+}

@@ -33,6 +33,7 @@ export async function designNow(prompt: string): Promise<string> {
 
 // ─── свой блок и новый персонаж через ChatGPT ───
 import type { CustomSpec } from '../../shared/dashCustom';
+import { cutOut } from './cutout';
 
 /** Уменьшить картинку до 256×256 webp — портрет занимает ~20 КБ и хранится в настройках сотрудника. */
 export async function shrinkImage(dataUrl: string): Promise<string> {
@@ -59,7 +60,12 @@ export async function makeCustomBlock(prompt: string, opts: { character?: boolea
     try {
       const a = await fetch('/api/dash/avatar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: `${spec.character.name}: ${prompt}` }) });
       const img = (await a.json()) as { image?: string };
-      if (a.ok && img.image) spec.character.avatar = await shrinkImage(img.image);
+      if (a.ok && img.image) {
+        opts.onStep?.('Вырезаю фон — персонаж встанет прямо на стену…');
+        const fig = await cutOut(img.image).catch(() => null);
+        if (fig) spec.character = { ...spec.character, avatar: fig, cut: true };
+        else spec.character.avatar = await shrinkImage(img.image);
+      }
     } catch {
       /* без портрета — с эмодзи */
     }

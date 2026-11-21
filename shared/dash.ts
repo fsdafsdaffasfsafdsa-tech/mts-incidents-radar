@@ -71,34 +71,78 @@ export function riskOf(i: Incident, now: number): { score: number; reasons: stri
   return { score: Math.min(100, s), reasons };
 }
 
-// ─── что требует действия сейчас ───────────────────────────────────────────
+// ─── срочность: не только уровень, но и сколько осталось до срока ───
+const BASE: Record<Incident['priority'], number> = { P1: 100, P2: 70, P3: 40, P4: 20 };
+const PRESSURE: Record<Incident['priority'], number> = { P1: 1, P2: 0.9, P3: 0.6, P4: 0.4 };
+const PRESSURE_SPAN = 120 * MIN; // давление срока растёт за последние 2 часа
+/**
+ * Насколько срочно сейчас заняться инцидентом. Уровень важен, но срок — тоже:
+ * высокий со сроком через 10 минут срочнее критического, у которого в запасе 4 часа.
+ */
+export function urgencyScore(i: Incident, now: number): number {
+  if (i.status === 'resolved') return 0;
+  const left = i.slaDeadline - now;
+  const pressure = left <= 0 ? 100 : 100 * Math.pow(Math.max(0, 1 - left / PRESSURE_SPAN), 1.5);
+  let s = BASE[i.priority] + PRESSURE[i.priority] * pressure;
+  if (i.status === 'coordinators') s += 40; // ждёт пункт — передать
+  if (i.p1Proposal) s += 35;
+  const w = waitingTake(i, now);
+  // «команда не берёт» срочно для критического и высокого; у среднего и низкого хватает давления срока
+  if (w !== null && w > NOT_TAKEN_MIN * MIN && (i.priority === 'P1' || i.priority === 'P2')) s += 25;
+  if (transferCount(i) >= 2) s += 10;
+  if (isResearch(i) && i.status === 'coordinators') s += 10;
+  return Math.round(s);
+}
+
 export interface Attention {
   score: number;
   reason: string; // главная причина, коротко
   tone: 'crit' | 'warn' | 'info';
 }
-/** Насколько срочно координатору заняться инцидентом и почему. null — действия не требует. */
+/** Почему инцидент требует действия (коротко) и насколько срочно. null — действия не требует. */
 export function attention(i: Incident, now: number): Attention | null {
   if (i.status === 'resolved') return null;
   const left = i.slaDeadline - now;
   const w = waitingTake(i, now);
   const t = transferCount(i);
+  const score = urgencyScore(i, now);
   if (i.priority === 'P1') {
-    if (i.status === 'coordinators') return { score: 1000, reason: 'Передать в команду', tone: 'crit' };
-    if (w !== null) return { score: 980, reason: `Не приняли ${fmtShort(w)}`, tone: 'crit' };
-    return { score: 950, reason: 'В работе', tone: 'crit' };
+    if (i.status === 'coordinators') return { score, reason: 'Передать в команду', tone: 'crit' };
+    if (w !== null) return { score, reason: `Не приняли ${fmtShort(w)}`, tone: 'crit' };
+    return { score, reason: 'В работе', tone: 'crit' };
   }
-  if (i.status === 'coordinators') return { score: 800 + (i.priority === 'P2' ? 50 : 0) + (isResearch(i) ? 10 : 0), reason: 'Передать в команду', tone: 'warn' };
-  if (i.p1Proposal) return { score: 760, reason: 'ИИ: поднять до «Наивысшего»', tone: 'warn' };
-  if (left < 30 * MIN) return { score: 700 + Math.min(60, Math.round(-left / MIN)), reason: left > 0 ? 'Срок близко' : 'Просрочен', tone: 'warn' };
-  if (w !== null && w > NOT_TAKEN_MIN * MIN) return { score: 600, reason: 'Не берут', tone: 'warn' };
-  if (t >= 2) return { score: 500 + t, reason: `${t} передачи`, tone: 'warn' };
+  if (i.status === 'coordinators') return { score, reason: 'Передать в команду', tone: 'warn' };
+  if (i.p1Proposal) return { score, reason: 'ИИ: поднять до «Наивысшего»', tone: 'warn' };
+  if (left < 30 * MIN) return { score, reason: left > 0 ? 'Срок близко' : 'Просрочен', tone: 'warn' };
+  if (w !== null && w > NOT_TAKEN_MIN * MIN) return { score, reason: 'Не берут', tone: 'warn' };
+  if (t >= 2) return { score, reason: `${t} передачи`, tone: 'warn' };
   if (i.priority === 'P2') {
     const r = riskOf(i, now);
-    return { score: 400 + r.score, reason: r.score >= 60 ? `Риск ${r.score}%` : 'Высокий', tone: 'info' };
+    return { score, reason: r.score >= 60 ? `Риск ${r.score}%` : left < 2 * 60 * MIN ? 'Срок сегодня' : 'Высокий', tone: left < 2 * 60 * MIN ? 'warn' : 'info' };
   }
-  if (isResearch(i)) return { score: 300, reason: 'Разбор причин', tone: 'info' };
+  if (isResearch(i)) return { score, reason: 'Разбор причин', tone: 'info' };
   return null;
+}
+
+// ─── «Не забыть»: важные некритические, на которые давно никто не смотрел ───
+export const FORGET_MIN = 20;
+/** Когда пункт последний раз занимался инцидентом: открывал, действовал, закреплял. */
+export function lastAttention(i: Incident): number {
+  let t = Math.max(i.attentionAt ?? 0, i.pin?.at ?? 0, i.takenAt ?? 0);
+  for (let k = i.history.length - 1; k >= 0; k--) {
+    const h = i.history[k];
+    if (h.kind === 'coordinator') {
+      t = Math.max(t, h.at);
+      break;
+    }
+  }
+  return t || i.createdAt;
+}
+/** Важный ли некритический инцидент — такой нельзя упускать из виду, пока все смотрят на критический. */
+export function isImportant(i: Incident, now: number): boolean {
+  if (i.status === 'resolved' || i.priority === 'P1') return false;
+  const w = waitingTake(i, now);
+  return i.priority === 'P2' || i.status === 'coordinators' || !!i.p1Proposal || isResearch(i) || i.slaDeadline - now < 2 * 60 * MIN || (w !== null && w > NOT_TAKEN_MIN * MIN);
 }
 
 /** «12 мин», «3 ч 40 мин», «2 дн» — для стены. */
@@ -118,6 +162,9 @@ export interface DashSnapshot {
   work: Incident[]; // у команд, по сроку
   byGroup: Record<DashGroup, Incident[]>;
   resolvedCrit: Incident[]; // критические, решённые за последние 15 минут — «сразу видно, что решён»
+  topCrit: number; // срочность самого срочного открытого критического (0 — критических нет)
+  forgotten: { inc: Incident; idle: number; score: number }[]; // важные некритические без внимания 20+ минут
+  pinned: Incident[]; // избранное смены
 }
 export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filter?: DashGroup | null; onlyFile?: boolean } = {}): DashSnapshot {
   const list = [...all].filter((i) => !opts.onlyFile || i.origin !== 'complaints');
@@ -149,11 +196,18 @@ export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filte
     work,
     byGroup,
     resolvedCrit: list.filter((i) => i.status === 'resolved' && i.priority === 'P1' && i.resolvedAt && now - i.resolvedAt < 15 * MIN).sort((a, b) => (b.resolvedAt ?? 0) - (a.resolvedAt ?? 0)),
+    topCrit: Math.max(0, ...byGroup.crit.map((i) => urgencyScore(i, now))),
+    forgotten: open
+      .filter((i) => isImportant(i, now))
+      .map((inc) => ({ inc, idle: now - lastAttention(inc), score: urgencyScore(inc, now) }))
+      .filter((x) => x.idle > FORGET_MIN * MIN)
+      .sort((a, b) => b.score - a.score),
+    pinned: list.filter((i) => i.pin).sort((a, b) => (a.pin!.remindAt ?? Infinity) - (b.pin!.remindAt ?? Infinity) || b.pin!.at - a.pin!.at),
   };
 }
 
 // ─── блоки и раскладки (общие для стены и Джарвиса) ────────────────────────
-export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom';
+export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom' | 'forgot' | 'favs';
 export type BlockCat = 'incidents' | 'summary' | 'ai' | 'own';
 export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
   { id: 'incidents', name: 'Инциденты' },
@@ -163,6 +217,8 @@ export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
 ];
 export const BLOCKS: { id: BlockId; name: string; hint: string; cat: BlockCat; icon: string }[] = [
   { id: 'action', name: 'Требует действия', hint: 'всё, чем заняться сейчас — по срочности', cat: 'incidents', icon: 'bell' },
+  { id: 'forgot', name: 'Не забыть', hint: 'важные некритические, на которые давно никто не смотрел — подсовывает по очереди', cat: 'incidents', icon: 'eye' },
+  { id: 'favs', name: 'Избранное смены', hint: 'закреплённые инциденты с заметками и напоминаниями', cat: 'incidents', icon: 'star' },
   { id: 'work', name: 'В работе у команд', hint: 'таблица: сколько в работе, срок, передачи, команда', cat: 'incidents', icon: 'table' },
   { id: 'groups', name: 'Четыре группы', hint: 'группы кейса колонками', cat: 'incidents', icon: 'columns' },
   { id: 'group', name: 'Одна группа', hint: 'критические, на координаторах, высокий или исследование', cat: 'incidents', icon: 'list' },
@@ -191,7 +247,19 @@ export interface DashColumn {
 }
 export type PresetId = 'case' | 'board' | 'groups' | 'ai' | 'critical' | 'night' | 'map' | 'legacy';
 export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashColumn[]; grid?: { block: BlockId; x: number; y: number; w: number; h: number; opts?: Record<string, boolean | number | string> }[]; filter?: DashGroup | null; density?: 'normal' | 'large' }[] = [
-  { id: 'case', name: 'Кейс: три экрана', hint: 'слева сменяемая панель, в центре — что требует действия, справа — в работе у команд', columns: [{ block: 'rotate', width: 1 }, { block: 'action', width: 1.5 }, { block: 'work', width: 1.4 }] },
+  {
+    id: 'case',
+    name: 'Кейс: три экрана',
+    hint: 'слева помощник и «не забыть», в центре — что требует действия, справа — в работе у команд и избранное',
+    columns: [],
+    grid: [
+      { block: 'rotate', x: 0, y: 0, w: 3, h: 7 },
+      { block: 'forgot', x: 0, y: 7, w: 3, h: 5 },
+      { block: 'action', x: 3, y: 0, w: 5, h: 12 },
+      { block: 'work', x: 8, y: 0, w: 4, h: 8 },
+      { block: 'favs', x: 8, y: 8, w: 4, h: 4 },
+    ],
+  },
   {
     id: 'board',
     name: 'Свободное поле',

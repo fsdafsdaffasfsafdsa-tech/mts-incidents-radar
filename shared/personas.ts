@@ -8,7 +8,8 @@ export interface Persona {
   style: string; // как говорит — для модели
   address: string; // как обращается к дежурному; пусто — на «вы»
   wake: string[]; // как его позвать голосом (в нижнем регистре)
-  avatar: string; // картинка
+  avatar: string; // картинка (круглая)
+  cutout: string; // фигура на прозрачном фоне — для стены
   color: string; // цвет свечения
   hello: string; // проба голоса
   fem?: boolean; // говорит о себе в женском роде
@@ -24,6 +25,7 @@ export const PERSONAS: Persona[] = [
     address: 'сэр',
     wake: ['джарвис', 'жарвис', 'джервис', 'джарвиз', 'джавис', 'jarvis'],
     avatar: '/personas/jarvis.webp',
+    cutout: '/personas/jarvis-cut.webp',
     color: '#39d0ff',
     hello: 'Добрый вечер, сэр. Все системы пункта в норме.',
   },
@@ -37,6 +39,7 @@ export const PERSONAS: Persona[] = [
     address: '',
     wake: ['ника', 'ники', 'нику'],
     avatar: '/personas/nika.webp',
+    cutout: '/personas/nika-cut.webp',
     color: '#b38bff',
     hello: 'Привет! Я Ника. Слежу за пунктом и подскажу, что важно прямо сейчас.',
   },
@@ -49,6 +52,7 @@ export const PERSONAS: Persona[] = [
     address: 'командир',
     wake: ['капитан', 'кэп'],
     avatar: '/personas/captain.webp',
+    cutout: '/personas/captain-cut.webp',
     color: '#ff9a3d',
     hello: 'Капитан на связи, командир! Смена под контролем, докладываю по первому слову.',
   },
@@ -61,6 +65,7 @@ export const PERSONAS: Persona[] = [
     address: 'дружок',
     wake: ['дед мороз', 'дедушка мороз', 'мороз', 'дедушка'],
     avatar: '/personas/frost.webp',
+    cutout: '/personas/frost-cut.webp',
     color: '#7fd7ff',
     hello: 'Хо-хо-хо, дружок! С наступающим! Инциденты под присмотром, подарки — по плану.',
   },

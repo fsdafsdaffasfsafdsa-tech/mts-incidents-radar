@@ -1,0 +1,329 @@
+/* ═══ окно «Избранное смены» ═══ */
+.fav-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(4, 6, 10, 0.55);
+  backdrop-filter: blur(3px);
+  animation: fade 0.15s ease-out;
+  font-family: var(--font);
+}
+.fav {
+  width: min(480px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 18px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  animation: pop 0.2s ease-out;
+}
+.fav > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+.fav > header > svg {
+  color: var(--warn);
+  fill: var(--warn);
+}
+.fav > header b {
+  flex: 1;
+}
+.fav > header button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.fav > header button:hover {
+  background: var(--panel-3);
+}
+.fav-t {
+  margin: 0;
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.3;
+}
+.fav-by {
+  margin-top: -8px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.fav label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.fav textarea {
+  min-height: 78px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.fav textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--warn) 60%, transparent);
+  outline-offset: 1px;
+}
+.fav-quick,
+.fav-remind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.fav-remind > span {
+  width: 100%;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.fav-quick button,
+.fav-remind button,
+.fav footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 99px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.fav-quick button {
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.fav-quick button:hover,
+.fav-remind button:hover {
+  border-color: var(--warn);
+}
+.fav-remind button.on {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 18%, var(--panel-2));
+  font-weight: 700;
+}
+.fav footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+.fav footer button.on {
+  border-color: transparent;
+  background: var(--warn);
+  color: #1b1405;
+  font-weight: 800;
+  padding: 9px 16px;
+}
+.fav footer button:not(.on):hover {
+  border-color: var(--p1);
+  color: var(--p1);
+}
+
+/* звёздочка в рабочем месте */
+.icon-btn.pin-on {
+  color: var(--warn);
+}
+.icon-btn.pin-on svg {
+  fill: currentColor;
+}
+
+/* ═══ ITSM-карточка (демо перехода по клику) ═══ */
+.itsm {
+  min-height: 100vh;
+  background: #f3f4f7;
+  color: #1d2330;
+  font-family: var(--font);
+  color-scheme: light;
+}
+.itsm-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 12px 24px;
+  background: #23324a;
+  color: #fff;
+}
+.itsm-top b {
+  font-size: 18px;
+  letter-spacing: 0.06em;
+}
+.itsm-top span {
+  color: rgb(255 255 255 / 0.7);
+  font-size: 13px;
+}
+.itsm main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 22px 24px 48px;
+  display: grid;
+  gap: 16px;
+}
+.itsm-h {
+  display: grid;
+  gap: 6px;
+}
+.itsm-id {
+  font-family: var(--mono);
+  color: #5b6577;
+  font-size: 13px;
+}
+.itsm-h h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.25;
+}
+.itsm-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.itsm-badges em {
+  font-style: normal;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: #e2e6ee;
+  font-size: 13px;
+  font-weight: 700;
+}
+.itsm-badges em.pr-1 {
+  background: #e3142d;
+  color: #fff;
+}
+.itsm-badges em.pr-2 {
+  background: #e06a00;
+  color: #fff;
+}
+.itsm section,
+.itsm details {
+  padding: 14px 18px 16px;
+  background: #fff;
+  border: 1px solid #dde2ea;
+  border-radius: 10px;
+}
+.itsm h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #5b6577;
+}
+.itsm h3 {
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+.itsm dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px 18px;
+}
+.itsm dl > div {
+  min-width: 0;
+}
+.itsm dl > div.wide {
+  grid-column: 1 / -1;
+}
+.itsm dt {
+  color: #6b7486;
+  font-size: 12px;
+}
+.itsm dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.itsm details summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+}
+.itsm details[open] summary {
+  margin-bottom: 12px;
+}
+.itsm-radar {
+  border-color: #f2b8a8 !important;
+  background: #fff8f5 !important;
+}
+.itsm-radar h2 {
+  color: #c2410c;
+}
+.itsm-radar svg {
+  color: #c97f00;
+  fill: #c97f00;
+  vertical-align: -2px;
+}
+.itsm-radar ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 13.5px;
+}
+.itsm-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #fff4d6;
+  font-size: 14px;
+}
+.itsm-err {
+  margin: 40px auto;
+  max-width: 480px;
+  padding: 16px;
+  border-radius: 10px;
+  background: #fde2e2;
+  color: #9b1c1c;
+  text-align: center;
+}
+.itsm-back {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #23324a;
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+}
+@media (max-width: 600px) {
+  .itsm main {
+    padding: 16px;
+  }
+  .itsm-top span {
+    display: none;
+  }
+}

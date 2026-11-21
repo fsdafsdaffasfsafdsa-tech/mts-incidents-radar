@@ -1,11 +1,12 @@
 // Карточка инцидента для пункта — по шагам: 1) что случилось, 2) что советует ИИ и почему, 3) ваше решение.
 import { useEffect, useMemo, useState } from 'react';
-import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, Send, Siren, UserCheck, X } from 'lucide-react';
+import { BellRing, CheckCircle2, ChevronDown, Copy, ExternalLink, Megaphone, Send, Siren, Star, UserCheck, X } from 'lucide-react';
+import { openFav } from './FavDialog';
 import type { Incident, Priority } from '../../shared/types';
 import { PRIORITY_TEXT } from '../../shared/types';
 import { FORECAST_TEXT, forecast } from '../../shared/forecast';
 import { SCHEDULE_TEXT } from '../../shared/schedule';
-import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, readLocal, resolveAtPoint, routeTo, setLevel, takeAtPoint, useStore, writeLocal } from '../store';
+import { answerP1, assignCoordinator, closeSignal, loadRoute, notifyLead, readLocal, resolveAtPoint, routeTo, setLevel, takeAtPoint, useStore, writeLocal, itsmLink } from '../store';
 import { fmtClock } from '../lib/format';
 import { useNow } from '../lib/hooks';
 import { Deadline, PRIO_COLORS, PrioDot } from './ui';
@@ -92,15 +93,15 @@ export function IncidentCard({ inc, onClose }: { inc: Incident; onClose?: () => 
           <span className="chip-origin">из выгрузки ITSM</span>
         )}
         <span className="pd-sp" />
-        {itsmUrl ? (
-          <a className="icon-btn" href={itsmUrl.replace('{id}', inc.id)} target="_blank" rel="noopener noreferrer" title="Открыть в ITSM">
-            <ExternalLink size={15} />
-          </a>
-        ) : (
-          <button className="icon-btn" onClick={() => void navigator.clipboard?.writeText(inc.id)} title={`Скопировать номер ${inc.id}`}>
-            <Copy size={15} />
-          </button>
-        )}
+        <button className={`icon-btn ${inc.pin ? 'pin-on' : ''}`} onClick={() => openFav(inc.id)} title={inc.pin ? `В избранном смены: ${inc.pin.note || 'без заметки'}` : 'В избранное смены — с заметкой и напоминанием'}>
+          <Star size={15} />
+        </button>
+        <a className="icon-btn" href={itsmLink(inc.id)} target="_blank" rel="noopener noreferrer" title={itsmUrl ? 'Открыть в ITSM' : 'Открыть ITSM-карточку (демо)'}>
+          <ExternalLink size={15} />
+        </a>
+        <button className="icon-btn" onClick={() => void navigator.clipboard?.writeText(inc.id)} title={`Скопировать номер ${inc.id}`}>
+          <Copy size={15} />
+        </button>
         {onClose && (
           <button className="icon-btn" onClick={onClose} aria-label="Закрыть">
             <X size={16} />
