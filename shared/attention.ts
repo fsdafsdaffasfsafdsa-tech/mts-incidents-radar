@@ -169,6 +169,7 @@ export function detect(prev: Map<string, Sig> | null, all: Incident[], now: numb
       if (i.status !== 'resolved') {
         if (s.ask) found.push({ kind: 'teamAsk', inc: i, text: i.teamAsk?.text });
         else if (s.pr === 'P1') found.push({ kind: 'crit', inc: i });
+        else if (s.p1) found.push({ kind: 'p1ask', inc: i, text: i.p1Proposal ?? undefined }); // новый — и сразу предложение ИИ
         else if (s.st === 'coordinators') found.push({ kind: 'coord', inc: i });
         else found.push({ kind: 'created', inc: i });
       }

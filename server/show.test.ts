@@ -94,6 +94,13 @@ test('вопрос руководителю: в блоке «Вопросы» ж
   assert.ok(found.some((f) => f.kind === 'answer'));
 });
 
+test('новый инцидент сразу с предложением ИИ — одно событие «Наивысший», а не ещё и «на распределение»', () => {
+  const { p, box } = setup();
+  runShow(p, box, 'p1ask', 'Коллега');
+  const { found } = detect(new Map(), [...p.incidents.values()], Date.now(), new Set());
+  assert.deepEqual(found.map((f) => f.kind), ['p1ask']);
+});
+
 test('новый критический — P1 на пункте с советом ИИ', () => {
   const { p, box } = setup();
   const r = runShow(p, box, 'crit', 'Ведущий');

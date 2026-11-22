@@ -77,6 +77,8 @@ function byMe(i: Incident, now: number) {
 /** Следит за инцидентами и раскладывает события по уровням. На отдельном экране стены голосом не говорит. */
 export function useAttention(incidents: Map<string, Incident>, d: DashLayout, standalone: boolean) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const alertsRef = useRef(alerts); // текущие — для «по инциденту уже было срочное»
+  alertsRef.current = alerts;
   const [info, setInfo] = useState<InfoItem[]>([]);
   const dRef = useRef(d);
   dRef.current = d;
@@ -101,12 +103,19 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
       if (quiet.length) setInfo((l) => [...quiet, ...l].filter((x) => now - x.at < 30 * 60_000).slice(0, 40));
       if (!fresh.length) return;
       fresh.sort(byRank);
-      setAlerts((l) => [...l.filter((x) => !fresh.some((f) => f.inc.id === x.inc.id && f.kind === x.kind)), ...fresh].sort(byRank));
-      const top = fresh[0];
+      // Одно событие на инцидент за раз — самое важное («ИИ предлагает Наивысший» важнее «на распределение»):
+      // иначе по одному инциденту экран открывался дважды подряд.
+      const one = fresh.filter((a, k) => fresh.findIndex((b) => b.inc.id === a.inc.id) === k);
+      // По инциденту уже было срочное недавно (висит или приняли) — новое срочное экран заново не открывает:
+      // «предлагает Наивысший» → подтвердили → «новый критический» — это та же ситуация, она встаёт в полосу.
+      const recentUrgent = new Set(alertsRef.current.filter((x) => x.level === 'urgent' && now - x.at < 3 * 60_000).map((x) => x.inc.id));
+      for (const a of one) if (a.level === 'urgent' && recentUrgent.has(a.inc.id)) a.acked = true;
+      setAlerts((l) => [...l.filter((x) => !one.some((f) => f.inc.id === x.inc.id && (f.kind === x.kind || (f.level === 'urgent' && x.level === 'urgent')))), ...one].sort(byRank));
+      const top = one[0];
       if (dRef.current.sound) chime(top.level === 'urgent' ? 'urgent' : top.kind === 'resolvedCrit' ? 'good' : 'soft');
       // Всё, что «срочно» и «внимание», говорит помощник — с вопросом, что делаем; мелочи («инфо») — молча.
-      // На отдельном экране стены не говорим: голос — в окне дежурного.
-      if (!standalone) for (const a of fresh.slice(0, 3)) announceText(voiceLine(a.kind, a.inc, now, teamName), a.inc.id, `${a.kind}:${a.inc.id}`);
+      // На отдельном экране стены не говорим: голос — в окне дежурного. Срочное на весь экран он договаривает до конца.
+      if (!standalone) for (const a of one.slice(0, 3)) announceText(voiceLine(a.kind, a.inc, now, teamName), a.inc.id, `${a.kind}:${a.inc.id}`, a.level === 'urgent' && !a.acked);
     },
     [standalone],
   );

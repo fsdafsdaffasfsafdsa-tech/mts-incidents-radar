@@ -209,7 +209,7 @@ async function sayNow(t: string, id: number, opt: { voice?: string; asJarvis?: b
 }
 
 // Мост к окну Джарвиса: объявления о критических попадают в разговор и становятся его темой.
-let bridge: { announce: (text: string, id: string) => Promise<void>; ask: (text: string, quiet?: boolean) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
+let bridge: { announce: (text: string, id: string, urgent?: boolean) => Promise<void>; ask: (text: string, quiet?: boolean) => Promise<string>; speak: (text: string, id: string) => Promise<void> } | null = null;
 /** Джарвис говорит готовый текст об инциденте (строка в разговоре, тема — этот инцидент) и ждёт, пока договорит. */
 export const jarvisSpeak = (text: string, id: string) => bridge?.speak(text, id) ?? say(text);
 
@@ -220,7 +220,9 @@ export const jarvisReady = () => !!bridge;
 
 // ─── объявления: всё, что происходит, говорит Джарвис — по одному: следующую проблему — только когда
 // с текущей разобрались (дежурный ответил Джарвису, подтвердил, инцидент сдвинулся) или прошло 2 минуты ───
-const annQueue: { text: string; id: string; key: string; st: string | null; at: number }[] = [];
+const annQueue: { text: string; id: string; key: string; st: string | null; at: number; urgent?: boolean }[] = [];
+/** Сейчас звучит срочное объявление на весь экран — его договаривают до конца, перебить нельзя. */
+let uninterruptible = false;
 const ANN_WAIT = 120_000; // дольше не держим очередь — говорим следующее
 const ANN_STALE = 10 * 60_000; // объявление старше — уже не актуально
 let annAck = 0; // когда дежурный последний раз подтвердил (Esc, «принял», действие)
@@ -246,7 +248,7 @@ function withAddress(text: string) {
   return addr ? `${addr[0].toUpperCase()}${addr.slice(1)}, ${t[0].toLowerCase()}${t.slice(1)}` : `${t[0].toUpperCase()}${t.slice(1)}`;
 }
 /** Поставить объявление в очередь. key — что это за событие: одно и то же не повторяем 45 секунд. */
-function enqueueAnnounce(text: string, id: string, key = `inc:${id}`) {
+function enqueueAnnounce(text: string, id: string, key = `inc:${id}`, urgent = false) {
   if (!canAnnounce()) return;
   const now = Date.now();
   if ((annRecent.get(key) ?? 0) > now - 45_000 || annQueue.some((x) => x.key === key)) return;
@@ -255,7 +257,7 @@ function enqueueAnnounce(text: string, id: string, key = `inc:${id}`) {
   if (id && ((annRecent.get(`id:${id}`) ?? 0) > now - 90_000 || annQueue.some((x) => x.id === id))) return;
   annRecent.set(key, now);
   if (id) annRecent.set(`id:${id}`, now);
-  annQueue.push({ text: withAddress(text), id, key, st: statusOf(id), at: now });
+  annQueue.push({ text: withAddress(text), id, key, st: statusOf(id), at: now, urgent });
   void runAnnounce();
 }
 // ─── что Джарвис объявил сам — для блока Джарвиса на стене (лента разговора) ───
@@ -294,7 +296,7 @@ async function runAnnounce() {
       const a = annQueue.shift()!;
       if (!canAnnounce() || !annFresh(a)) continue;
       logSaid(a.text, a.id);
-      if (bridge) await bridge.announce(a.text, a.id);
+      if (bridge) await bridge.announce(a.text, a.id, a.urgent);
       else await say(a.text);
       await waitHandled(a, Date.now()); // следующую проблему — только после этой
       await new Promise((r) => setTimeout(r, 1500));
@@ -332,8 +334,8 @@ export function announceIncident(id: string, fallback: string, key = `crit:${id}
 }
 
 /** Сказать готовый текст об инциденте (событие на стене, прогноз) — если голос и объявления включены. */
-export function announceText(text: string, id: string, key?: string) {
-  enqueueAnnounce(text, id, key);
+export function announceText(text: string, id: string, key?: string, urgent = false) {
+  enqueueAnnounce(text, id, key, urgent);
 }
 
 // ─── работа Джарвиса — для ИИ-блока на дашборде ────────────────────────────
@@ -831,13 +833,18 @@ export function Jarvis() {
   // Объявления о критических: строка в разговоре, тема разговора — этот инцидент.
   useEffect(() => {
     bridge = {
-      announce: async (t, id) => {
+      announce: async (t, id, urgent) => {
         // Не перебиваем текущий ответ: ждём, пока договорит и додумает (не дольше 30 секунд).
         for (let k = 0; k < 100 && (talking || busy.current); k++) await new Promise((r) => setTimeout(r, 300));
         focus.current = id;
         setWork({ focusId: id, q: '', steps: [], reply: t, done: [], busy: false });
         setLines((l) => [...l, { role: 'assistant', content: t, event: true }]);
-        await say(t);
+        uninterruptible = !!urgent; // срочное на весь экран — договаривает до конца
+        try {
+          await say(t);
+        } finally {
+          uninterruptible = false;
+        }
         speakEnd.current = Date.now();
         // Спросил «что будем делать?» — ждём ответа: слушает всегда — окно без слова «Джарвис», иначе — слушаем один раз сами.
         if (jarvisPrefs.control) follow(15_000);
@@ -1081,7 +1088,7 @@ export function Jarvis() {
   }, []);
   // Esc — замолчать.
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && phase === 'speak' && stopTalking();
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && phase === 'speak' && !uninterruptible && stopTalking();
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1097,6 +1104,7 @@ export function Jarvis() {
     const recentSpoken = now - speakEnd.current < 8000 || phase === 'speak';
     // 1. Говорит, а человек заговорил — замолкает и слушает (shared/hearing: эхо и шум не обрывают).
     if (phase === 'speak') {
+      if (uninterruptible) return; // срочное на весь экран договаривает — перебить нельзя
       const b = bargeIn(t, speakingText) ?? (WAKE.test(t) && !isEchoOf(t, speakingText) ? 'talk' : null);
       if (!b) return;
       stopVoice();
@@ -1232,7 +1240,7 @@ export function Jarvis() {
   function press() {
     unlockJarvisAudio();
     claimJarvis(); // нажали здесь — Джарвис теперь в этом окне
-    if (phase === 'speak') return stopTalking();
+    if (phase === 'speak') return uninterruptible ? undefined : stopTalking();
     if (jarvisPause.sleep || jarvisPause.mute) {
       setPause({ sleep: false, mute: false });
       setOpen(true);
