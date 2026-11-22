@@ -10,14 +10,19 @@ const FALLBACK = 'openai/gpt-6.2-sol';
 const IMAGE_MODELS = () => [process.env.IMAGE_MODEL || 'openai/gpt-5-image-mini', 'google/gemini-3.1-flash-image'];
 
 const SYSTEM = `Ты собираешь блоки для видеостены координаторов массовых инцидентов. Человек описывает, какой блок ему нужен; ты отвечаешь строго одним JSON-объектом, без текста вокруг:
-{"title": "короткое название блока по-русски (до 30 символов)", "kind": "list|counter|bars|character|note", "hint": "одной фразой, что показывает",
- "filter": {"priority": ["P1","P2","P3","P4"] — P1 критический/наивысший, P2 высокий, P3 средний, P4 низкий; "status": ["coordinators","assigned","in_progress","resolved"] — на координаторах, назначен команде, в работе, решён; "group": "crit|coord|high|research"; "origin": "complaints|dataset" — из жалоб абонентов или из выгрузки ITSM; "overdue": true — срок прошёл; "notTaken": true — команда не берёт; "text": "слова для поиска в названии, сервисе, продукте, команде"},
- "groupBy": "team|service|product|priority|status" — для bars, "sort": "deadline|priority|created|complaints", "limit": 3..15,
+{"title": "короткое название блока по-русски (до 30 символов)", "kind": "list|counter|bars|donut|hours|character|note", "hint": "одной фразой, что показывает",
+ "filter": {"period": "today|hour|shift" — за сегодня / последний час / смену (тогда решённые тоже считаются); "priority": ["P1","P2","P3","P4"] — P1 критический/наивысший, P2 высокий, P3 средний, P4 низкий; "status": ["coordinators","assigned","in_progress","resolved"] — на координаторах, назначен команде, в работе, решён; "group": "crit|coord|high|research"; "origin": "complaints|dataset" — из жалоб абонентов или из выгрузки ITSM; "overdue": true — срок прошёл; "notTaken": true — команда не берёт; "text": "слова для поиска в названии, сервисе, продукте, команде"},
+ "groupBy": "team|service|product|priority|status" — для bars и donut, "sort": "deadline|priority|created|complaints", "limit": 3..12,
  "note": "текст заметки" — для note,
  "character": {"name": "имя", "style": "как говорит — характер и манера", "avatar": "эмодзи одним символом", "color": "#rrggbb"} — для character,
  "w": 2..12, "h": 2..12 — удобный размер на поле 12×12}
-Виды: list — список инцидентов; counter — одно большое число (сколько подходит под фильтр); bars — полосы: сколько по командам/сервисам/уровням; character — персонаж, который время от времени комментирует обстановку; note — просто текст.
-Фильтр — только то, о чём просили. Решённые показываются, только если явно просят (status: resolved).`;
+Виды и когда какой брать:
+- donut — кольцо: доли по группировке и итог крупно в центре. Для «диаграмма», «распределение», «доля», «структура», когда категорий 2–6: по уровням (groupBy priority) или по статусам (status) — лучший выбор для «диаграммы по задачам». Размер w 4–5, h 5–6.
+- hours — столбики по часам, слоями по уровню. Для «по часам», «динамика», «как шло за день», «нагрузка за смену». Обязательно period (today или shift). Размер w 6–8, h 4–5.
+- bars — полосы. Для сравнения многих категорий (команды, сервисы, продукты; 4–10 строк). Размер w 4–6, h 5–7.
+- counter — одно большое число (сколько подходит под фильтр). list — список инцидентов. character — персонаж, который комментирует обстановку. note — просто текст.
+Слова «сегодня», «за день» — period: today; «за смену» — shift; «за час», «сейчас поступает» — hour. «Задачи», «инциденты» — все инциденты (не только открытые), если указан период.
+Цвета подбираются сами (уровни — цветом уровня). Фильтр — только то, о чём просили. Без периода решённые показываются, только если явно просят (status: resolved).`;
 
 export async function makeBlock(prompt: string, character: boolean): Promise<{ spec: CustomSpec; w: number; h: number; model: string }> {
   if (!key()) throw new Error('нет ключа OpenRouter на сервере');
@@ -38,8 +43,8 @@ export async function makeBlock(prompt: string, character: boolean): Promise<{ s
       if (character) o.kind = 'character';
       const spec = cleanSpec(o);
       if (!spec) throw new Error('модель вернула непонятный блок');
-      const w = Math.max(2, Math.min(12, Math.round(Number(o.w) || (spec.kind === 'counter' ? 3 : spec.kind === 'character' ? 3 : 4))));
-      const h = Math.max(2, Math.min(12, Math.round(Number(o.h) || (spec.kind === 'counter' ? 3 : spec.kind === 'character' ? 5 : 6))));
+      const w = Math.max(2, Math.min(12, Math.round(Number(o.w) || (spec.kind === 'counter' ? 3 : spec.kind === 'character' ? 3 : spec.kind === 'hours' ? 6 : 4))));
+      const h = Math.max(2, Math.min(12, Math.round(Number(o.h) || (spec.kind === 'counter' ? 3 : spec.kind === 'character' ? 5 : spec.kind === 'hours' ? 4 : 6))));
       return { spec, w, h, model };
     } catch (err) {
       last = `${model}: ${err instanceof Error ? err.message : String(err)}`;

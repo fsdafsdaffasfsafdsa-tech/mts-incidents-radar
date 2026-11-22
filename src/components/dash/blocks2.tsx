@@ -12,6 +12,7 @@ import { openFav } from '../FavDialog';
 import { fmtClock } from '../../lib/format';
 import { applyDashOp, dashEvent } from '../../lib/dashLayout';
 import { makeCustomBlock } from '../../lib/dashDesign';
+import { CustomViz } from './customViz';
 import { BlockHead, GroupTags, PRIO, leftText, on, os, who, type BlockCtx, type Opts } from './Dashboard';
 import { fmtShort } from '../../../shared/dash';
 
@@ -236,6 +237,11 @@ export function CharacterBlock({ ctx, o, spec }: { ctx: BlockCtx; o?: Opts; spec
 
 // ─── свой блок по описанию от ChatGPT ───
 export function CustomBlock({ ctx, spec }: { ctx: BlockCtx; spec: CustomSpec }) {
+  // полосы, кольцо, столбики по часам, число и заметка — новая отрисовка по всем инцидентам пункта
+  if (spec.kind !== 'list') return <CustomViz ctx={ctx} spec={spec} />;
+  return <CustomList ctx={ctx} spec={spec} />;
+}
+function CustomList({ ctx, spec }: { ctx: BlockCtx; spec: CustomSpec }) {
   const list = useMemo(() => {
     const all = [...ctx.snap.action.map((x) => x.inc), ...ctx.snap.work, ...ctx.snap.resolvedCrit];
     const uniq = [...new Map(all.map((i) => [i.id, i])).values()];

@@ -529,7 +529,10 @@ ${att.reason}` : ''}`}
  */
 function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now, d } = ctx;
-  const list = snap.action
+  // Распределить — это то, что ещё на пункте, и решённые, по которым снова жалобы (вернуть команде).
+  // Переданные команде здесь не висят, даже если команда ещё не взяла: это видно в «Командах» и «Вопросах».
+  const mine = snap.action.filter((x) => x.inc.status === 'coordinators' || x.inc.status === 'resolved');
+  const list = mine
     .map((x) => ({ ...x, h: heatFor(x.inc, x.att.score) }))
     .sort((a, b) => b.h - a.h || b.att.score - a.att.score || a.inc.slaDeadline - b.inc.slaDeadline);
   // сколько строк помещается в блок (меряем по уже стоящим строкам)
@@ -553,15 +556,15 @@ function ActionBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const restHot = rest.filter((x) => x.h >= 3).length;
   const work = useJarvisWork(); // о каком инциденте говорит Джарвис — подсвечиваем строку
   const jvFocus = jarvisBusyRecently(now) ? work.focusId : null;
-  const toRoute = snap.action.filter((x) => x.inc.status === 'coordinators');
+  const toRoute = mine.filter((x) => x.inc.status === 'coordinators');
   const withAi = toRoute.filter((x) => x.inc.ai?.teamId).length;
-  const recurN = snap.action.filter((x) => x.inc.status === 'resolved').length;
+  const recurN = mine.filter((x) => x.inc.status === 'resolved').length;
   const ask = withAi ? `«Передать ${withAi} по совету ИИ?»` : toRoute.length ? '«Подобрать команды?»' : recurN ? '«Вернуть в работу?»' : null;
   const row = (x: (typeof list)[number], off?: boolean) => <FillRow key={x.inc.id} i={x.inc} att={x.att} h={x.h} now={now} off={off} focus={jvFocus === x.inc.id} onClick={() => ctx.open(x.inc)} />;
   return (
     <div className={`db db-action ${ob(o, 'compact', false) ? 'compact' : ''}`}>
-      <BlockHead title={d.filter ? GROUP_NAME[d.filter] : 'Кому распределить'} count={snap.action.length} icon={<BellRing size={18} />} />
-      {!snap.action.length && (
+      <BlockHead title={d.filter ? GROUP_NAME[d.filter] : 'Кому распределить'} count={mine.length} icon={<BellRing size={18} />} />
+      {!mine.length && (
         <div className="dn-calm">
           <CheckCircle2 />
         </div>

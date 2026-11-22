@@ -111,6 +111,18 @@ test('«завести инцидент?» — «да», а ИИ уже собр
   assert.throws(() => p.createFromCluster('KION|tom', 'Дежурный'), /не актуален/);
 });
 
+test('«Взяли в работу»: команда берёт переданный и ещё не взятый; нечего брать — понятная ошибка', () => {
+  const { p, box } = setup();
+  assert.throws(() => runShow(p, box, 'teamTake', 'Коллега'), /сначала передайте/);
+  const inc = p.incidents.get(runShow(p, box, 'stuck', 'Коллега').id!)!;
+  assert.equal(inc.status, 'assigned');
+  const r = runShow(p, box, 'teamTake', 'Коллега');
+  assert.equal(r.id, inc.id);
+  assert.equal(inc.status, 'in_progress');
+  assert.ok(inc.assigneeName);
+  assert.match(voiceLine('taken', inc, Date.now()), /взяла в работу/);
+});
+
 test('новый критический — P1 на пункте с советом ИИ', () => {
   const { p, box } = setup();
   const r = runShow(p, box, 'crit', 'Ведущий');

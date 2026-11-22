@@ -78,6 +78,8 @@ export function levelOf(kind: AlertKind, inc: Incident): Level {
     case 'answer':
     case 'auto':
       return 'attention';
+    case 'taken': // команда взяла в работу важный — Джарвис скажет; мелкий — тихой строкой
+      return inc.priority === 'P1' || inc.priority === 'P2' ? 'attention' : 'info';
     default:
       return 'info';
   }
@@ -261,6 +263,8 @@ export function voiceLine(kind: AlertKind, inc: Incident, now: number, teamOf: (
       return `${t} давно без внимания. Посмотрим?`;
     case 'fav':
       return `по избранному ${t} есть изменения.`;
+    case 'taken':
+      return `команда «${short(inc.groupName ?? (inc.teamId ? teamOf(inc.teamId) : 'команда'))}» взяла в работу ${t}${inc.assigneeName ? ` — ${inc.assigneeName.split(' ').slice(0, 2).join(' ')}` : ''}.`;
     case 'auto': {
       const team = short(inc.autoRouted?.teamName ?? (inc.teamId ? teamOf(inc.teamId) : 'команде'));
       return inc.priority === 'P3'

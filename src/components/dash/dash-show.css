@@ -114,6 +114,9 @@
 .sp-btn.t-mid {
   --tc: var(--d-warn, #f2d16b);
 }
+.sp-btn.t-ok {
+  --tc: var(--d-ok, #3ecf8e);
+}
 .sp-side {
   display: flex;
   gap: 0.4em;
@@ -1258,4 +1261,240 @@
   height: 100%;
   object-fit: contain;
   background: #000;
+}
+
+/* ─── полосы новых событий — свой цвет, белый текст не сливается со светлым фоном ─── */
+.dal.k-teamAsk {
+  background: var(--d-high); /* вопрос команды — ждёт ответа пункта */
+  color: #fff;
+}
+.dal.k-answer {
+  background: var(--d-ok); /* команда ответила */
+  color: #fff;
+}
+.dal.k-taken {
+  background: var(--d-ok); /* команда взяла в работу */
+  color: #fff;
+}
+.dal.k-auto {
+  background: var(--jv, #4e8cff); /* ИИ передал сам */
+  color: #fff;
+}
+
+/* ─── блок Джарвиса: услышал, но не понял, что это ему ─── */
+.jvb-ignored {
+  color: var(--d-muted);
+  font-size: var(--f-cap);
+  font-style: italic;
+  animation: sp-note 6s ease-out forwards;
+}
+
+/* ─── свой блок от ChatGPT: полосы во всю высоту, кольцо, столбики по часам ─── */
+.db.cv {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  container-type: size;
+}
+.cv-period {
+  color: var(--d-muted);
+  font-size: var(--f-cap);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cv-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--d-muted);
+}
+/* полосы: строки делят высоту блока, число крупно и цветом категории */
+.cv-rows {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  gap: 0.4em;
+}
+.cv-row {
+  flex: 1 1 0;
+  max-height: 4.2em;
+  display: grid;
+  grid-template-columns: minmax(5em, 32%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7em;
+}
+.cv-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.cv-track {
+  height: min(60%, 1.6em);
+  min-height: 0.7em;
+  border-radius: 999px;
+  background: var(--d-panel2);
+  overflow: hidden;
+}
+.cv-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left;
+  animation: cv-grow 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes cv-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+.cv-row b {
+  font-size: 1.6em;
+  font-weight: 800;
+  min-width: 1.6em;
+  text-align: right;
+}
+/* кольцо: итог в центре, легенда рядом (узкий блок — под кольцом) */
+.cv-donut-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 1em;
+}
+@container (max-aspect-ratio: 1/1) {
+  .cv-donut-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+}
+.cv-ring {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+}
+.cv-seg {
+  animation: cv-ring 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes cv-ring {
+  from {
+    opacity: 0;
+  }
+}
+.cv-total {
+  font-size: 22px;
+  font-weight: 800;
+  fill: var(--d-text);
+}
+.cv-total-sub {
+  font-size: 7px;
+  fill: var(--d-muted);
+}
+.cv-legend {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45em;
+  align-content: center;
+}
+.cv-legend li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5em;
+}
+.cv-legend i {
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 0.25em;
+}
+.cv-legend span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-legend b {
+  font-size: 1.25em;
+  font-weight: 800;
+}
+.cv-legend small {
+  color: var(--d-muted);
+  min-width: 2.6em;
+  text-align: right;
+}
+/* столбики по часам: слоями по уровню */
+.cv-cols {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0.35em;
+  padding-top: 1.2em;
+}
+.cv-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-items: center;
+  position: relative;
+}
+.cv-stack {
+  align-self: end;
+  width: min(100%, 2.4em);
+  min-height: 2px;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 0.35em 0.35em 0.1em 0.1em;
+  overflow: hidden;
+  background: var(--d-panel2);
+  transform-origin: bottom;
+  animation: cv-up 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes cv-up {
+  from {
+    transform: scaleY(0);
+  }
+}
+.cv-stack i {
+  flex-basis: 0;
+}
+.cv-col b {
+  position: absolute;
+  top: -1.2em;
+  font-size: 0.85em;
+  font-weight: 800;
+}
+.cv-col small {
+  color: var(--d-muted);
+  font-size: var(--f-cap);
+}
+.cv-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em 1em;
+  justify-content: center;
+  color: var(--d-muted);
+  font-size: var(--f-cap);
+}
+.cv-keys span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+}
+.cv-keys i {
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 0.2em;
+}
+@container style(--motion: calm) {
+  .cv-track i,
+  .cv-seg,
+  .cv-stack {
+    animation: none;
+  }
 }

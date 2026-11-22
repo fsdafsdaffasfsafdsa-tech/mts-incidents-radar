@@ -78,6 +78,12 @@ export function JarvisBlock({ ctx, brief }: { ctx: BlockCtx; brief: string | nul
         ))}
       </p>
       {state === 'speaking' && <small className="jvb-hint">скажите «стоп» — замолчу</small>}
+      {/* услышал, но не понял, что это ему, — видно, а не «молчит»; подсказка, как обратиться */}
+      {state !== 'speaking' && live.ignored && ctx.now - live.ignored.at < 6000 && (
+        <small className="jvb-ignored">
+          услышал «{live.ignored.text.length > 40 ? `${live.ignored.text.slice(0, 38)}…` : live.ignored.text}» — скажите «{p.name}, …»
+        </small>
+      )}
     </div>
   );
 }

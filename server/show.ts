@@ -7,7 +7,7 @@ import { routeTeams } from './ai-point.ts';
 import { POINT_ID, isOn, membersOf, personById, teamById } from './directory.ts';
 
 const MIN = 60_000;
-export const SHOW_KINDS = ['crit', 'coord', 'recur', 'mailCrit', 'mailAsk', 'stuck', 'sla', 'pingpong', 'p1ask', 'above', 'teamNotOurs', 'teamHelp', 'leadQ', 'lows'] as const;
+export const SHOW_KINDS = ['crit', 'coord', 'recur', 'mailCrit', 'mailAsk', 'stuck', 'sla', 'pingpong', 'p1ask', 'above', 'teamNotOurs', 'teamHelp', 'leadQ', 'lows', 'teamTake'] as const;
 /** Через сколько руководитель отвечает на вопрос пункта в показе. */
 export const LEAD_REPLY_MS = 15_000;
 export type ShowKind = (typeof SHOW_KINDS)[number];
@@ -173,6 +173,20 @@ export function runShow(point: Point, mailbox: Mailbox, kind: ShowKind, actor: s
       point.scenarioIncident({ service: 'Домашнее ТВ', regionId: 'krd', n: 9, priority: 'P4' });
       const mid = point.scenarioIncident({ service: 'Мой МТС', regionId: 'nsk', n: 10, priority: 'P3', slaMin: 77 });
       return { text: 'Мелкие: два низких и средний — при критическом ИИ раздаст их сам', id: mid.id };
+    }
+    case 'teamTake': {
+      // Команда взяла в работу: из переданных и ещё не взятых — самый важный, при равных — дольше всех ждёт
+      const RANK = { P1: 0, P2: 1, P3: 2, P4: 3 } as const;
+      const waiting = [...point.incidents.values()]
+        .filter((i) => i.status === 'assigned' && i.teamId && i.teamId !== POINT_ID)
+        .sort((a, b) => RANK[a.priority] - RANK[b.priority] || (a.routedAt ?? a.createdAt) - (b.routedAt ?? b.createdAt));
+      const inc = waiting[0];
+      if (!inc) throw new Error('нет инцидентов, которые ждут команду: сначала передайте инцидент команде');
+      const people = membersOf(inc.teamId!).filter((x) => x.role === 'engineer');
+      const eng = people.find((x) => isOn(x, Date.now())) ?? people[0] ?? engineer(inc.teamId!);
+      if (!eng) throw new Error('в команде нет инженеров');
+      point.take(inc.id, eng.id);
+      return { text: `«${teamById(inc.teamId)?.name ?? 'Команда'}» взяла в работу: ${inc.title}`, id: inc.id };
     }
     case 'above': {
       // Важнее критического: у критического срок далеко, у высокого — через 12 минут

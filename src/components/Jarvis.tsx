@@ -394,7 +394,7 @@ const workInBlock = () => onDashboard() && aiBlockOnWall();
 
 // ─── живое состояние — для персонажа на стене ──────────────────────────────
 /** Что Джарвис делает прямо сейчас: ждёт, слушает, думает, говорит. Персонаж в ИИ-блоке анимируется по нему. */
-export const jarvisLive: { phase: Phase; hearing: boolean; heard: string; muted?: boolean } = { phase: 'idle', hearing: false, heard: '' };
+export const jarvisLive: { phase: Phase; hearing: boolean; heard: string; muted?: boolean; ignored?: { text: string; at: number } } = { phase: 'idle', hearing: false, heard: '' };
 const liveSubs = new Set<() => void>();
 export function useJarvisLive() {
   const [, set] = useState(0);
@@ -500,6 +500,16 @@ class Ear {
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS as MediaTrackConstraints });
       const t = this.stream.getAudioTracks()[0];
+      // микрофон «онемел» (его забрала другая программа, сменили устройство) — берём заново
+      t?.addEventListener('mute', () => {
+        setTimeout(() => {
+          if (t.muted && this.want) {
+            this.release();
+            if (this.rec) this.abort();
+            this.retry();
+          }
+        }, 1500);
+      });
       t?.addEventListener('ended', () => {
         this.stream = null;
         if (this.want) this.retry(); // микрофон сменили или отключили — берём заново
@@ -630,7 +640,8 @@ class Ear {
     if (!this.abortAt && !this.started && now - this.lastStart > 4000) return this.abort(); // запуск завис: onstart так и не пришёл
     // Завис без событий. Не чаще раза в минуту: каждый перезапуск заново открывает микрофон, а на Windows это
     // дёргает гарнитуры и другие аудиопрограммы. Тишину браузер закрывает сам — тогда просто запускаем снова.
-    if (!this.abortAt && now - this.lastEvent > 60_000) this.abort();
+    // С чистой дорожкой перезапуск распознавания не трогает микрофон — не ждём минуту, хватит 15 секунд.
+    if (!this.abortAt && now - this.lastEvent > (this.stream ? 15_000 : 60_000)) this.abort();
   }
   /** Человек нажал на шар — «говорю, а ты не слышишь»: если давно не было звука, перезапускаем сразу. */
   nudge() {
@@ -955,6 +966,8 @@ export function Jarvis() {
       speakEnd.current = Date.now();
       return 'Принято.';
     }
+    // к нему точно обращаются: по имени, задачей или ответом на его вопрос — модель не должна промолчать «—»
+    const addressed = WAKE.test(q) || forMeWithoutName(question) || Date.now() - lastQ.current < 60_000 || Date.now() - bargeAt.current < 10_000;
     busy.current = true;
     currentQ.current = question;
     lastQ.current = 0;
@@ -976,7 +989,7 @@ export function Jarvis() {
       const r = await fetch('/api/jarvis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: question, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history, dash: dashSummary(), dashControl: getDash().jarvisEdit, persona: jarvisPrefs.persona, stream: live }),
+        body: JSON.stringify({ text: question, addressed, selectedId: s.selectedId, focusId: focus.current, tab: s.tab, mode: jarvisPrefs.control || jarvisPrefs.scenario ? 'control' : 'chat', short: jarvisPrefs.scenario, history, dash: dashSummary(), dashControl: getDash().jarvisEdit, persona: jarvisPrefs.persona, stream: live }),
         signal: AbortSignal.timeout(60_000), // не «зависает» навсегда: иначе он больше не слушает
       });
       type Reply = { reply: string; actions: Action[]; done: string[]; focus: string | null; llm: boolean; error?: string };
@@ -1216,6 +1229,8 @@ export function Jarvis() {
       return void askRef.current(said);
     }
     setHeard(''); // говорят не ему — не отвечаем
+    jarvisLive.ignored = { text: said, at: now }; // но в блоке видно: услышал, не понял, что это ему
+    liveSubs.forEach((f) => f());
   }
   const onHeardRef = useRef(onHeard);
   onHeardRef.current = onHeard;

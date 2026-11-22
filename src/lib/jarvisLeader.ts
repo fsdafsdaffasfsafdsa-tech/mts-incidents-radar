@@ -65,8 +65,16 @@ if (ch) {
     else if (Date.now() - lastAlive > 5000 && visible()) claimJarvis();
   }, 2000);
   const take = () => !leader && claimJarvis();
+  const bye = () => {
+    if (!leader) return;
+    set(false);
+    ch.postMessage({ t: 'bye', id: ID } satisfies Msg);
+  };
   window.addEventListener('focus', take);
   window.addEventListener('pointerdown', take, true);
   window.addEventListener('keydown', take, true);
-  window.addEventListener('pagehide', () => leader && ch.postMessage({ t: 'bye', id: ID } satisfies Msg));
+  window.addEventListener('pagehide', bye);
+  // Перешли на вкладку — Джарвис здесь сразу, без щелчка. Ушли с неё (свернули, другая вкладка) — отдаём его:
+  // скрытая вкладка слушать не может, и раньше Джарвис молчал везде, пока по нему не щёлкнешь.
+  document.addEventListener('visibilitychange', () => (visible() ? take() : bye()));
 }

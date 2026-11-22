@@ -2,7 +2,7 @@
 // ситуацию на сервере (server/show.ts) — стена, срочное окно, уведомления и Джарвис реагируют как вживую.
 // «Очистить» — пустая смена. Видео пересменки — кнопкой в шапке.
 import { useState } from 'react';
-import { ArrowUp, Brush, Hand, Inbox, Layers, LifeBuoy, Mail, MailWarning, MessagesSquare, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Zap, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Brush, Hand, Inbox, Layers, LifeBuoy, Mail, MailWarning, MessagesSquare, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Wrench, Zap, type LucideIcon } from 'lucide-react';
 import { showAction } from '../../store';
 import { motionCalm, setMotionCalm } from './anim';
 
@@ -37,6 +37,7 @@ const GROUPS: { name: string; icon: LucideIcon; btns: Btn[] }[] = [
       { kind: 'teamHelp', icon: LifeBuoy, label: 'Нужна помощь', tone: 'mid' },
       { kind: 'pingpong', icon: Repeat, label: 'По кругу', tone: 'mid' },
       { kind: 'leadQ', icon: MessagesSquare, label: 'Спросить руковод.', tone: 'jv' },
+      { kind: 'teamTake', icon: Wrench, label: 'Взяли в работу', tone: 'ok' },
     ],
   },
   {

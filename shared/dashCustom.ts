@@ -1,9 +1,11 @@
 // Свой блок, придуманный ChatGPT по описанию: не код, а безопасное описание — что показать и как.
-// Виды: список инцидентов, одно число, полосы по группировке, персонаж с репликами, заметка.
+// Виды: список инцидентов, одно число, полосы по группировке, кольцо (доли и итог в центре), столбики по часам,
+// персонаж с репликами, заметка. Период — сегодня, последний час или смена (тогда решённые тоже считаются).
 import type { Incident, Priority, Status } from './types.ts';
 import { groupsOf, waitingTake, NOT_TAKEN_MIN, type DashGroup } from './dash.ts';
 
-export type CustomKind = 'list' | 'counter' | 'bars' | 'character' | 'note';
+export type CustomKind = 'list' | 'counter' | 'bars' | 'donut' | 'hours' | 'character' | 'note';
+export type CustomPeriod = 'today' | 'hour' | 'shift';
 export interface CustomFilter {
   priority?: Priority[];
   status?: Status[];
@@ -12,6 +14,7 @@ export interface CustomFilter {
   overdue?: boolean;
   notTaken?: boolean;
   text?: string; // слова в названии, сервисе, продукте
+  period?: CustomPeriod; // сегодня / последний час / смена (12 ч) — по времени появления, решённые тоже
 }
 export interface CustomSpec {
   title: string;
@@ -43,7 +46,7 @@ function safeAvatar(v: unknown): string | undefined {
 export function cleanSpec(o: unknown): CustomSpec | null {
   if (!o || typeof o !== 'object') return null;
   const x = o as Record<string, unknown>;
-  const kind = (['list', 'counter', 'bars', 'character', 'note'] as const).find((k) => k === x.kind);
+  const kind = (['list', 'counter', 'bars', 'donut', 'hours', 'character', 'note'] as const).find((k) => k === x.kind);
   if (!kind) return null;
   const f = (x.filter && typeof x.filter === 'object' ? x.filter : {}) as Record<string, unknown>;
   const filter: CustomFilter = {};
@@ -54,6 +57,7 @@ export function cleanSpec(o: unknown): CustomSpec | null {
   if (f.overdue === true) filter.overdue = true;
   if (f.notTaken === true) filter.notTaken = true;
   if (str(f.text, 60)) filter.text = str(f.text, 60);
+  if (f.period === 'today' || f.period === 'hour' || f.period === 'shift') filter.period = f.period;
   const spec: CustomSpec = { title: str(x.title, 40) || 'Мой блок', kind };
   if (str(x.hint, 120)) spec.hint = str(x.hint, 120);
   if (Object.keys(filter).length) spec.filter = filter;
@@ -68,11 +72,22 @@ export function cleanSpec(o: unknown): CustomSpec | null {
   return spec;
 }
 
+/** Начало периода: сегодня — с полуночи по местному времени, час — последние 60 минут, смена — 12 часов. */
+export function periodStart(p: CustomPeriod, now: number) {
+  if (p === 'hour') return now - 3_600_000;
+  if (p === 'shift') return now - 12 * 3_600_000;
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 /** Какие инциденты подходят под фильтр своего блока. */
 export function applyFilter(all: Iterable<Incident>, f: CustomFilter | undefined, now: number, teamName: (id: string | null) => string): Incident[] {
   const words = (f?.text ?? '').toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
   return [...all].filter((i) => {
-    if (!f?.status?.length && i.status === 'resolved') return false;
+    // за период считаем всё, что появилось за это время, решённые тоже; без периода — только открытые
+    if (f?.period && i.createdAt < periodStart(f.period, now)) return false;
+    if (!f?.status?.length && !f?.period && i.status === 'resolved') return false;
     if (f?.priority?.length && !f.priority.includes(i.priority)) return false;
     if (f?.status?.length && !f.status.includes(i.status)) return false;
     if (f?.group && !groupsOf(i).includes(f.group)) return false;

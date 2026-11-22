@@ -278,6 +278,7 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       const history = Array.isArray(body.history) ? (body.history as { role: string; content: string }[]).filter((h) => (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : [];
       const q = {
         text: str(body.text).slice(0, 500),
+        addressed: body.addressed === true, // к Джарвису точно обращаются — молчанием «—» не отвечать
         selectedId: str(body.selectedId) || null,
         focusId: str(body.focusId) || null,
         tab: str(body.tab) || null,

@@ -7,7 +7,7 @@
 // Мозг — Claude, голос — ElevenLabs, оба через OpenRouter (ключ только на сервере). Без ключа — команды по правилам.
 import https from 'node:https';
 import { SocksProxyAgent } from 'socks-proxy-agent';
-import type { Incident, Me, Priority } from '../shared/types.ts';
+import type { Incident, MailItem, Me, Priority } from '../shared/types.ts';
 import { PRIORITY_TEXT } from '../shared/types.ts';
 import type { Point } from './point.ts';
 import type { Mailbox } from './mail.ts';
@@ -35,6 +35,15 @@ function importantMail(now: number) {
   return (mailbox?.items ?? [])
     .filter((m) => !m.read && m.analysis && m.analysis.kind !== 'noise' && now - m.at < 12 * 3_600_000)
     .sort((a, b) => MAIL_URG[a.analysis!.urgency] - MAIL_URG[b.analysis!.urgency] || b.at - a.at);
+}
+/** Письмо «по умолчанию»: самое важное разобранное, а если ИИ ещё не успел разобрать — самое свежее непрочитанное
+ *  (письмо пришло секунду назад — «заведи инцидент по письму» не должно отвечать «писем нет»). */
+function latestMail(now: number, needFree = false) {
+  const free = (m: MailItem) => !needFree || (!m.analysis?.incidentId && !m.incidentCreated);
+  return (
+    importantMail(now).find(free) ??
+    (mailbox?.items ?? []).filter((m) => free(m) && !m.read && m.analysis?.kind !== 'noise' && now - m.at < 12 * 3_600_000).sort((a, b) => b.at - a.at)[0]
+  );
 }
 export const key = () => process.env.OPENROUTER_API_KEY || '';
 export const JARVIS_MODEL = () => process.env.JARVIS_MODEL || 'anthropic/claude-sonnet-5.5';
@@ -78,6 +87,7 @@ export interface JarvisAsk {
   dash?: DashCtx | null; // что сейчас на видеостене
   dashControl?: boolean; // в настройках дашборда разрешено перестраивать стену
   persona?: string | null; // персонаж ИИ: имя, характер и голос
+  addressed?: boolean; // к нему точно обращаются (по имени, задачей, ответом на его вопрос) — «—» не отвечать
   history: { role: 'user' | 'assistant'; content: string }[];
 }
 /** Что Джарвис делает прямо сейчас — для окна «Работа Джарвиса» (поток событий во время ответа). */
@@ -667,7 +677,7 @@ class Exec {
       }
       case 'read_mail': {
         if (!mailbox) throw new Error('почта не подключена');
-        const m = typeof a.mail === 'string' && a.mail ? mailbox.get(a.mail.replace(/^mail=/, '')) : importantMail(Date.now())[0];
+        const m = typeof a.mail === 'string' && a.mail ? mailbox.get(a.mail.replace(/^mail=/, '')) : latestMail(Date.now());
         if (!m) throw new Error('такого письма нет — важных непрочитанных писем нет');
         mailbox.read(m.id);
         this.actions.push({ type: 'mail', id: m.id }); // на стене письмо раскрывается, пока он читает
@@ -678,7 +688,7 @@ class Exec {
       }
       case 'mail_to_incident': {
         if (!mailbox) throw new Error('почта не подключена');
-        const m = typeof a.mail === 'string' && a.mail ? mailbox.get(a.mail.replace(/^mail=/, '')) : importantMail(Date.now()).find((x) => !x.analysis?.incidentId && !x.incidentCreated);
+        const m = typeof a.mail === 'string' && a.mail ? mailbox.get(a.mail.replace(/^mail=/, '')) : latestMail(Date.now(), true);
         if (!m) throw new Error('нет письма без инцидента');
         const inc = mailbox.toIncident(m.id, this.me.name);
         this.focus = inc.id;
@@ -716,12 +726,36 @@ function findCoordinator(q: string) {
     return words.some((w) => tokens.some((t) => t.startsWith(stem(w)) || w.startsWith(stem(t))));
   });
 }
+// Латиница в названиях сервисов так, как её произносят и как модель пишет по-русски: «КИОН» — это KION.
+const LAT_RU: [RegExp, string][] = [
+  [/kion/g, 'кион'],
+  [/sms/g, 'смс'],
+  [/ussd/g, 'юссд'],
+  [/music/g, 'мьюзик музыка'],
+  [/b2b/g, 'бтуби б2б'],
+  [/pay/g, 'пэй пей'],
+  [/crm/g, 'црм срм'],
+  [/gpon/g, 'джипон'],
+  [/l2/g, 'эл2'],
+];
+const withRu = (s: string) => `${s} ${LAT_RU.reduce((acc, [re, ru]) => (re.test(s) ? `${acc} ${ru}` : acc), '')}`;
+
+/**
+ * Инциденты по словам: открытые, а также решённые, по которым снова жалобы, и решённые за последние 2 часа
+ * («верни в работу инцидент по KION» — он формально решён). Латиница сервисов понимается и по-русски.
+ */
 function findIncidents(point: Point, q: string, limit: number): Incident[] {
-  const words = norm(q).split(/[^а-яa-z0-9]+/).filter((w) => w.length >= 4);
+  const words = withRu(norm(q))
+    .split(/[^а-яa-z0-9]+/)
+    .filter((w) => w.length >= 3);
+  const now = Date.now();
   const scored: [Incident, number][] = [];
-  for (const i of openList(point)) {
-    const hay = norm(`${i.id} ${i.title} ${i.service} ${i.productName} ${i.regionName ?? ''} ${regions(i)} ${(i.regionIds ?? []).map((r) => regionById(r)?.city).join(' ')} ${teamName(i.teamId)}`);
-    const s = words.filter((w) => hay.includes(stem(w))).length + (i.priority === 'P1' ? 0.2 : 0);
+  for (const i of point.incidents.values()) {
+    const open = i.status !== 'resolved';
+    const recent = !open && (isRecurring(i, now) || now - (i.resolvedAt ?? 0) < 2 * 3_600_000);
+    if (!open && !recent) continue;
+    const hay = withRu(norm(`${i.id} ${i.title} ${i.service} ${i.productName} ${i.regionName ?? ''} ${regions(i)} ${(i.regionIds ?? []).map((r) => regionById(r)?.city).join(' ')} ${teamName(i.teamId)}`));
+    const s = words.filter((w) => hay.includes(stem(w))).length + (i.priority === 'P1' ? 0.2 : 0) + (open || isRecurring(i, now) ? 0.1 : 0);
     if (s >= 1) scored.push([i, s]);
   }
   return scored.sort((a, b) => b[1] - a[1]).slice(0, limit).map(([i]) => i);
@@ -790,6 +824,7 @@ const SYSTEM = `Ты — Джарвис, голосовой ИИ-помощни�
 - «Покажи четыре группы», «группы окном», «на весь экран», «закрой окно» — dashboard op=popup (block=groups; value=large — на весь экран; on=false — закрыть). Раскладку стены при этом не меняй.
 - Вопрос команды (строка-событие «команда просит передать…»): «да», «передай» — route_incident в команду из совета ИИ; «команда просит помощи» — «да», «напиши» — message_lead с сутью просьбы.
 - Реплика не тебе — люди говорят между собой, оценка вроде «лучше, чем было, но всё равно», оборванная фраза без просьбы: ответь ровно «—» и ничего не делай. Не переспрашивай и не объясняй.
+- Пометка «[обращаются к тебе]» в начале реплики — она точно тебе: «—» не отвечай. Поняли не до конца — выполни самое вероятное или коротко переспроси одной фразой.
 - Сначала сделай действие инструментом, потом коротко скажи, что сделал. Никогда не говори «открыл», «передал», «готово», не вызвав инструмент.
 - Пометки «(Сделано: …)» в истории — действия, которые уже выполнены на самом деле. Не оспаривай их и не повторяй без просьбы.`;
 /** Системная подсказка под выбранного персонажа: имя, обращение и характер. */
@@ -809,7 +844,7 @@ async function llm(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefi
     { role: 'system', content: `${systemFor(q.persona)}\n${q.mode === 'control' ? CONTROL_NOTE : CHAT_NOTE}${dashOk ? `\n${DASH_NOTE}` : ''}${q.short ? '\nСейчас показ для жюри: отвечай особенно коротко — одна-две фразы, до 25 слов, без поправок к прошлым ответам.' : ''}` },
     { role: 'system', content: `Данные пункта сейчас:\n${contextText(point, me, q)}` },
     ...q.history.slice(-8).map((h) => ({ role: h.role, content: h.content.slice(0, 600) }) as Msg),
-    { role: 'user', content: q.text.slice(0, 500) },
+    { role: 'user', content: `${q.addressed ? '[обращаются к тебе] ' : ''}${q.text.slice(0, 500)}` },
   ];
   const tools = [...INFO_TOOLS, ...ACTION_TOOLS, ...(q.mode === 'control' ? SCREEN_TOOLS : []), ...(dashOk ? [DASH_TOOL, DESIGN_TOOL, BLOCK_TOOL] : [])];
   let nudged = false;
