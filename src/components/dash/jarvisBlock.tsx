@@ -55,8 +55,8 @@ export function JarvisBlock({ ctx, brief }: { ctx: BlockCtx; brief: string | nul
               className={`jvb-mic ${micCls}`}
               role="button"
               tabIndex={0}
-              onClick={() => window.dispatchEvent(new Event('radar:jarvis-mute'))}
-              title={pause.mute ? 'Микрофон выключен — щелчок, чтобы включить' : pause.sleep ? 'Пауза — скажите «продолжаем работу»' : 'Микрофон включён — щелчок, чтобы выключить'}
+              onClick={() => window.dispatchEvent(new Event(pause.sleep ? 'radar:jarvis-pause' : 'radar:jarvis-mute'))}
+              title={pause.mute ? 'Микрофон выключен — щелчок, чтобы включить' : pause.sleep ? 'Пауза — щелчок или «Джарвис, …», чтобы продолжить' : 'Микрофон включён — щелчок, чтобы выключить'}
             >
               <MicIcon />
             </span>

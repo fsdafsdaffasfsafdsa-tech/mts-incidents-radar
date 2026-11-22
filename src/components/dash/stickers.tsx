@@ -63,12 +63,25 @@ export function Stickers() {
     drag.current = null;
     setLive(null);
   }
-  function wheel(e: React.WheelEvent, s: Sticker) {
-    if (sel !== s.id) return;
-    e.preventDefault();
-    if (e.shiftKey) save({ ...s, rot: (((s.rot + Math.sign(e.deltaY || e.deltaX) * 8) % 360) + 360) % 360 });
-    else save({ ...s, w: Math.min(0.8, Math.max(0.04, s.w * (e.deltaY > 0 ? 0.92 : 1.08))) });
-  }
+  // Колёсико над выделенным: размер, с Shift — поворот. Обработчик не «пассивный» — иначе браузер не даёт
+  // отменить прокрутку страницы.
+  const now = useRef({ d, sel });
+  now.current = { d, sel };
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const f = (e: WheelEvent) => {
+      const id = (e.target as Element)?.closest?.('.stk')?.getAttribute('data-id');
+      const { d: dd, sel: cur } = now.current;
+      const s = dd.stickers.find((x) => x.id === id);
+      if (!s || cur !== s.id) return;
+      e.preventDefault();
+      const next = e.shiftKey ? { ...s, rot: (((s.rot + Math.sign(e.deltaY || e.deltaX) * 8) % 360) + 360) % 360 } : { ...s, w: Math.min(0.8, Math.max(0.04, s.w * (e.deltaY > 0 ? 0.92 : 1.08))) };
+      setDash({ stickers: dd.stickers.map((x) => (x.id === s.id ? next : x)) });
+    };
+    el.addEventListener('wheel', f, { passive: false });
+    return () => el.removeEventListener('wheel', f);
+  }, [d.stickers.length > 0]);
 
   if (!d.stickers.length) return null;
   return (
@@ -80,8 +93,8 @@ export function Stickers() {
             key={s.id}
             className={`stk ${sel === s.id ? 'sel' : ''}`}
             style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%`, width: `${s.w * 100}%`, transform: `translate(-50%, -50%) rotate(${s.rot}deg)` }}
+            data-id={s.id}
             onPointerDown={(e) => down(e, s, 'move')}
-            onWheel={(e) => wheel(e, s)}
             title={`${s.name} — тяните, чтобы переставить; колёсико — размер, Shift+колёсико — поворот`}
           >
             <img src={s.src} alt={s.name} draggable={false} style={s.flip ? { transform: 'scaleX(-1)' } : undefined} />

@@ -4,11 +4,10 @@
 //   «Голос Джарвиса» — отвечает вслух живым голосом (говорящие модели OpenRouter, ключ на сервере), объявляет критические.
 // Разговор помнит, о каком инциденте речь: «объясни», «кому дать?», «выдай» — без номеров.
 import { useEffect, useRef, useState } from 'react';
-import { Activity, Check, Loader2, Lock, Mic, MicOff, Pause, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
 import './jarvis-pause.css';
 import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
 import type { DashOp } from '../../shared/dash';
-import { PERSONAS, inGender, personaById } from '../../shared/personas';
+import { PERSONAS, personaById } from '../../shared/personas';
 import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, useDash, useWorkOpen, wallWindowOpen } from '../lib/dashLayout';
 import { claimJarvis, isJarvisLeader, onJarvisLeader, useJarvisLeader } from '../lib/jarvisLeader';
 import { ghostStep } from './ghost';
@@ -409,7 +408,9 @@ function usePause() {
 }
 const lowRu = (t: string) => t.toLowerCase().replace(/ё/g, 'е').trim();
 const STOP_RE = /(^|[\s,.!?])(стоп|хватит|стой|достаточно|замолчи|помолчи|тихо|прекрати)([\s,.!?]|$)/;
-const SLEEP_RE = /(вс[её],? ?(пока )?не надо|пока не надо|пауза|не слушай|отдохни|перерыв|отключись|помолчи пока|выключи микрофон|не мешай)/;
+// Пауза — только по явной просьбе про самого Джарвиса. «Пока не надо», «не надо» — это ответ на его вопрос
+// («Завести инцидент?»), а не «замолчи»: раньше он уходил в паузу и переставал слушать.
+const SLEEP_RE = /(^|[\s,.!?])(пауза|не слушай|отдохни|отключись|помолчи пока|выключи микрофон|не мешай)([\s,.!?]|$)/;
 const RESUME_RE = /(продолж|возвращайся|вернись|работаем|просыпайся|проснись|включись|снова в работу)/;
 const ACK_RE = /^(принял|принято|понял|вижу|ясно|ок|окей|хорошо|увидел)[.!]*$/;
 // Без слова «Джарвис» (в окне после его вопроса или ответа) берём только то, что похоже на ответ ему: коротко или с
@@ -565,7 +566,9 @@ class Ear {
       return this.kick();
     }
     if (!this.abortAt && !this.started && now - this.lastStart > 4000) return this.abort(); // запуск завис: onstart так и не пришёл
-    if (!this.abortAt && now - this.lastEvent > 10000) this.abort(); // завис без событий (обычно браузер сам закрывает тишину за ~8 с)
+    // Завис без событий. Не чаще раза в минуту: каждый перезапуск заново открывает микрофон, а на Windows это
+    // дёргает гарнитуры и другие аудиопрограммы. Тишину браузер закрывает сам — тогда просто запускаем снова.
+    if (!this.abortAt && now - this.lastEvent > 60_000) this.abort();
   }
   /** Человек нажал на шар — «говорю, а ты не слышишь»: если давно не было звука, перезапускаем сразу. */
   nudge() {
@@ -594,8 +597,6 @@ const afterWake = (t: string) => {
 const FOLLOW_MS = 9000; // после ответа можно продолжать без слова «Джарвис»
 
 const TABS = ['map', 'inbox', 'teams', 'done', 'reviews', 'requests', 'signals', 'shift', 'ai', 'wall', 'directory', 'desk'];
-const SUGGEST_CONTROL = ['Что горит?', 'Открой входящие и объясни ситуацию', 'Кому можно дать?', 'Что важнее критического?', 'Перемотай карту'];
-const SUGGEST_CHAT = ['Что горит?', 'Что важнее критического?', 'Сколько жалоб?', 'Что с самым срочным?'];
 
 function flashEl(el: Element) {
   el.classList.remove('jv-flash');
@@ -728,16 +729,15 @@ export function Jarvis() {
   const pause = usePause();
   const speakEnd = useRef(0); // когда закончил говорить — хвост собственного голоса не принимаем за команду
   const bargeAt = useRef(0); // когда человек перебил его голосом
-  const [open, setOpen] = useState(false);
+  const [, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [lines, setLines] = useState<Line[]>([]);
   const [steps, setSteps] = useState<Step[]>([]); // «Работа Джарвиса»: что он делает прямо сейчас
   const [stepsAt, setStepsAt] = useState(0);
   const [heard, setHeard] = useState('');
-  const [text, setText] = useState('');
-  const [status, setStatus] = useState<Status | null>(null);
-  const [err, setErr] = useState('');
-  const [note, setNote] = useState('');
+  const [, setStatus] = useState<Status | null>(null);
+  const [, setErr] = useState('');
+  const [, setNote] = useState('');
   const [awaiting, setAwaiting] = useState(false); // ждёт продолжения без слова «Джарвис»
   const [micDenied, setMicDenied] = useState(false);
   const leader = useJarvisLeader(); // это окно — ведущее (говорит и слушает)
@@ -1084,8 +1084,16 @@ export function Jarvis() {
       return;
     }
     // Пауза — ждём только «продолжаем работу».
+    // Пауза — ждём «продолжаем работу» или обращение по имени («Джарвис, …» — сразу и выполняет).
     if (jarvisPause.sleep) {
-      if (final && RESUME_RE.test(low)) resume();
+      if (!final) return;
+      if (WAKE.test(t)) {
+        setPause({ sleep: false });
+        const rest = afterWake(t);
+        if (rest.length > 2 && !RESUME_RE.test(lowRu(rest))) return void askRef.current(rest);
+        return resume();
+      }
+      if (RESUME_RE.test(low)) resume();
       return;
     }
     if (busy.current || phase !== 'idle') return;
@@ -1147,11 +1155,18 @@ export function Jarvis() {
       ear.set(false);
     };
   }, []);
+  // Вкладку свернули или ушли на другую — микрофон отпускаем: не мешаем другим аудиопрограммам. Вернулись — слушает.
+  const [tabVisible, setTabVisible] = useState(() => document.visibilityState === 'visible');
+  useEffect(() => {
+    const f = () => setTabVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', f);
+    return () => document.removeEventListener('visibilitychange', f);
+  }, []);
   useEffect(() => {
     // «Нет микрофона» не выключает слух: Ear сам пробует снова (см. retry) — иначе после входа на сайт его надо «протыкивать».
     // Слушает только ведущее окно: два окна с распознаванием мешают друг другу, и ни одно ничего не делает.
-    ear.set(!!RecCtor && control && leader && !prefs.scenario && !pause.mute && (phase === 'idle' || phase === 'speak'));
-  }, [control, leader, phase, prefs.scenario, pause.mute]);
+    ear.set(!!RecCtor && control && leader && tabVisible && !prefs.scenario && !pause.mute && (phase === 'idle' || phase === 'speak'));
+  }, [control, leader, tabVisible, phase, prefs.scenario, pause.mute]);
   // Сторож: раз в 2 с поднимает слух, если браузер его уронил; любой щелчок, клавиша, возврат на вкладку или
   // выданное разрешение микрофона — пробуем сразу.
   useEffect(() => {
@@ -1217,208 +1232,12 @@ export function Jarvis() {
     jarvisLive.heard = heard; // блок на стене показывает, что он сейчас слышит
     liveSubs.forEach((f) => f());
   }, [phase, hearing, awaiting, heard]);
-  const label = !leader
-    ? 'Джарвис в другом окне — нажмите, чтобы он был здесь'
-    : pause.mute
-    ? 'Микрофон выключен — нажмите, чтобы включить'
-    : pause.sleep && phase === 'idle'
-      ? 'Пауза — скажите «продолжаем работу»'
-      : phase === 'think'
-      ? 'Думаю…'
-      : phase === 'speak'
-        ? 'Говорю… «стоп» — прервать'
-        : !control
-          ? phase === 'listen'
-            ? 'Слушаю…'
-            : canListen
-              ? 'Нажмите и говорите'
-              : 'Напишите вопрос'
-          : micDenied || earState === 'error'
-            ? 'Нет микрофона — нажмите'
-            : !hearing
-              ? 'Включаю микрофон…'
-              : awaiting
-                ? 'Слушаю…'
-                : 'Скажите «Джарвис, …»';
-  const last = [...lines].reverse().find((l) => l.role === 'assistant');
-  const suggest = control ? SUGGEST_CONTROL : SUGGEST_CHAT;
-  const persona = personaById(prefs.persona);
-  // На дашборде с ИИ-блоком «за работой» показывается в блоке, а не всплывающим окном у шара.
-  const workVisible = prefs.work && steps.length > 0 && (phase === 'think' || Date.now() - stepsAt < 7000) && !workInBlock();
-  // На стене с блоком Джарвиса шара с фото и всплывающего окна нет: что он говорит, слышит и делает — в блоке.
-  // Сам Джарвис работает как прежде (слушает, говорит, делает); шар и окно — только на рабочем месте.
-  if (!workOpen && aiBlockOnWall()) return null;
-
-  return (
-    <div className={`jv jv-${phase} ${pause.sleep ? 'jv-sleep' : ''} ${pause.mute ? 'jv-mute' : ''} ${awaiting && (hearing || !control) && !pause.sleep ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>
-      {open && (
-        <div className="jv-panel" role="dialog" aria-label="Джарвис — голосовой помощник">
-          <div className="jv-head">
-            <img className="jv-ava" src={persona.avatar} alt="" onError={(e) => ((e.currentTarget.style.display = 'none'))} />
-            <b>{persona.name}</b>
-            <span className={`jv-mode ${status?.llm ? 'on' : ''}`} title={status?.llm ? `Думает: ${status.model}. Говорит: живой голос через OpenRouter` : 'Без ключа OpenRouter: команды по правилам и голос браузера'}>
-              {status?.llm ? 'Claude + живой голос' : 'по правилам'}
-            </span>
-            <button
-              className="icon-btn"
-              onClick={() => {
-                if (!control) {
-                  stopVoice();
-                  rec.current?.abort();
-                  setPhase('idle');
-                }
-                setOpen(false);
-              }}
-              aria-label={control ? 'Скрыть окно (Джарвис продолжит слушать)' : 'Закрыть'}
-              title={control ? 'Скрыть окно — Джарвис продолжит слушать. Выключается только в настройках.' : 'Закрыть'}
-            >
-              <X size={15} />
-            </button>
-          </div>
-          <div className="jv-flags">
-            <button className={`jv-flag ${control || prefs.scenario ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
-              {control ? <Lock size={12} /> : null}
-              {prefs.scenario ? 'сценарий для жюри' : control ? 'управляет экраном · слушает всегда' : 'только ответы'}
-            </button>
-            <button className={`jv-flag ${prefs.speak ? 'on' : ''}`} onClick={() => setSettings(true)} title="Меняется в настройках">
-              {prefs.speak ? <Volume2 size={12} /> : <VolumeX size={12} />}
-              {prefs.speak ? 'голос' : 'без голоса'}
-            </button>
-            <button className={`jv-flag ${prefs.work ? 'on' : ''}`} onClick={() => setJarvisPref('work', !prefs.work)} title="Показывать, что Джарвис делает на сайте прямо сейчас">
-              <Activity size={12} /> {prefs.work ? 'работа видна' : 'работа скрыта'}
-            </button>
-          </div>
-          <div className="jv-log" ref={log}>
-            {!lines.length && (
-              <div className="jv-hello">
-                {control ? 'Скажите «Джарвис» и команду — или нажмите на шар и говорите.' : 'Спросите голосом или текстом.'}
-                <div className="jv-sug">
-                  {suggest.map((s) => (
-                    <button key={s} className="chip" onClick={() => void ask(s)}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {lines.map((l, k) => (
-              <div key={k} className={`jv-line ${l.role} ${l.event ? 'event' : ''}`}>
-                {l.content}
-                {!!l.done?.length && (
-                  <span className="jv-done">
-                    {l.done.map((d, j) => (
-                      <span key={j}>
-                        <Check size={11} /> {d}
-                      </span>
-                    ))}
-                  </span>
-                )}
-                {l.role === 'assistant' && l.llm === false && <span className="jv-rule">по правилам</span>}
-              </div>
-            ))}
-            {heard && <div className="jv-line user interim">{heard}</div>}
-            {phase === 'think' && (
-              <div className="jv-line assistant jv-dots">
-                <i />
-                <i />
-                <i />
-              </div>
-            )}
-            {err && <div className="jv-err">{err}</div>}
-            {note && <div className="jv-note">{note}</div>}
-          </div>
-          <form
-            className="jv-input"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const q = text;
-              setText('');
-              void ask(q);
-            }}
-          >
-            <input value={text} onChange={(e) => setText(e.target.value)} placeholder={control ? 'Например: открой входящие и объясни ситуацию' : 'Например: что горит в Москве?'} aria-label="Вопрос Джарвису" />
-            <button type="submit" className="icon-btn" disabled={!text.trim() || phase === 'think'} aria-label="Отправить">
-              <Send size={15} />
-            </button>
-          </form>
-        </div>
-      )}
-      {!open && last && (phase === 'speak' || awaiting) && (
-        <div className="jv-sub">
-          {last.content}
-          {!!last.done?.length && (
-            <span className="jv-done">
-              {last.done.map((d, j) => (
-                <span key={j}>
-                  <Check size={11} /> {d}
-                </span>
-              ))}
-            </span>
-          )}
-        </div>
-      )}
-      {!open && heard && <div className="jv-sub user">{heard}</div>}
-      {workVisible && (
-        <div className="jv-work" role="status" aria-live="polite">
-          <div className="jv-work-h">
-            <Activity size={13} /> {persona.name} за работой
-          </div>
-          {steps.map((x) => (
-            <div key={x.id} className={`jv-step ${x.state}`}>
-              <span className="jv-step-i">{x.state === 'run' ? <Loader2 size={13} /> : x.state === 'done' ? <Check size={13} /> : <X size={13} />}</span>
-              <span>
-                {inGender(x.text, persona)}
-                {x.note && <small>{x.note}</small>}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="jv-dock">
-        {(phase !== 'idle' || awaiting || pause.sleep || pause.mute || (control && (!open || !hearing))) && <span className={`jv-label ${control && phase === 'idle' && !hearing && !pause.mute ? 'warn' : ''}`}>{label}</span>}
-        {phase === 'speak' && (
-          <button className="jv-stop" onClick={stopTalking} title="Замолчать (Esc или скажите «стоп»)">
-            <Square size={13} /> Стоп
-          </button>
-        )}
-        {control && phase !== 'speak' && (
-          <span className="jv-pausebar">
-            <button className={`jv-pbtn ${pause.mute ? 'on' : ''}`} onClick={toggleMute} title={pause.mute ? 'Включить микрофон' : 'Выключить микрофон — Джарвис перестанет слушать'} aria-label={pause.mute ? 'Включить микрофон' : 'Выключить микрофон'}>
-              {pause.mute ? <MicOff size={15} /> : <Mic size={15} />}
-            </button>
-            <button
-              className={`jv-pbtn ${pause.sleep ? 'on' : ''}`}
-              onClick={() => (pause.sleep ? resumeRef.current() : (setPause({ sleep: true }), stopVoice()))}
-              title={pause.sleep ? 'Продолжить работу' : 'Пауза: не отвечать и не объявлять, пока не скажете «продолжаем работу»'}
-              aria-label={pause.sleep ? 'Продолжить' : 'Пауза'}
-            >
-              <Pause size={15} />
-            </button>
-          </span>
-        )}
-        <button
-          ref={orb}
-          className="jv-orb"
-          onClick={press}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setOpen((o) => !o);
-          }}
-          title={`Джарвис — ${label}. Правая кнопка — показать или скрыть окно`}
-          aria-label="Говорить с Джарвисом"
-        >
-          <span className="jv-core" />
-          <span className="jv-ring r1" />
-          <span className="jv-ring r2" />
-          {prefs.persona !== 'jarvis' || persona.avatar ? <img className="jv-face" src={persona.avatar} alt="" onError={(e) => ((e.currentTarget.style.display = 'none'))} /> : null}
-          <span className="jv-ico">
-            <Mic size={18} />
-          </span>
-          {control && <span className="jv-live" aria-hidden />}
-        </button>
-      </div>
-    </div>
-  );
+  // Шара в углу и всплывающего окна нет совсем: Джарвис работает голосом, его состояние — в блоке Джарвиса на стене
+  // (что он слышит, говорит и делает; курсор Джарвиса показывает действия). Раньше шар прятался только при одном
+  // виде блока — и висел у тех, у кого стена собрана иначе, а его кнопка паузы мешала.
+  void workOpen;
+  void stepsAt;
+  return null;
 }
 
 /** Раздел настроек: две независимые функции — «управляет экраном» и «голос». */
