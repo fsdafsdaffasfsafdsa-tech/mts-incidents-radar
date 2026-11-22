@@ -15,7 +15,7 @@ import { assessRisk, buildContext } from './ai-heuristic.ts';
 import { aiStatus } from './ai-llm.ts';
 import { Persister, getMeta, loadPoint, openDb, resetState, setMeta } from './db.ts';
 import { Mailbox } from './mail.ts';
-import { currentUser, findAccounts, login, logout, seedUsers } from './auth.ts';
+import { currentUser, findAccounts, login, logout, seedUsers, sessionKey } from './auth.ts';
 import { ItsmFile } from './itsm-file.ts';
 import { RAW } from './catalog.ts';
 import { actorLine, ask as askJarvis, attachMailbox, brief as jarvisBrief, dashBrief, jarvisStatus, speak } from './jarvis.ts';
@@ -84,6 +84,21 @@ itsm.start();
 // ─── SSE ───────────────────────────────────────────────────────────────────
 
 const clients = new Map<http.ServerResponse, Me>();
+// Смена одна на всех окна и браузеры: «очистить» из одного окна обнуляла стену тем, кто в другом браузере
+// посреди задачи (так было, когда на проде записывали демо-ролики). Помним, какие окна открыты (поток стены)
+// и когда в каждом что-то делали: если другое окно открыто или работало последние 10 минут — «очистить»
+// просит подтверждения, а остальным окнам приходит объявление, что смену очистили.
+const streamKeys = new Map<http.ServerResponse, string>();
+const lastAct = new Map<string, number>();
+const BUSY_MS = 10 * 60_000;
+function othersWorking(me: string | null): boolean {
+  if (!me) return false;
+  const now = Date.now();
+  for (const [k, t] of lastAct) if (now - t > 24 * 3_600_000) lastAct.delete(k);
+  for (const k of streamKeys.values()) if (k !== me) return true;
+  for (const [k, t] of lastAct) if (k !== me && now - t < BUSY_MS) return true;
+  return false;
+}
 // Почта дежурного: письма и их разбор моделью (server/mail.ts). Пишем только дежурным пункта.
 const mailbox = new Mailbox(
   point,
@@ -206,15 +221,21 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
     };
     const actor = me.name;
     const pid = me.personId ?? me.login;
+    // Смена одна на всех: чем занято другое окно — до того, как отметить активность этого
+    const sk = sessionKey(req);
+    const othersBusy = othersWorking(sk);
+    if (post && sk) lastAct.set(sk, Date.now());
 
     if (p === '/api/stream' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
       res.write('retry: 2000\n\n');
       send(res, { type: 'snapshot', data: snapshot(me) });
       clients.set(res, me);
+      if (sk) streamKeys.set(res, sk);
       point.setOnline(me.personId, 1);
       req.on('close', () => {
         clients.delete(res);
+        streamKeys.delete(res);
         point.setOnline(me.personId, -1);
       });
       return;
@@ -534,8 +555,13 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, url: URL
       // самотёка нет: режим всегда «по кнопкам»
       if (kind === 'on' || kind === 'off') return json(res, 200, setShow(point, mailbox, true));
       if (kind === 'clear') {
+        // В другом браузере смена открыта или в работе — не обнуляем ему стену молча: сначала подтверждение
+        if (othersBusy && body.force !== true) return json(res, 409, { error: 'В другом окне сейчас работают со сменой — «очистить» обнулит стену и у них. Нажмите ещё раз, чтобы очистить у всех.', busy: true });
         clearAll(point, mailbox);
-        for (const [r, who] of clients) send(r, { type: 'snapshot', data: snapshot(who) });
+        for (const [r, who] of clients) {
+          send(r, { type: 'snapshot', data: snapshot(who) });
+          if (streamKeys.get(r) !== sk) send(r, { type: 'notice', data: { text: 'Смену очистили в другом окне' } });
+        }
         return json(res, 200, { ok: true });
       }
       if (!(SHOW_KINDS as readonly string[]).includes(kind)) throw new Error('Неизвестная ситуация');

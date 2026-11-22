@@ -14,6 +14,7 @@ import { answerP1, getState, reopenIncident, routeTo, takeAtPoint, teamName } fr
 import { fmtClock } from '../../lib/format';
 import { useDashEvents, type DashLayout } from '../../lib/dashLayout';
 import { announceText } from '../Jarvis';
+import { critSound } from '../../lib/critSound';
 
 export interface Alert {
   key: string;
@@ -39,6 +40,9 @@ const ORDER: AlertKind[] = ['crit', 'recur', 'p1ask', 'critStuck', 'critSla', 'c
 const rank = (k: AlertKind) => (ORDER.includes(k) ? ORDER.indexOf(k) : 50);
 const byRank = (a: Alert, b: Alert) => Number(!!a.acked) - Number(!!b.acked) || rank(a.kind) - rank(b.kind) || b.at - a.at;
 const URGENT_LIFE = 10 * 60_000;
+/** Событие про критический (или предложение ИИ поднять до «Наивысшего», или «критический решён») — его стена
+ *  показывает молча: только визуал, без звука и голоса. */
+const critical = (a: { kind: string; inc: { priority: string; p1Proposal?: string | null } }) => a.kind === 'crit' || a.kind === 'p1ask' || a.kind === 'resolvedCrit' || a.inc.priority === 'P1' || !!a.inc.p1Proposal;
 const LIFE: Partial<Record<AlertKind, number>> = { remind: 40_000, resolvedCrit: 45_000 };
 const FORGOT_EVERY = 10 * 60_000;
 
@@ -111,11 +115,14 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
       const recentUrgent = new Set(alertsRef.current.filter((x) => x.level === 'urgent' && now - x.at < 3 * 60_000).map((x) => x.inc.id));
       for (const a of one) if (a.level === 'urgent' && recentUrgent.has(a.inc.id)) a.acked = true;
       setAlerts((l) => [...l.filter((x) => !one.some((f) => f.inc.id === x.inc.id && (f.kind === x.kind || (f.level === 'urgent' && x.level === 'urgent')))), ...one].sort(byRank));
-      const top = one[0];
-      if (dRef.current.sound) chime(top.level === 'urgent' ? 'urgent' : top.kind === 'resolvedCrit' ? 'good' : 'soft');
-      // Всё, что «срочно» и «внимание», говорит помощник — с вопросом, что делаем; мелочи («инфо») — молча.
+      // Критические (и предложение ИИ поднять до «Наивысшего») — без звука и голоса, пока внизу стены не включён
+      // «звук при критических» (по умолчанию выключен — только визуал).
+      const loud = critSound() ? one : one.filter((a) => !critical(a));
+      const top = loud[0];
+      if (top && dRef.current.sound) chime(top.level === 'urgent' ? 'urgent' : top.kind === 'resolvedCrit' ? 'good' : 'soft');
+      // Остальное «срочно» и «внимание» говорит помощник — с вопросом, что делаем; мелочи («инфо») — молча.
       // На отдельном экране стены не говорим: голос — в окне дежурного. Срочное на весь экран он договаривает до конца.
-      if (!standalone) for (const a of one.slice(0, 3)) announceText(voiceLine(a.kind, a.inc, now, teamName), a.inc.id, `${a.kind}:${a.inc.id}`, a.level === 'urgent' && !a.acked);
+      if (!standalone) for (const a of loud.slice(0, 3)) announceText(voiceLine(a.kind, a.inc, now, teamName), a.inc.id, `${a.kind}:${a.inc.id}`, a.level === 'urgent' && !a.acked);
     },
     [standalone],
   );

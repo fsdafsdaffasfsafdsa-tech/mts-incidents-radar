@@ -24,6 +24,7 @@ import type {
 import { configureSound, play, unlockAudio, type Cue, type SoundPack } from './lib/sound';
 import { RECUR_MIN } from '../shared/dash';
 import { voiceLine } from '../shared/attention';
+import { critSound } from './lib/critSound';
 import { themeById } from './lib/themes';
 import { DEFAULT_HOTKEYS, type HotAction } from './lib/hotkeys';
 
@@ -383,6 +384,10 @@ function handle(msg: PointMessage) {
       setState({ mail: [m, ...rest].sort((a, b) => b.at - a.at).slice(0, 80) });
       break;
     }
+    case 'notice':
+      // например, «смену очистили в другом окне» — чтобы стена не «обнулялась» без объяснения
+      toast({ kind: 'warn', title: msg.data.text, body: '', ttl: 10_000 });
+      break;
     case 'stats':
       setState({ stats: msg.data });
       break;
@@ -435,11 +440,14 @@ function onIncident(prev: Incident | undefined, inc: Incident) {
     } else if (!prev && inc.status === 'coordinators') {
       const p1 = inc.priority === 'P1';
       toast({ kind: p1 ? 'p1' : 'coord', title: inc.origin === 'complaints' ? 'ИИ собрал жалобы в инцидент' : 'Новый инцидент на пункте', body: inc.title, incidentId: inc.id, ttl: p1 ? 15000 : 7000 });
-      cue(p1 ? 'p1' : 'coord');
-      if (!p1) announce(voiceLine('coord', inc, Date.now(), teamName), inc.id, `coord:${inc.id}`); // критический объявляет тревога
+      // критический: звук — только если включён «звук при критических» (голос — у тревоги); иначе только визуал
+      if (!p1) {
+        cue('coord');
+        announce(voiceLine('coord', inc, Date.now(), teamName), inc.id, `coord:${inc.id}`);
+      } else if (critSound()) cue('p1');
     } else if (prev && !prev.p1Proposal && inc.p1Proposal) {
       toast({ kind: 'p1', title: 'ИИ предлагает «Наивысший»', body: inc.title, incidentId: inc.id, ttl: 15000 });
-      cue('p1');
+      if (critSound()) cue('p1');
     } else if (prev && me.role === 'coordinator' && prev.coordinatorId !== me.personId && inc.coordinatorId === me.personId) {
       toast({ kind: 'coord', title: inc.history.some((h) => h.kind === 'ai' && h.at === inc.updatedAt) ? 'ИИ распределил вам инцидент' : 'Вам передали инцидент', body: inc.title, incidentId: inc.id, ttl: 9000 });
       cue('coord');
@@ -452,7 +460,8 @@ function onIncident(prev: Incident | undefined, inc: Incident) {
   const mine = inc.teamId === me.teamId;
   if (mine && (!prev || prev.teamId !== inc.teamId) && inc.status === 'assigned') {
     toast({ kind: inc.priority === 'P1' ? 'p1' : 'coord', title: 'Пункт передал инцидент вашей команде', body: inc.title, incidentId: inc.id, ttl: 12000 });
-    cue(inc.priority === 'P1' ? 'p1' : 'coord');
+    if (inc.priority !== 'P1') cue('coord');
+    else if (critSound()) cue('p1'); // критический — со звуком, только если включён выключатель
   } else if (prev && prev.assignee !== me.personId && inc.assignee === me.personId && inc.history.at(-1)?.actor !== me.name) {
     toast({ kind: 'coord', title: 'Вам назначен инцидент', body: inc.title, incidentId: inc.id, ttl: 10000 });
     cue('coord');
@@ -632,6 +641,14 @@ export const reopenIncident = (id: string) => quiet(post(`/api/incidents/${encod
 export const demoRecur = () => post('/api/demo/scenario', { step: 'recur' });
 /** Показ по кнопкам: ситуация (crit, recur, …), «on»/«off» — самотёк, «clear» — чистая смена. */
 export const showAction = (kind: string) => post<{ text?: string; show?: boolean; ok?: boolean }>('/api/show', { kind });
+/** «Очистить» смену. Если смена открыта в другом браузере — сервер просит подтверждения (busy), а не обнуляет молча. */
+export async function clearShift(force = false): Promise<{ ok: true } | { busy: true; error: string }> {
+  const r = await fetch('/api/show', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'clear', ...(force ? { force: true } : {}) }) });
+  const data = (await r.json().catch(() => ({}))) as { error?: string; busy?: boolean };
+  if (r.status === 409 && data.busy) return { busy: true, error: data.error ?? 'Смена открыта в другом окне' };
+  if (!r.ok) throw new Error(data.error ?? `Ошибка ${r.status}`);
+  return { ok: true };
+}
 export async function showState(): Promise<{ show: boolean } | null> {
   try {
     const r = await fetch('/api/show', { credentials: 'same-origin' });

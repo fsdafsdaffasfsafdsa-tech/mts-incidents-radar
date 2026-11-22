@@ -421,7 +421,8 @@ export type PointMessage =
   | { type: 'stats'; data: Stats }
   | { type: 'tick'; data: { serverTime: number } }
   | { type: 'insight'; data: Insight }
-  | { type: 'mail'; data: MailItem };
+  | { type: 'mail'; data: MailItem }
+  | { type: 'notice'; data: { text: string } }; // короткое объявление всем окнам (например, «смену очистили в другом окне»)
 
 export type WorkerStatus = 'free' | 'busy' | 'break' | 'enroute' | 'onsite';
 

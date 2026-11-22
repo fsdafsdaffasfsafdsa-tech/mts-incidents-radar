@@ -123,6 +123,12 @@ export function login(db: Db, req: http.IncomingMessage, loginName: string, pass
   return { me: toMe(row), cookie: `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86_400}` };
 }
 
+/** Ключ окна (сессии браузера) — чтобы отличать «я» от другого браузера под тем же входом. Сам токен не раскрывает. */
+export function sessionKey(req: http.IncomingMessage): string | null {
+  const t = tokenOf(req);
+  return t ? sha(t).slice(0, 16) : null;
+}
+
 function tokenOf(req: http.IncomingMessage): string | null {
   const raw = req.headers.cookie ?? '';
   for (const part of raw.split(';')) {

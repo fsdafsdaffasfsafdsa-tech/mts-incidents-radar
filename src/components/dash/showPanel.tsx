@@ -1,9 +1,10 @@
 // Кнопки ситуаций — всегда внизу стены. Самотёка нет: ничего не появляется само, каждая кнопка создаёт настоящую
 // ситуацию на сервере (server/show.ts) — стена, срочное окно, уведомления и Джарвис реагируют как вживую.
 // «Очистить» — пустая смена. Видео пересменки — кнопкой в шапке.
-import { useState } from 'react';
-import { ArrowUp, Brush, Hand, Inbox, Layers, LifeBuoy, Mail, MailWarning, MessagesSquare, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Wrench, Zap, type LucideIcon } from 'lucide-react';
-import { showAction } from '../../store';
+import { useEffect, useState } from 'react';
+import { ArrowUp, Brush, Hand, Inbox, Layers, LifeBuoy, Mail, MailWarning, MessagesSquare, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Volume2, VolumeX, Wrench, Zap, type LucideIcon } from 'lucide-react';
+import { clearShift, showAction } from '../../store';
+import { setCritSound, useCritSound } from '../../lib/critSound';
 import { motionCalm, setMotionCalm } from './anim';
 
 type Btn = { kind: string; icon: LucideIcon; label: string; tone: string };
@@ -54,17 +55,37 @@ export function ShowPanel() {
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [calm, setCalm] = useState(motionCalm);
+  const loud = useCritSound(); // звук и голос при критических (по умолчанию выключены)
+  // «очистить», когда смена открыта в другом браузере: первое нажатие предупреждает, второе (в течение 8 с) — чистит у всех
+  const [armed, setArmed] = useState(0);
   const act = async (kind: string) => {
     setBusy(kind);
     try {
+      if (kind === 'clear') {
+        const force = Date.now() < armed;
+        const r = await clearShift(force);
+        if ('busy' in r) {
+          setArmed(Date.now() + 8000);
+          setNote({ text: r.error, bad: true });
+        } else {
+          setArmed(0);
+          setNote({ text: 'Смена очищена' });
+        }
+        return;
+      }
       const r = await showAction(kind);
-      setNote({ text: r.text ?? (kind === 'clear' ? 'Смена очищена' : 'Готово') });
+      setNote({ text: r.text ?? 'Готово' });
     } catch (err) {
       setNote({ text: err instanceof Error ? err.message : String(err), bad: true });
     } finally {
       setBusy(null);
     }
   };
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(0), Math.max(0, armed - Date.now()));
+    return () => clearTimeout(t);
+  }, [armed]);
   const motion = () => {
     setMotionCalm(!calm);
     setCalm(!calm);
@@ -87,11 +108,14 @@ export function ShowPanel() {
         ))}
       </div>
       <div className="sp-side">
-        <span className="sp-clear" role="button" tabIndex={0} onClick={() => act('clear')} title="Пустая смена: убрать все инциденты, жалобы, письма и сигналы">
-          <Brush /> очистить
+        <span className={`sp-clear ${armed ? 'armed' : ''}`} role="button" tabIndex={0} onClick={() => act('clear')} title={armed ? 'Смена открыта в другом окне: щелчок — очистить у всех' : 'Пустая смена: убрать все инциденты, жалобы, письма и сигналы'}>
+          <Brush /> {armed ? 'у всех?' : 'очистить'}
         </span>
         <span className={`sp-motion ${calm ? '' : 'on'}`} role="button" tabIndex={0} onClick={motion} title={calm ? 'Анимации спокойные. Щелчок — жёсткие' : 'Анимации жёсткие. Щелчок — спокойные'}>
           <Zap /> {calm ? 'тихо' : 'жёстко'}
+        </span>
+        <span className={`sp-motion ${loud ? 'on' : ''}`} role="button" tabIndex={0} aria-pressed={loud} onClick={() => setCritSound(!loud)} title={loud ? 'Критические — со звуком и голосом. Щелчок — только на экране' : 'Критические — только на экране, без звука и голоса. Щелчок — включить звук'}>
+          {loud ? <Volume2 /> : <VolumeX />} {loud ? 'звук' : 'без звука'}
         </span>
       </div>
       {note && (

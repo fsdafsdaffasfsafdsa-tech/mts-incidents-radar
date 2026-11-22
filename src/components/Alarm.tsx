@@ -1,4 +1,5 @@
-// Тревога для критического: экран мигает красным, звучит сирена «БУУМ-БУУМ», пока кто-то не нажмёт «Принял».
+// Тревога для критического: экран мигает красным, пока кто-то не нажмёт «Принял». Сирена и голос — только если
+// внизу стены включён «звук при критических» (по умолчанию выключен: только визуал).
 // Срабатывает на новый критический на пункте, на повышение до «Наивысшего» и на предложение ИИ поднять до него.
 import { useEffect, useRef, useState } from 'react';
 import { Siren } from 'lucide-react';
@@ -7,6 +8,7 @@ import { getState, openIncident, toast, useStore } from '../store';
 import { forecast } from '../../shared/forecast';
 import { useNow } from '../lib/hooks';
 import { siren, unlockAudio } from '../lib/sound';
+import { critSound } from '../lib/critSound';
 import { announceIncident, announceText, jarvisPrefs } from './Jarvis';
 
 export function Alarm() {
@@ -30,6 +32,7 @@ export function Alarm() {
     for (const k of keys) seen.current.add(k);
     if (!fresh || !on || inc) return;
     setInc(fresh);
+    if (!critSound()) return; // по умолчанию критический — только визуал
     unlockAudio();
     if (sound && p1Sound) stop.current = siren();
     if (!jarvisPrefs.scenario)
@@ -43,8 +46,9 @@ export function Alarm() {
       const list = [...getState().incidents.values()].filter((i) => i.status !== 'resolved');
       const pick = list.find((i) => i.priority === 'P1') ?? list.sort((a, b) => a.slaDeadline - b.slaDeadline)[0];
       if (!pick) return;
-      unlockAudio();
       setInc(pick);
+      if (!critSound()) return;
+      unlockAudio();
       stop.current?.();
       if (getState().sound) stop.current = siren();
       announceIncident(pick.id, `критический — «${pick.title}». Что будем делать?`, `test:${Date.now()}`);
@@ -53,8 +57,9 @@ export function Alarm() {
     const forId = (e: Event) => {
       const pick = getState().incidents.get((e as CustomEvent<string>).detail);
       if (!pick) return;
-      unlockAudio();
       setInc(pick);
+      if (!critSound()) return;
+      unlockAudio();
       stop.current?.();
       if (getState().sound) stop.current = siren();
     };

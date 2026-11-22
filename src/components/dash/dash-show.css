@@ -143,6 +143,13 @@
   border-color: var(--d-crit, #ff5269);
   color: var(--d-crit, #ff5269);
 }
+/* смена открыта в другом окне: второе нажатие очистит у всех */
+.sp-clear.armed {
+  border-color: var(--d-crit, #ff5269);
+  color: #fff;
+  background: var(--d-crit, #ff5269);
+  font-weight: 700;
+}
 .sp-motion.on {
   border-color: color-mix(in srgb, var(--d-crit, #ff5269) 60%, var(--d-line, #2b3650));
   color: var(--d-crit, #ff5269);
