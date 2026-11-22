@@ -30,7 +30,7 @@ import { MailBlock } from './mail';
 import { QuestionsBlock } from './questions';
 import { Stickers } from './stickers';
 import { useBump, useFlip } from './anim';
-import { Handover } from './handover';
+import { Handover, HandoverCartoon } from './handover';
 import { ShowPanel } from './showPanel';
 import './dash.css';
 import './dash-grid.css';
@@ -240,6 +240,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
       {!editing.on && <ShowPanel />}
       <UrgentShow list={urgentNow} incidents={incidents} now={now} onAck={att.ack} />
       <Handover />
+      <HandoverCartoon />
       {d.ticker && <DashTicker />}
       {focusId && <FocusCard id={focusId} now={now} onClose={() => setFocusId(null)} />}
       {settings && <DashSettings onClose={() => setSettings(false)} />}

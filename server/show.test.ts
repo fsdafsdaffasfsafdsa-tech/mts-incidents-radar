@@ -101,6 +101,16 @@ test('новый инцидент сразу с предложением ИИ �
   assert.deepEqual(found.map((f) => f.kind), ['p1ask']);
 });
 
+test('«завести инцидент?» — «да», а ИИ уже собрал жалобы сам: тот же инцидент, а не «всплеск не актуален»', () => {
+  const { p } = setup();
+  const inc = p.scenarioIncident({ service: 'МТС Банк', regionId: 'sam', n: 12, priority: 'P3' });
+  // всплеска как кластера уже нет — жалобы в инциденте
+  p.complaints.length = 0;
+  const again = p.createFromCluster('МТС Банк|sam', 'Дежурный');
+  assert.equal(again.id, inc.id);
+  assert.throws(() => p.createFromCluster('KION|tom', 'Дежурный'), /не актуален/);
+});
+
 test('новый критический — P1 на пункте с советом ИИ', () => {
   const { p, box } = setup();
   const r = runShow(p, box, 'crit', 'Ведущий');

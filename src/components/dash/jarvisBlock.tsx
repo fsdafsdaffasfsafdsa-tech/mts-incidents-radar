@@ -30,7 +30,9 @@ export function JarvisBlock({ ctx, brief }: { ctx: BlockCtx; brief: string | nul
   const state: JState = done ? 'success' : live.phase === 'speak' ? 'speaking' : live.phase === 'think' || work.busy ? 'thinking' : live.hearing || live.phase === 'listen' ? 'listening' : 'idle';
   const top = ctx.snap.action[0];
   const heard = live.heard.trim();
-  const phrase = pause.sleep
+  const phrase = live.muted
+    ? 'Браузер не даёт мне говорить до первого щелчка — щёлкните по стене.'
+    : pause.sleep
     ? 'Жду. Скажите «продолжаем работу».'
     : heard && state === 'listening'
       ? `«${heard.length > 80 ? `…${heard.slice(-78)}` : heard}»`

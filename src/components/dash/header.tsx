@@ -2,11 +2,11 @@
 // иначе высокие, иначе «на пункте», иначе «спокойно»); остальные группы — маленькими значками;
 // справа мини-счётчики и часы. Кнопок нет — на большом экране фильтры делает Джарвис голосом
 // («покажи только критические»); щелчок мышью по группе — тоже фильтр.
-import { CheckCircle2, Clapperboard, Flame, LayoutGrid, Network, Radar, RotateCcw, Siren, Timer, UserX, X, type LucideIcon } from 'lucide-react';
+import { CheckCircle2, Clapperboard, Film, Flame, LayoutGrid, Network, Radar, RotateCcw, Siren, Timer, UserX, X, type LucideIcon } from 'lucide-react';
 import { DASH_GROUPS, GROUP_NAME, type DashGroup, type DashSnapshot } from '../../../shared/dash';
 import { applyDashOp, openWork, setDash, type DashLayout } from '../../lib/dashLayout';
 import { fmtClock } from '../../lib/format';
-import { openHandover } from './handover';
+import { openHandover, openHandoverCartoon } from './handover';
 
 const GROUPS: DashGroup[] = ['crit', 'coord', 'high', 'research'];
 const GROUP_ICON: Record<DashGroup, LucideIcon> = { crit: Siren, coord: Network, high: Flame, research: Radar };
@@ -83,9 +83,15 @@ export function CounterHeader({ snap, now, d, home }: { snap: DashSnapshot; now:
           <b className="num">{c.doneHour}</b>
         </span>
       </div>
-      <span className="wh-video" role="button" tabIndex={0} onClick={openHandover} title="Видео пересменки: что было за смену, что добить и проследить (Ctrl+Shift+H)">
-        <Clapperboard />
-        <b>Пересменка</b>
+      {/* Пересменка — два варианта: живая анимация по данным смены и готовый мультик с озвучкой */}
+      <span className="wh-video">
+        <span className="whv-live" role="button" tabIndex={0} onClick={openHandover} title="Пересменка по данным смены: что было, что добить и проследить (Ctrl+Shift+H)">
+          <Clapperboard />
+          <b>Пересменка</b>
+        </span>
+        <span className="whv-film" role="button" tabIndex={0} onClick={openHandoverCartoon} title="Мультик-пересменка с озвучкой">
+          <Film />
+        </span>
       </span>
       <div className="wh-clock num">{fmtClock(now)}</div>
       {d.filter && (

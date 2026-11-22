@@ -5,7 +5,7 @@
 // Разговор помнит, о каком инциденте речь: «объясни», «кому дать?», «выдай» — без номеров.
 import { useEffect, useRef, useState } from 'react';
 import './jarvis-pause.css';
-import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
+import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, useStore, writeLocal } from '../store';
 import type { DashOp } from '../../shared/dash';
 import { PERSONAS, personaById } from '../../shared/personas';
 import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, useDash, useWorkOpen, wallWindowOpen } from '../lib/dashLayout';
@@ -96,6 +96,13 @@ let analyser: AnalyserNode | null = null;
 let onPhase: (p: Phase) => void = () => undefined;
 let onVoiceNote: (s: string) => void = () => undefined;
 let speaking = 0;
+/** Фраза, которую браузер не дал сказать до первого щелчка, — скажем её сразу после. */
+let blockedLine: string | null = null;
+function setAudioBlocked(on: boolean) {
+  if (jarvisLive.muted === on) return;
+  jarvisLive.muted = on;
+  liveSubs.forEach((f) => f());
+}
 let speakingText = ''; // что говорит прямо сейчас
 let talking = false; // говорит прямо сейчас
 
@@ -113,6 +120,11 @@ if (typeof window !== 'undefined') {
     unlockJarvisAudio();
     window.removeEventListener('pointerdown', once);
     window.removeEventListener('keydown', once);
+    // Браузер не дал говорить до первого щелчка — договариваем то, что хотели сказать, а не теряем.
+    const t = blockedLine;
+    blockedLine = null;
+    setAudioBlocked(false);
+    if (t) setTimeout(() => void say(t), 120);
   };
   window.addEventListener('pointerdown', once);
   window.addEventListener('keydown', once);
@@ -194,6 +206,14 @@ async function sayNow(t: string, id: number, opt: { voice?: string; asJarvis?: b
           const used = r.headers.get('X-Jarvis-Voice');
           const name = JARVIS_VOICES.find((x) => x.id === used)?.name.split(' (')[0];
           if (asJarvis) onVoiceNote(used && used !== jarvisPrefs.voice && name ? `Выбранный голос сейчас недоступен — говорю голосом «${name}».` : '');
+          if (id === speaking) phase('idle');
+          return;
+        }
+        // Звук запрещён до первого щелчка (правило Chrome; у установленного приложения его нет) — запоминаем фразу
+        // и скажем её сразу после любого щелчка; голос браузера тоже заблокирован, его не пробуем.
+        if ((navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) {
+          blockedLine = t;
+          setAudioBlocked(true);
           if (id === speaking) phase('idle');
           return;
         }
@@ -374,7 +394,7 @@ const workInBlock = () => onDashboard() && aiBlockOnWall();
 
 // ─── живое состояние — для персонажа на стене ──────────────────────────────
 /** Что Джарвис делает прямо сейчас: ждёт, слушает, думает, говорит. Персонаж в ИИ-блоке анимируется по нему. */
-export const jarvisLive: { phase: Phase; hearing: boolean; heard: string } = { phase: 'idle', hearing: false, heard: '' };
+export const jarvisLive: { phase: Phase; hearing: boolean; heard: string; muted?: boolean } = { phase: 'idle', hearing: false, heard: '' };
 const liveSubs = new Set<() => void>();
 export function useJarvisLive() {
   const [, set] = useState(0);
@@ -769,6 +789,26 @@ export function Jarvis() {
   const bargeAt = useRef(0); // когда человек перебил его голосом
   const currentQ = useRef(''); // о чём он думает сейчас — повтор той же просьбы не выполняем второй раз
   const pending = useRef<string | null>(null); // попросили, пока думал, — выполним сразу после ответа
+  const lastQ = useRef(0); // когда он последний раз спросил («Завести инцидент?») — ждём ответ
+  // «Очистить» на пульте — новая смена: старый разговор и объявления забываем. Иначе Джарвис вспоминает инциденты,
+  // которых уже нет («про Новосибирск: такого инцидента нет»), и путается в ответах на «да».
+  const incCount = useStore((s) => s.incidents.size);
+  const hadIncidents = useRef(false);
+  useEffect(() => {
+    if (incCount > 0) {
+      hadIncidents.current = true;
+      return;
+    }
+    if (!hadIncidents.current) return;
+    hadIncidents.current = false;
+    setLines([]);
+    focus.current = null;
+    pending.current = null;
+    lastQ.current = 0;
+    annQueue.length = 0;
+    jarvisSaid.length = 0;
+    setWork({ q: '', steps: [], reply: '', done: [], busy: false, focusId: null });
+  }, [incCount]); // eslint-disable-line react-hooks/exhaustive-deps
   const [, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [lines, setLines] = useState<Line[]>([]);
@@ -846,6 +886,7 @@ export function Jarvis() {
           uninterruptible = false;
         }
         speakEnd.current = Date.now();
+        if (/\?\s*$/.test(t.trim())) lastQ.current = Date.now();
         // Спросил «что будем делать?» — ждём ответа: слушает всегда — окно без слова «Джарвис», иначе — слушаем один раз сами.
         if (jarvisPrefs.control) follow(15_000);
         else if (canListen && !jarvisPause.mute && !jarvisPause.sleep) listenOnceRef.current();
@@ -916,6 +957,7 @@ export function Jarvis() {
     }
     busy.current = true;
     currentQ.current = question;
+    lastQ.current = 0;
     setErr('');
     setHeard('');
     setAwaiting(false);
@@ -972,6 +1014,7 @@ export function Jarvis() {
       if (data.actions?.some((a) => a.type === 'show') && window.innerWidth < 2200) setOpen(false);
       if (jarvisPrefs.speak || jarvisPrefs.scenario) await say(data.reply);
       speakEnd.current = Date.now();
+      if (/\?\s*$/.test(data.reply.trim())) lastQ.current = Date.now(); // спросил — минуту ждём ответ «да…» без имени
       // сделал что-то по инциденту из срочного — срочное на стене считаем принятым
       if (data.done?.length && focus.current) window.dispatchEvent(new CustomEvent('radar:ack', { detail: focus.current }));
       setPhase('idle');
@@ -1150,8 +1193,9 @@ export function Jarvis() {
     // 5. Только что перебил его — дослушиваем и выполняем без слова «Джарвис».
     const barged = now - bargeAt.current < 10_000;
     const live = now < followUntil.current;
+    const answering = now - lastQ.current < 60_000; // он задал вопрос — ответ «да, назначь» берём и через минуту
     if (!final) {
-      if (live || barged || WAKE.test(t) || forMeWithoutName(t)) {
+      if (live || barged || answering || WAKE.test(t) || forMeWithoutName(t)) {
         setHeard(afterWake(t));
         followUntil.current = Math.max(followUntil.current, now + 4000); // человек говорит — окно не закрываем
         setAwaiting(true);
@@ -1167,7 +1211,7 @@ export function Jarvis() {
       return follow(); // «Джарвис» — и пауза: ждём команду
     }
     // в разговоре — короткий ответ или просьба; вне разговора — просьба или вопрос о деле («что горит?»)
-    if (barged || (live ? looksForMe(said) : forMeWithoutName(said))) {
+    if (barged || (live || answering ? looksForMe(said) : forMeWithoutName(said))) {
       bargeAt.current = 0;
       return void askRef.current(said);
     }

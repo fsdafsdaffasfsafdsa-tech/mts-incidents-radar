@@ -1217,3 +1217,45 @@
   right: 0.6em;
   top: 0.6em;
 }
+
+/* ─── «Пересменка»: два варианта — живая по данным смены и мультик ─── */
+.dash .wh-video {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  cursor: default;
+}
+.dash .wh-video:active {
+  transform: none;
+}
+.whv-live,
+.whv-film {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.45em 1em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.whv-film {
+  padding: 0.45em 0.8em;
+  border-left: 1px solid color-mix(in srgb, var(--jv, #4e8cff) 40%, var(--d-line));
+}
+.whv-live:hover,
+.whv-film:hover {
+  background: color-mix(in srgb, var(--jv, #4e8cff) 22%, transparent);
+}
+.whv-live:active,
+.whv-film:active {
+  transform: scale(0.95);
+}
+.ho-film {
+  background: #000;
+}
+.ho-film video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}

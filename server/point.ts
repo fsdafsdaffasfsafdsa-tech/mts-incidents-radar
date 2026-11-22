@@ -560,8 +560,15 @@ export class Point {
 
   createFromCluster(key: string, actor: string) {
     const c = findClusters(this.complaints, Date.now()).find((x) => x.key === key);
-    if (!c) throw new Error('Всплеск уже не актуален');
-    return this.fromCluster(c, actor);
+    if (c) return this.fromCluster(c, actor);
+    // Пока Джарвис спрашивал «завести инцидент?», ИИ мог уже собрать эти жалобы сам — тогда это тот самый инцидент,
+    // а не «всплеск уже не актуален» (иначе на «да» Джарвис будто забывает, о чём спрашивал).
+    const [service, regionId] = key.split('|');
+    const made = [...this.incidents.values()]
+      .filter((i) => i.status !== 'resolved' && i.service === service && (i.regionIds ?? []).includes(regionId))
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (made) return made;
+    throw new Error('Всплеск уже не актуален');
   }
 
   private seriesFor(inc: Incident, now: number) {

@@ -16,6 +16,37 @@ import { oneLine, serviceIcon } from './wall2';
 const MIN = 60_000;
 const SHIFT = 12 * 60 * MIN;
 export const openHandover = () => window.dispatchEvent(new Event('radar:handover'));
+/** Второй вариант пересменки — готовый мультик с озвучкой (шаблонный, по пайплайну мини-сериала «Кнопка»). */
+export const openHandoverCartoon = () => window.dispatchEvent(new Event('radar:handover-cartoon'));
+
+/** Мультик-пересменка: окно 16:9, играет со звуком (щелчок по кнопке разрешает звук), Esc или щелчок мимо — закрыть. */
+export function HandoverCartoon() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const go = () => {
+      stopVoice(); // Джарвис не говорит поверх мультика
+      setOpen(true);
+    };
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('radar:handover-cartoon', go);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('radar:handover-cartoon', go);
+      window.removeEventListener('keydown', key);
+    };
+  }, []);
+  if (!open) return null;
+  return (
+    <div className="ho-wrap" role="dialog" aria-label="Пересменка — мультик" onClick={() => setOpen(false)}>
+      <div className="ho-frame ho-film" onClick={(e) => e.stopPropagation()}>
+        <video src="/handover/mts_handover.mp4" poster="/handover/cover.jpg" autoPlay controls playsInline onEnded={() => setOpen(false)} />
+        <span className="ho-x" role="button" tabIndex={0} onClick={() => setOpen(false)} title="Закрыть (Esc)">
+          <X />
+        </span>
+      </div>
+    </div>
+  );
+}
 
 type Scene = { id: string; say: string; min: number; render: (t: number) => React.ReactNode };
 const PRIO_C: Record<string, string> = { P1: '#ff5269', P2: '#ffb547', P3: '#f2d16b', P4: '#42c5f5' };

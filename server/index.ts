@@ -560,13 +560,16 @@ const MIME: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.mp4': 'video/mp4', // мультик-пересменка
   '.webp': 'image/webp', // миниатюры городов на карте
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json', // Радар устанавливается приложением
 };
 
-function serveStatic(res: http.ServerResponse, url: URL) {
+function serveStatic(res: http.ServerResponse, url: URL, range?: string) {
   const dist = path.join(root, 'dist');
   let file = path.normalize(path.join(dist, decodeURIComponent(url.pathname)));
   if (!file.startsWith(dist)) {
@@ -575,10 +578,22 @@ function serveStatic(res: http.ServerResponse, url: URL) {
   }
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(dist, 'index.html');
   const ext = path.extname(file);
-  res.writeHead(200, {
-    'Content-Type': MIME[ext] ?? 'application/octet-stream',
-    'Cache-Control': url.pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
-  });
+  const type = MIME[ext] ?? 'application/octet-stream';
+  const cache = url.pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache';
+  // Видео (мультик-пересменка) — кусками по запросу браузера: перемотка и Safari без этого не работают.
+  const m = ext === '.mp4' && range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
+  if (m) {
+    const size = fs.statSync(file).size;
+    const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2] || 0));
+    const end = m[1] && m[2] ? Math.min(size - 1, Number(m[2])) : size - 1;
+    if (start >= size || start > end) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+    res.writeHead(206, { 'Content-Type': type, 'Cache-Control': cache, 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': end - start + 1 });
+    return void fs.createReadStream(file, { start, end }).pipe(res);
+  }
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, ...(ext === '.mp4' ? { 'Accept-Ranges': 'bytes' } : {}) });
   fs.createReadStream(file).pipe(res);
 }
 
@@ -593,7 +608,7 @@ const server = http.createServer((req, res) => {
       res.end();
     });
   }
-  serveStatic(res, url);
+  serveStatic(res, url, req.headers.range);
 });
 
 if (!PROD) {
