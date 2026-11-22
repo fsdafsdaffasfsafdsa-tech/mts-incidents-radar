@@ -243,10 +243,49 @@ export function connect() {
 
 const HOUR = 3_600_000;
 
+// Курсор Джарвиса «нажимает» на строку инцидента, а настоящее действие сервер делает сразу — и строка исчезала
+// со стены раньше, чем курсор до неё доезжал. Поэтому изменение инцидента, на который едет курсор, экран
+// придерживает до его «ввода» (holdIncident → releaseIncident). Если изменение уже пришло (поток ответа и поток
+// стены идут разными соединениями), строку на время возвращаем, как была до него.
+const HOLD_LOOKBACK = 3000;
+const HOLD_MAX = 45_000; // страховка: курсор завис — всё равно показываем (шаги идут по очереди, ~3,5 с на каждый)
+const recent = new Map<string, { prev: Incident | undefined; at: number }>();
+const held = new Map<string, Incident | null>(); // id → настоящая версия (null — удалён)
+const heldTimers = new Map<string, number>();
+export function holdIncident(id: string) {
+  if (held.has(id)) return;
+  const cur = state.incidents.get(id);
+  const r = recent.get(id);
+  held.set(id, cur ?? null);
+  if (r && Date.now() - r.at < HOLD_LOOKBACK && r.prev) {
+    const incidents = new Map(state.incidents);
+    incidents.set(id, r.prev);
+    setState({ incidents });
+  } else if (!cur) {
+    held.delete(id); // такого инцидента на экране нет — нечего придерживать
+    return;
+  }
+  heldTimers.set(id, window.setTimeout(() => releaseIncident(id), HOLD_MAX));
+}
+export function releaseIncident(id: string) {
+  if (!held.has(id)) return;
+  const real = held.get(id);
+  held.delete(id);
+  clearTimeout(heldTimers.get(id));
+  heldTimers.delete(id);
+  const incidents = new Map(state.incidents);
+  if (real) incidents.set(id, real);
+  else incidents.delete(id);
+  setState({ incidents, ...(real ? {} : { selectedId: state.selectedId === id ? null : state.selectedId }) });
+}
+
 function handle(msg: PointMessage) {
   switch (msg.type) {
     case 'snapshot': {
       const d = msg.data;
+      held.clear(); // полный снимок новее всего, что придерживал курсор Джарвиса
+      heldTimers.forEach((t) => clearTimeout(t));
+      heldTimers.clear();
       setState({
         connected: true,
         everConnected: true,
@@ -271,14 +310,25 @@ function handle(msg: PointMessage) {
       break;
     }
     case 'incident': {
-      const incidents = new Map(state.incidents);
-      const prev = incidents.get(msg.data.id);
-      incidents.set(msg.data.id, msg.data);
-      setState({ incidents });
+      const id = msg.data.id;
+      const prev = held.has(id) ? (held.get(id) ?? undefined) : state.incidents.get(id);
+      const r = recent.get(id);
+      if (!r || Date.now() - r.at > HOLD_LOOKBACK) recent.set(id, { prev, at: Date.now() });
+      if (recent.size > 200) for (const [k, v] of recent) if (Date.now() - v.at > HOLD_LOOKBACK) recent.delete(k);
+      if (held.has(id)) held.set(id, msg.data); // курсор Джарвиса ещё не нажал — экран покажет это после его «ввода»
+      else {
+        const incidents = new Map(state.incidents);
+        incidents.set(id, msg.data);
+        setState({ incidents });
+      }
       onIncident(prev, msg.data);
       break;
     }
     case 'remove': {
+      if (held.has(msg.data.id)) {
+        held.set(msg.data.id, null);
+        break;
+      }
       const incidents = new Map(state.incidents);
       incidents.delete(msg.data.id);
       setState({ incidents, selectedId: state.selectedId === msg.data.id ? null : state.selectedId });

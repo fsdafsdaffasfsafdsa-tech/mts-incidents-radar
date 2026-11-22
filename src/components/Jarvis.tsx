@@ -10,6 +10,7 @@ import type { DashOp } from '../../shared/dash';
 import { PERSONAS, personaById } from '../../shared/personas';
 import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, useDash, useWorkOpen, wallWindowOpen } from '../lib/dashLayout';
 import { claimJarvis, isJarvisLeader, onJarvisLeader, useJarvisLeader } from '../lib/jarvisLeader';
+import { denoise, denoiseOff, preloadRnnoise, type Denoise } from '../lib/denoise';
 import { ghostStep } from './ghost';
 import { ACK_RE, RESUME_RE, SLEEP_RE, afterWake as afterWakeIn, bargeIn, forMeWithoutName, isEcho as isEchoOf, looksForMe, lowRu, sameRequest, wakeRe } from '../../shared/hearing';
 
@@ -456,6 +457,7 @@ export const canListen = !!RecCtor;
 // готовую дорожку микрофона — с шумоподавлением, эхоподавлением (голос Джарвиса из колонок вычитается, и он не
 // перебивает сам себя) и выравниванием громкости. Дорожка держится открытой, пока он слушает: перезапуски
 // распознавания не открывают микрофон заново. В других браузерах — как раньше, микрофон берёт распознаватель.
+// Поверх — RNNoise и Silero VAD (src/lib/denoise.ts): чистка шума нейросетью и тишина вместо звука без речи.
 const chromiumMajor = (() => {
   const b = (navigator as Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } }).userAgentData?.brands;
   const v = b?.find((x) => /Chromium|Google Chrome|Microsoft Edge/.test(x.brand))?.version ?? /Chrom(?:e|ium)\/(\d+)/.exec(navigator.userAgent)?.[1];
@@ -488,7 +490,17 @@ class Ear {
   private stream: MediaStream | null = null;
   private asking = false;
   private clean = CLEAN_MIC;
+  // RNNoise + Silero VAD поверх дорожки микрофона; распознаватель слушает её, как только браузер запустил звук
+  private dn: Denoise | null = null;
+  private recTrack: MediaStreamTrack | null = null;
   h: { result: (t: string, final: boolean) => void; state: (s: EarState, err?: string) => void } | null = null;
+
+  /** Какую дорожку слушать: очищенную, если обработка идёт, иначе — дорожку браузера. */
+  private pick(): MediaStreamTrack | null {
+    const raw = this.stream?.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
+    if (raw && this.dn?.ready() && this.dn.track.readyState === 'live') return this.dn.track;
+    return raw;
+  }
 
   /** Чистая дорожка микрофона: запросить один раз и держать, пока слушаем. */
   private async ensureTrack(): Promise<MediaStreamTrack | null> {
@@ -498,8 +510,19 @@ class Ear {
     if (this.asking) return null;
     this.asking = true;
     try {
+      if (!denoiseOff()) void preloadRnnoise(); // RNNoise грузится, пока браузер открывает микрофон
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS as MediaTrackConstraints });
-      const t = this.stream.getAudioTracks()[0];
+      const stream = this.stream;
+      const dn = await denoise(stream).catch(() => null);
+      if (this.stream !== stream || !this.want) dn?.close(); // пока собирали — отпустили микрофон
+      else {
+        this.dn = dn;
+        // обработку запустили позже (первый щелчок) — переходим на чистую дорожку
+        dn?.onReady(() => {
+          if (this.dn === dn && this.rec && this.recTrack !== dn.track) this.abort();
+        });
+      }
+      const t = stream.getAudioTracks()[0];
       // микрофон «онемел» (его забрала другая программа, сменили устройство) — берём заново
       t?.addEventListener('mute', () => {
         setTimeout(() => {
@@ -524,6 +547,8 @@ class Ear {
   }
   /** Отпустить микрофон (выключили, свернули вкладку, другое окно стало ведущим). */
   private release() {
+    this.dn?.close();
+    this.dn = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
   }
@@ -565,7 +590,7 @@ class Ear {
       if (!this.asking) void this.ensureTrack().then(() => this.kick());
       return;
     }
-    const track = this.stream?.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
+    const track = this.pick();
     const r = new RecCtor();
     r.lang = 'ru-RU';
     r.continuous = true;
@@ -606,6 +631,7 @@ class Ear {
       else this.h?.state('off');
     };
     this.rec = r;
+    this.recTrack = track;
     this.running = true;
     this.started = false;
     this.lastStart = this.lastEvent = Date.now();
@@ -615,7 +641,11 @@ class Ear {
       if (track) r.start(track);
       else r.start();
     } catch {
-      if (track) {
+      if (track && track === this.dn?.track) {
+        // очищенную дорожку браузер не принял — слушаем дорожку микрофона без нейросетей
+        this.dn.close();
+        this.dn = null;
+      } else if (track) {
         // браузер не принял дорожку — слушаем как раньше, микрофон берёт распознаватель
         this.clean = false;
         this.release();
@@ -1319,8 +1349,17 @@ export function Jarvis() {
   pressRef.current = press;
   useEffect(() => {
     const f = () => pressRef.current();
+    // просьба текстом — как будто сказали голосом (проверки и запись демо без микрофона)
+    const ask = (e: Event) => {
+      const t = (e as CustomEvent<string>).detail;
+      if (typeof t === 'string' && t.trim()) void askRef.current(t.trim());
+    };
     window.addEventListener('radar:jarvis', f);
-    return () => window.removeEventListener('radar:jarvis', f);
+    window.addEventListener('radar:jarvis-ask', ask);
+    return () => {
+      window.removeEventListener('radar:jarvis', f);
+      window.removeEventListener('radar:jarvis-ask', ask);
+    };
   }, []);
 
   // Подпись — по настоящему состоянию микрофона, а не по таймеру.

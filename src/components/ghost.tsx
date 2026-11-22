@@ -4,6 +4,7 @@
 // ghostClick / ghostType напрямую. Шаги идут по очереди, даже если сервер сделал всё за миг.
 import { useEffect, useState } from 'react';
 import { Check, CornerDownLeft, X } from 'lucide-react';
+import { holdIncident, releaseIncident } from '../store';
 import './ghost.css';
 
 type GStep = { id: string; text: string; state: 'run' | 'done' | 'fail'; tool?: string; target?: string | null };
@@ -41,6 +42,8 @@ export function ghostStep(e: GStep) {
   }
   if (e.state !== 'run' || !tool || (READ_ONLY.test(tool) && !e.target)) return;
   jobs.push({ id: e.id, text: e.text, state: e.state, tool, target: e.target ?? null });
+  // строка остаётся на месте, пока курсор до неё не доедет и не нажмёт «ввод»
+  if (e.target && !e.target.startsWith('mail:') && !READ_ONLY.test(tool)) holdIncident(e.target);
   void play();
 }
 
@@ -139,6 +142,7 @@ async function play() {
       await typeText(j.text);
       await enter();
       for (let t = 0; t < 25 && j.state === 'run'; t++) await sleep(100);
+      if (j.target) releaseIncident(j.target); // «ввод» нажат — теперь экран показывает, что сделано
       set({ pill: { text: j.text, typed: j.text.length, state: j.state === 'fail' ? 'fail' : 'ok' } });
       await sleep(750);
       set({ pill: null });

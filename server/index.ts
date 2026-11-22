@@ -568,6 +568,10 @@ const MIME: Record<string, string> = {
   '.woff': 'font/woff',
   '.json': 'application/json',
   '.webmanifest': 'application/manifest+json', // Радар устанавливается приложением
+  // шумоподавление слуха Джарвиса: RNNoise и Silero VAD (dist/vad)
+  '.wasm': 'application/wasm',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.onnx': 'application/octet-stream',
 };
 
 function serveStatic(res: http.ServerResponse, url: URL, range?: string) {
@@ -580,7 +584,8 @@ function serveStatic(res: http.ServerResponse, url: URL, range?: string) {
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(dist, 'index.html');
   const ext = path.extname(file);
   const type = MIME[ext] ?? 'application/octet-stream';
-  const cache = url.pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache';
+  // /vad/ — модель и среда ONNX (15 МБ) меняются только с версией пакета: неделю не перекачиваем
+  const cache = url.pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : url.pathname.startsWith('/vad/') ? 'public, max-age=604800' : 'no-cache';
   // Видео (мультик-пересменка) — кусками по запросу браузера: перемотка и Safari без этого не работают.
   const m = ext === '.mp4' && range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
   if (m) {
