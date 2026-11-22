@@ -29,9 +29,12 @@ export function JarvisBlock({ ctx, brief }: { ctx: BlockCtx; brief: string | nul
   const done = !work.busy && work.done.length > 0 && ctx.now - work.at < 4000;
   const state: JState = done ? 'success' : live.phase === 'speak' ? 'speaking' : live.phase === 'think' || work.busy ? 'thinking' : live.hearing || live.phase === 'listen' ? 'listening' : 'idle';
   const top = ctx.snap.action[0];
+  const heard = live.heard.trim();
   const phrase = pause.sleep
     ? 'Жду. Скажите «продолжаем работу».'
-    : work.busy
+    : heard && state === 'listening'
+      ? `«${heard.length > 80 ? `…${heard.slice(-78)}` : heard}»`
+      : work.busy
       ? 'Секунду, разбираюсь…'
       : recent && work.reply
         ? firstSentence(work.reply)
@@ -48,7 +51,13 @@ export function JarvisBlock({ ctx, brief }: { ctx: BlockCtx; brief: string | nul
         right={
           <span className="jvb-state">
             {pause.mute ? 'микрофон выключен' : pause.sleep ? 'пауза' : J_TEXT[state]}
-            <span className={`jvb-mic ${micCls}`} title={pause.mute ? 'Микрофон выключен' : pause.sleep ? 'Пауза — скажите «продолжаем работу»' : 'Микрофон включён'}>
+            <span
+              className={`jvb-mic ${micCls}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => window.dispatchEvent(new Event('radar:jarvis-mute'))}
+              title={pause.mute ? 'Микрофон выключен — щелчок, чтобы включить' : pause.sleep ? 'Пауза — скажите «продолжаем работу»' : 'Микрофон включён — щелчок, чтобы выключить'}
+            >
               <MicIcon />
             </span>
           </span>

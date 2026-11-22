@@ -16,6 +16,7 @@ import { Hotkeys } from './components/Hotkeys';
 import { Settings } from './components/Settings';
 import { Alarm, ForecastWatch } from './components/Alarm';
 import { Jarvis } from './components/Jarvis';
+import { Ghost } from './components/ghost';
 import { Scenario } from './components/Scenario';
 import { FavDialog } from './components/FavDialog';
 import { ItsmPage } from './components/ItsmPage';
@@ -72,6 +73,7 @@ export function App() {
         <DashHome />
         <Settings />
         <Jarvis />
+        <Ghost />
         <FavDialog />
       </>
     );
@@ -106,6 +108,7 @@ export function App() {
       {atPoint && loaded && <Alarm />}
       {atPoint && loaded && <ForecastWatch />}
       {atPoint && loaded && <Jarvis />}
+      {atPoint && loaded && <Ghost />}
       {atPoint && loaded && <Scenario />}
       {atPoint && loaded && <FavDialog />}
     </div>

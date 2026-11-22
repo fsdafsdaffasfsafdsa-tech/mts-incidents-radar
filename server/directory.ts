@@ -1,7 +1,7 @@
 // Справочник координирующего пункта: ~900 команд по направлениям и регионам, люди с графиками.
 // Генерация детерминированная (по зерну): после перезапуска те же команды, люди и логины.
 // Группы из выгрузки ITSM входят в справочник как есть, вместе с их сотрудниками.
-import { onDuty } from '../shared/schedule.ts';
+import { ETERNAL_SHIFT, onDuty } from '../shared/schedule.ts';
 import type { Person, Team } from '../shared/types.ts';
 import { COORDINATORS_GROUP, EMPLOYEES, GROUPS } from './catalog.ts';
 import { DISTRICTS, DISTRICT_CITY, DISTRICT_TZ, REGIONS } from './regions.ts';
@@ -264,7 +264,7 @@ for (const p of PEOPLE) for (const t of [p.teamId, ...(p.teams ?? [])]) MEMBERS.
 for (const t of TEAMS) t.size = MEMBERS.get(t.id)?.length ?? t.size;
 export const membersOf = (teamId: string) => MEMBERS.get(teamId) ?? [];
 
-export const isOn = (p: Person, at: number) => !p.away && onDuty(p.schedule, p.crew, p.tz, at);
+export const isOn = (p: Person, at: number) => ETERNAL_SHIFT || (!p.away && onDuty(p.schedule, p.crew, p.tz, at)); // вечная смена — на связи все и всегда
 /** Кто из команды сейчас на смене (руководитель — в рабочие часы). */
 export const onShift = (teamId: string, at: number) => membersOf(teamId).filter((p) => isOn(p, at));
 export const teamOnDuty = (teamId: string, at: number) => onShift(teamId, at).some((p) => p.role === 'engineer' || teamId === POINT_ID);

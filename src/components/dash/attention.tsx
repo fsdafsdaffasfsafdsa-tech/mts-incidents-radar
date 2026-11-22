@@ -88,7 +88,8 @@ export function useAttention(incidents: Map<string, Incident>, d: DashLayout, st
     (all: Found[], test = false) => {
       const now = Date.now();
       // Своё второй раз не объясняем: инцидент дежурный только что завёл или изменил сам (в том числе Джарвис по его ответу).
-      const list = test ? all : all.filter((f) => !byMe(f.inc, now));
+      // Ответ команды и вопрос команды — не «своё», даже если дежурный только что сам написал по этому инциденту.
+      const list = test ? all : all.filter((f) => f.kind === 'answer' || f.kind === 'teamAsk' || !byMe(f.inc, now));
       const fresh: Alert[] = [];
       const quiet: InfoItem[] = [];
       for (const f of list) {
@@ -342,7 +343,7 @@ export function UrgentOverlay({ list, incidents, now, onAck, onOpen }: { list: A
   );
 }
 
-const STRIP_ICON: Partial<Record<AlertKind, React.ReactNode>> = { resolvedCrit: <CheckCircle2 size={20} />, remind: <Star size={20} />, fav: <Star size={20} />, forgot: <Eye size={20} />, recur: <RotateCcw size={20} />, teamAsk: <MessageSquareShare size={20} /> };
+const STRIP_ICON: Partial<Record<AlertKind, React.ReactNode>> = { resolvedCrit: <CheckCircle2 size={20} />, remind: <Star size={20} />, fav: <Star size={20} />, forgot: <Eye size={20} />, recur: <RotateCcw size={20} />, teamAsk: <MessageSquareShare size={20} />, auto: <Send size={20} /> };
 
 /** Полоса «Внимание» (и принятые срочные, пока ситуация не ушла). Пусто — тихая строка «Инфо». */
 export function AttentionStrip({ list, info, incidents, now, onClose, onOpen }: { list: Alert[]; info: InfoItem[]; incidents: Map<string, Incident>; now: number; onClose: (key: string) => void; onOpen: (i: Incident) => void }) {

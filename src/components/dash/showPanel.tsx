@@ -2,7 +2,7 @@
 // ситуацию на сервере (server/show.ts) — стена, срочное окно, уведомления и Джарвис реагируют как вживую.
 // «Очистить» — пустая смена. Видео пересменки — кнопкой в шапке.
 import { useState } from 'react';
-import { ArrowUp, Brush, Hand, Inbox, LifeBuoy, Mail, MailWarning, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Zap, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Brush, Hand, Inbox, Layers, LifeBuoy, Mail, MailWarning, MessagesSquare, Repeat, RotateCcw, Siren, Timer, TrendingUp, UserX, Users, Zap, type LucideIcon } from 'lucide-react';
 import { showAction } from '../../store';
 import { motionCalm, setMotionCalm } from './anim';
 
@@ -17,6 +17,7 @@ const GROUPS: { name: string; icon: LucideIcon; btns: Btn[] }[] = [
       { kind: 'recur', icon: RotateCcw, label: 'Снова жалобы', tone: 'crit' },
       { kind: 'p1ask', icon: TrendingUp, label: 'ИИ: «Наивысший»', tone: 'crit' },
       { kind: 'coord', icon: Inbox, label: 'Распределить', tone: 'jv' },
+      { kind: 'lows', icon: Layers, label: 'Мелкие', tone: 'mid' },
     ],
   },
   {
@@ -35,6 +36,7 @@ const GROUPS: { name: string; icon: LucideIcon; btns: Btn[] }[] = [
       { kind: 'teamNotOurs', icon: Hand, label: 'Не наше', tone: 'mid' },
       { kind: 'teamHelp', icon: LifeBuoy, label: 'Нужна помощь', tone: 'mid' },
       { kind: 'pingpong', icon: Repeat, label: 'По кругу', tone: 'mid' },
+      { kind: 'leadQ', icon: MessagesSquare, label: 'Спросить руковод.', tone: 'jv' },
     ],
   },
   {

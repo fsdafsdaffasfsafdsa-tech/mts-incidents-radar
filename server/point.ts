@@ -351,6 +351,7 @@ export class Point {
       this.timers(now);
     }
     if (!this.show) this.autopilot(now);
+    if (this.ticks % 3 === 0) this.autoRoute(now); // ИИ сам распределяет низкие и средние, пока горят критические
     this.sla(now);
     for (const id of this.dirty) {
       const inc = this.incidents.get(id);
@@ -1297,6 +1298,48 @@ export class Point {
 
   // ─── показ по кнопкам (server/show.ts) ─────────────────────────────────────
   /** Инцидент из всплеска жалоб прямо сейчас: жалобы ставятся на карту, ИИ собирает инцидент, советует команду. */
+  /**
+   * ИИ распределяет сам, чтобы дежурный не отвлекался от главного. Только когда есть критический или сложный
+   * (жалобы снова после решения, передают по кругу):
+   *   низкий — сразу в команду из совета ИИ;
+   *   средний — когда до срока осталось столько, сколько команде обычно нужно на работу (+15 минут запаса).
+   * Взятые дежурным не трогаем. На инциденте — пометка autoRouted и запись в истории: почему ИИ решил сам.
+   */
+  autoRoute(now = Date.now()) {
+    const open = [...this.incidents.values()].filter((i) => i.status !== 'resolved');
+    const busy = open.some((i) => i.priority === 'P1' || (i.recur?.count ?? 0) >= RECUR_MIN || (i.reassignCount ?? 0) >= 2);
+    if (!busy) return [];
+    const done: Incident[] = [];
+    for (const inc of open) {
+      if (inc.status !== 'coordinators' || inc.coordinatorId || (inc.priority !== 'P4' && inc.priority !== 'P3')) continue;
+      if (now - inc.createdAt < 8_000) continue; // сначала дежурный его видит, потом ИИ решает
+      const top = routeTeams(inc, this.ctx(now)).find((p) => p.teamId !== POINT_ID);
+      const team = top ? teamById(top.teamId) : undefined;
+      if (!top || !team) continue;
+      const left = inc.slaDeadline - now;
+      const need = this.teamWorkMin(top.teamId, inc.priority) * MIN;
+      let why: string;
+      if (inc.priority === 'P4') why = 'низкий — дежурный занят критическими, ИИ передал сам';
+      else if (left <= need + 15 * MIN) why = `средний — до срока ${Math.max(0, Math.round(left / MIN))} мин, а команде нужно около ${Math.round(need / MIN)}: ждать дальше нельзя, ИИ передал сам`;
+      else continue;
+      this.route(inc.id, top.teamId, 'ИИ (сам)');
+      inc.autoRouted = { at: now, why, teamName: team.name };
+      inc.history.push({ at: now, kind: 'ai', text: `ИИ: ${why} — в «${team.name}»` });
+      this.touch(inc, now);
+      done.push(inc);
+    }
+    return done;
+  }
+  /** Сколько команде обычно нужно на работу: по её решённым инцидентам (медиана), иначе — по уровню. */
+  teamWorkMin(teamId: string, priority: Priority) {
+    const took = [...this.incidents.values()]
+      .filter((i) => i.teamId === teamId && i.status === 'resolved' && i.resolvedAt && i.routedAt)
+      .map((i) => (i.resolvedAt! - i.routedAt!) / MIN)
+      .filter((m) => m > 1)
+      .sort((a, b) => a - b);
+    if (took.length >= 3) return Math.round(took[Math.floor(took.length / 2)]);
+    return priority === 'P3' ? 60 : priority === 'P4' ? 120 : 45;
+  }
   scenarioIncident(o: { service: string; regionId: string; n: number; priority?: Priority; slaMin?: number; reason?: string }) {
     const now = Date.now();
     for (let k = 0; k < o.n; k++) this.addComplaint(makeComplaint(now - k * 3000, o.service, o.regionId));
@@ -1304,6 +1347,7 @@ export class Point {
     if (o.priority && inc.priority !== o.priority) {
       (inc.levelLog ??= []).push({ at: now, from: inc.priority, to: o.priority, reason: o.reason ?? 'ИИ: по числу жалоб и критичности сервиса', auto: true });
       inc.priority = o.priority;
+      inc.priorityText = PRIORITY_TEXT[o.priority];
       inc.slaDeadline = now + PRIORITY_SLA_MIN[o.priority] * MIN;
     }
     if (o.slaMin !== undefined) inc.slaDeadline = now + o.slaMin * MIN;

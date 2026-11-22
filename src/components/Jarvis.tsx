@@ -9,12 +9,13 @@ import './jarvis-pause.css';
 import { getState, openIncident, openTeamInDirectory, readLocal, setReplay, setSettings, setSkin, setTab, writeLocal } from '../store';
 import type { DashOp } from '../../shared/dash';
 import { PERSONAS, inGender, personaById } from '../../shared/personas';
-import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, wallWindowOpen } from '../lib/dashLayout';
+import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, useDash, useWorkOpen, wallWindowOpen } from '../lib/dashLayout';
 import { claimJarvis, isJarvisLeader, onJarvisLeader, useJarvisLeader } from '../lib/jarvisLeader';
+import { ghostStep } from './ghost';
 
 type Phase = 'idle' | 'listen' | 'think' | 'speak';
 type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean; done?: string[]; event?: boolean };
-export type Step = { id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string };
+export type Step = { id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string; tool?: string; target?: string | null };
 type Action =
   | { type: 'open'; id: string }
   | { type: 'tab'; tab: string }
@@ -371,7 +372,7 @@ const workInBlock = () => onDashboard() && aiBlockOnWall();
 
 // ─── живое состояние — для персонажа на стене ──────────────────────────────
 /** Что Джарвис делает прямо сейчас: ждёт, слушает, думает, говорит. Персонаж в ИИ-блоке анимируется по нему. */
-export const jarvisLive: { phase: Phase; hearing: boolean } = { phase: 'idle', hearing: false };
+export const jarvisLive: { phase: Phase; hearing: boolean; heard: string } = { phase: 'idle', hearing: false, heard: '' };
 const liveSubs = new Set<() => void>();
 export function useJarvisLive() {
   const [, set] = useState(0);
@@ -414,14 +415,17 @@ const ACK_RE = /^(принял|принято|понял|вижу|ясно|ок|
 // Без слова «Джарвис» (в окне после его вопроса или ответа) берём только то, что похоже на ответ ему: коротко или с
 // просьбой. Разговор людей между собой («лучше, чем было, но всё равно») — мимо, без ответа.
 const ANSWER_RE =
-  /(^|[\s,.!?])(да|нет|ага|угу|давай|давайте|конечно|согласен|подтверждаю|не надо|не нужно|отмена|отмени|заведи|заводи|завести|создай|передай|передавай|отдай|выдай|назначь|возьми|беру|взял|подними|понизь|отклони|напиши|скажи|сообщи|открой|покажи|убери|закрой|верни|переназначь|закрепи|напомни|прочитай|объясни|расскажи|сколько|кому)([\s,.!?]|$)/;
+  /(^|[\s,.!?])(да|нет|ага|угу|давай|давайте|конечно|согласен|подтверждаю|не надо|не нужно|отмена|отмени|заведи|заводи|завести|создай|передай|передавай|отдай|выдай|назначь|возьми|беру|взял|подними|понизь|отклони|напиши|скажи|сообщи|открой|покажи|убери|закрой|верни|переназначь|закрепи|напомни|прочитай|объясни|расскажи|разберись|займись|проверь|посмотри|найди|сделай|отправь|подскажи|помоги|сколько|кому)([\s,.!?]|$)/;
 const looksForMe = (t: string) => {
   const low = lowRu(t);
   return low.split(/\s+/).filter(Boolean).length <= 3 || ANSWER_RE.test(low);
 };
-// Фраза начинается с команды — это Джарвису и без его имени («покажи, что горит», «заведи инцидент по письму»).
+// Фраза начинается с команды — это Джарвису и без его имени («покажи, что горит», «привет, разберись с МТС Банком»).
 const CMD_START_RE =
-  /^(покажи|открой|заведи|создай|передай|назначь|подними|понизь|отклони|напиши|сообщи|закрой|верни|переназначь|закрепи|напомни|прочитай|объясни|расскажи|что горит|что важнее|что я упускаю|что с |сколько|кому )/;
+  /^(покажи|открой|заведи|создай|передай|назначь|подними|понизь|отклони|напиши|сообщи|закрой|верни|переназначь|закрепи|напомни|прочитай|объясни|расскажи|разберись|займись|проверь|посмотри|найди|сделай|отправь|подскажи|помоги|что горит|что важнее|что я упускаю|что с |сколько|кому )/;
+/** Приветствия и связки в начале («привет», «слушай», «так») не мешают узнать команду. */
+const coreOf = (low: string) => low.replace(/^((привет|здравствуй|слушай|так|ну|а|окей|ок|эй|смотри|давай)[,.!\s]+)+/, '');
+const isCommand = (t: string) => CMD_START_RE.test(coreOf(lowRu(t)));
 /** Модель решила, что реплика не ей, — молчим. */
 const NOT_FOR_ME = /^[\s—–-]*$/;
 
@@ -723,6 +727,7 @@ export function Jarvis() {
   const prefs = usePrefs();
   const pause = usePause();
   const speakEnd = useRef(0); // когда закончил говорить — хвост собственного голоса не принимаем за команду
+  const bargeAt = useRef(0); // когда человек перебил его голосом
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [lines, setLines] = useState<Line[]>([]);
@@ -736,6 +741,8 @@ export function Jarvis() {
   const [awaiting, setAwaiting] = useState(false); // ждёт продолжения без слова «Джарвис»
   const [micDenied, setMicDenied] = useState(false);
   const leader = useJarvisLeader(); // это окно — ведущее (говорит и слушает)
+  const workOpen = useWorkOpen() && !new URLSearchParams(location.search).has('wall'); // рабочее место (не стена)
+  useDash(); // перерисовка, когда блоки стены меняются (есть ли на ней блок Джарвиса)
   const [earState, setEarState] = useState<EarState>('off'); // что на самом деле с микрофоном
   const busy = useRef(false); // уже отвечает — новые фразы не берём
   const rec = useRef<Rec | null>(null);
@@ -889,10 +896,12 @@ export function Jarvis() {
       if (live && r.ok && r.body && (r.headers.get('Content-Type') ?? '').includes('event-stream')) {
         // Поток: шаги показываем сразу, действия выполняем сразу — экран меняется, пока он ещё думает.
         data = await readStream(r.body, (e) => {
-          if (e.type === 'step')
+          if (e.type === 'step') {
             // «Думаю» — пока идёт работа; «ответ готов» — в конце списка, после всех шагов.
             setSteps((list) => (e.id === 'think' && e.state !== 'run' ? [...list.filter((x) => x.id !== 'think'), e] : list.some((x) => x.id === e.id) ? list.map((x) => (x.id === e.id ? { ...x, ...e } : x)) : [...list, e]));
-          else if (e.type === 'actions') runActions(e.actions);
+            // «работа видна» — курсор Джарвиса на экране: едет к строке, нажимает, печатает действие
+            if (e.id !== 'think' && jarvisPrefs.work) ghostStep(e);
+          } else if (e.type === 'actions') runActions(e.actions);
         });
         setSteps((list) => list.map((x) => (x.state === 'run' ? { ...x, state: 'done' } : x)));
         setStepsAt(Date.now());
@@ -1023,13 +1032,16 @@ export function Jarvis() {
     const mute = () => toggleMuteRef.current();
     const pauseT = () => (jarvisPause.sleep ? resumeRef.current() : (setPause({ sleep: true }), stopVoice()));
     const stop = () => stopTalkingRef.current();
+    const panel = () => setOpen(true); // сценарий: окно разговора — чтобы курсор напечатал в нём реплику
     window.addEventListener('radar:jarvis-mute', mute);
     window.addEventListener('radar:jarvis-pause', pauseT);
     window.addEventListener('radar:jarvis-stop', stop);
+    window.addEventListener('radar:jarvis-panel', panel);
     return () => {
       window.removeEventListener('radar:jarvis-mute', mute);
       window.removeEventListener('radar:jarvis-pause', pauseT);
       window.removeEventListener('radar:jarvis-stop', stop);
+      window.removeEventListener('radar:jarvis-panel', panel);
     };
   }, []);
   // Esc — замолчать.
@@ -1046,16 +1058,29 @@ export function Jarvis() {
   // Фраза со словом «Джарвис» — команда; после ответа несколько секунд можно продолжать без него.
   function onHeard(t: string, final: boolean) {
     const low = lowRu(t);
-    // Говорит — слышит только «стоп», «хватит»: можно перебить голосом.
-    if (phase === 'speak') {
+    // Говорит, а человек заговорил — замолкает и слушает. Своё эхо из колонок отличаем: перебили, если прозвучали
+    // хотя бы два новых слова, которых нет в его фразе, или «стоп», «хватит».
+    if (phase === 'speak' || bargeAt.current > Date.now() - 1500) {
+      const spoken = lowRu(speakingText);
+      const fresh = low.split(/[^а-яa-z0-9]+/).filter((w) => w.length > 2 && !spoken.includes(w));
       const m = STOP_RE.exec(low);
-      if (m && low.split(/\s+/).length <= 3 && !lowRu(speakingText).includes(m[2])) {
+      const stopWord = !!m && low.split(/\s+/).length <= 3 && !spoken.includes(m[2]);
+      if (!stopWord && fresh.length < 2 && phase === 'speak') return;
+      if (phase === 'speak') {
         stopVoice();
-        speakEnd.current = Date.now();
         setPhase('idle');
+        bargeAt.current = Date.now();
+        speakEnd.current = 0; // это не хвост его голоса — фразу человека не отбрасываем
+      }
+      if (stopWord) {
         setHeard('');
         follow();
+        return;
       }
+      // перебили — значит, говорят ему: дослушиваем и выполняем без слова «Джарвис»
+      if (final) return void askRef.current(afterWake(t) || t.trim());
+      setHeard(afterWake(t));
+      follow(8000);
       return;
     }
     // Пауза — ждём только «продолжаем работу».
@@ -1082,11 +1107,12 @@ export function Jarvis() {
     }
     const said = t.trim();
     if (live && said.length >= 2) {
-      if (WAKE.test(said) || looksForMe(said)) return void askRef.current(said);
+      // перебил Джарвиса — точно говорят ему
+      if (WAKE.test(said) || looksForMe(said) || isCommand(said) || now - bargeAt.current < 10_000) return void askRef.current(said);
       setHeard(''); // говорят не ему — не отвечаем и окно не продлеваем
       return;
     }
-    if (CMD_START_RE.test(lowRu(said))) {
+    if (isCommand(said)) {
       openPanel();
       return void askRef.current(said);
     }
@@ -1188,8 +1214,9 @@ export function Jarvis() {
   useEffect(() => {
     jarvisLive.phase = phase;
     jarvisLive.hearing = hearing || awaiting;
+    jarvisLive.heard = heard; // блок на стене показывает, что он сейчас слышит
     liveSubs.forEach((f) => f());
-  }, [phase, hearing, awaiting]);
+  }, [phase, hearing, awaiting, heard]);
   const label = !leader
     ? 'Джарвис в другом окне — нажмите, чтобы он был здесь'
     : pause.mute
@@ -1218,6 +1245,9 @@ export function Jarvis() {
   const persona = personaById(prefs.persona);
   // На дашборде с ИИ-блоком «за работой» показывается в блоке, а не всплывающим окном у шара.
   const workVisible = prefs.work && steps.length > 0 && (phase === 'think' || Date.now() - stepsAt < 7000) && !workInBlock();
+  // На стене с блоком Джарвиса шара с фото и всплывающего окна нет: что он говорит, слышит и делает — в блоке.
+  // Сам Джарвис работает как прежде (слушает, говорит, делает); шар и окно — только на рабочем месте.
+  if (!workOpen && aiBlockOnWall()) return null;
 
   return (
     <div className={`jv jv-${phase} ${pause.sleep ? 'jv-sleep' : ''} ${pause.mute ? 'jv-mute' : ''} ${awaiting && (hearing || !control) && !pause.sleep ? 'jv-await' : ''} ${open ? 'jv-open' : ''} ${control ? 'jv-control' : ''} ${control && phase === 'idle' && !hearing ? 'jv-deaf' : ''}`}>

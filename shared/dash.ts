@@ -216,7 +216,7 @@ export function dashSnapshot(all: Iterable<Incident>, now: number, opts: { filte
 }
 
 // ─── блоки и раскладки (общие для стены и Джарвиса) ────────────────────────
-export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom' | 'forgot' | 'favs' | 'now' | 'deadlines' | 'mail' | 'teamload';
+export type BlockId = 'action' | 'work' | 'groups' | 'assistant' | 'transfers' | 'stats' | 'events' | 'map' | 'rotate' | 'clock' | 'counters' | 'group' | 'character' | 'risk' | 'route' | 'teams' | 'note' | 'custom' | 'forgot' | 'favs' | 'now' | 'deadlines' | 'mail' | 'teamload' | 'questions';
 export type BlockCat = 'incidents' | 'summary' | 'ai' | 'own';
 export const BLOCK_CATS: { id: BlockCat; name: string }[] = [
   { id: 'incidents', name: 'Инциденты' },
@@ -228,6 +228,7 @@ export const BLOCKS: { id: BlockId; name: string; hint: string; cat: BlockCat; i
   { id: 'now', name: 'Взять сейчас', hint: 'самое срочное крупно и одна кнопка: передать, взять, вернуть', cat: 'incidents', icon: 'target' },
   { id: 'deadlines', name: 'Сроки', hint: 'шкала до +4 часов: инциденты точками, что горит следующим', cat: 'incidents', icon: 'timer' },
   { id: 'mail', name: 'Почта', hint: 'письма разбирает ИИ: пять категорий и самое важное письмо', cat: 'summary', icon: 'mail' },
+  { id: 'questions', name: 'Вопросы', hint: 'вопросы команд пункту и вопросы пункта командам и руководителям: ждём ответа или ответили', cat: 'incidents', icon: 'chat' },
   { id: 'teamload', name: 'Команды', hint: 'загрузка команд: сколько у каждой в работе', cat: 'summary', icon: 'users' },
   { id: 'action', name: 'Кому распределить', hint: 'распределить, закреплённые критические и высокие, остальное листается', cat: 'incidents', icon: 'bell' },
   { id: 'forgot', name: 'Не забыть', hint: 'важные некритические, на которые давно никто не смотрел — подсовывает по очереди', cat: 'incidents', icon: 'eye' },
@@ -270,7 +271,8 @@ export const PRESETS: { id: PresetId; name: string; hint: string; columns: DashC
     grid: [
       { block: 'now', x: 0, y: 0, w: 4, h: 8 },
       { block: 'action', x: 4, y: 0, w: 5, h: 8 },
-      { block: 'mail', x: 9, y: 0, w: 3, h: 8 },
+      { block: 'mail', x: 9, y: 0, w: 3, h: 5 },
+      { block: 'questions', x: 9, y: 5, w: 3, h: 3 },
       { block: 'deadlines', x: 0, y: 8, w: 4, h: 4 },
       { block: 'teamload', x: 4, y: 8, w: 5, h: 4 },
       { block: 'assistant', x: 9, y: 8, w: 3, h: 4 },

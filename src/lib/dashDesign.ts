@@ -1,6 +1,7 @@
 // Дизайн стены по описанию: спросить ChatGPT (через сервер) и применить придуманный стиль.
 import type { DashStyle } from '../../shared/dashStyles';
-import { applyDashOp, dashEvent } from './dashLayout';
+import { MAX_STICKERS, applyDashOp, dashEvent, getDash, setDash, type Sticker } from './dashLayout';
+import { newId } from '../../shared/dashGrid';
 
 export type DesignReply = { kind: 'question'; question: string; options: string[] } | { kind: 'style'; style: DashStyle; note: string; preset: string | null; density: 'normal' | 'large' | null; model: string };
 export type DesignTurn = { role: 'user' | 'assistant'; content: string };
@@ -56,15 +57,23 @@ export async function makeCustomBlock(prompt: string, opts: { character?: boolea
   if (!r.ok) throw new Error(data.error ?? 'не получилось');
   const spec = data.spec;
   if (spec.kind === 'character' && opts.draw !== false && spec.character) {
-    opts.onStep?.('GPT рисует портрет — около 40 секунд…');
+    opts.onStep?.('GPT рисует персонажа — около 40 секунд…');
     try {
       const a = await fetch('/api/dash/avatar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: `${spec.character.name}: ${prompt}` }) });
       const img = (await a.json()) as { image?: string };
       if (a.ok && img.image) {
-        opts.onStep?.('Вырезаю фон — персонаж встанет прямо на стену…');
+        opts.onStep?.('Делаю фон прозрачным…');
         const fig = await cutOut(img.image).catch(() => null);
-        if (fig) spec.character = { ...spec.character, avatar: fig, cut: true };
-        else spec.character.avatar = await shrinkImage(img.image);
+        // Персонаж — не блок в сетке, а фигура на прозрачном фоне поверх стены: дежурный сам двигает, крутит,
+        // меняет размер и ставит, куда хочет (dash/stickers.tsx).
+        if (fig) {
+          const d = getDash();
+          const s: Sticker = { id: newId(), src: fig, name: spec.character.name, x: 0.82, y: 0.6, w: 0.14, rot: 0 };
+          setDash({ stickers: [...d.stickers, s].slice(-MAX_STICKERS) });
+          dashEvent({ type: 'sticker', id: s.id });
+          return spec.character.name;
+        }
+        spec.character.avatar = await shrinkImage(img.image);
       }
     } catch {
       /* без портрета — с эмодзи */

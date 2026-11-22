@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { Point } from './point.ts';
 import { Mailbox } from './mail.ts';
 import { clearAll, runShow, setShow, SHOW_KINDS } from './show.ts';
-import { PEOPLE, isOn } from './directory.ts';
-import { detect, voiceLine, type Sig } from '../shared/attention.ts';
+import { PEOPLE, isOn, personById, teamById } from './directory.ts';
+import { detect, questionsOf, sigOf, voiceLine, type Sig } from '../shared/attention.ts';
 
 function setup() {
   const p = new Point();
@@ -58,6 +58,40 @@ test('вопросы команд: «не наше» и «нужна помощ�
   p.route(ask.id, other!, 'Дежурный');
   assert.equal(ask.teamAsk, null);
   assert.ok([...p.requests.values()].every((r) => r.incidentId !== ask.id || r.status === 'approved'));
+});
+
+test('ИИ распределяет сам: низкие — когда горит критический, средний — когда до срока столько, сколько нужно команде', () => {
+  const { p, box } = setup();
+  runShow(p, box, 'lows', 'Коллега');
+  const t0 = Date.now() + 10_000;
+  assert.equal(p.autoRoute(t0).length, 0, 'без критического ИИ не вмешивается');
+  runShow(p, box, 'crit', 'Коллега');
+  const first = p.autoRoute(t0);
+  assert.equal(first.filter((i) => i.priority === 'P4').length, 2, 'низкие — сразу');
+  assert.equal(first.filter((i) => i.priority === 'P3').length, 0, 'средний — ещё рано: до срока больше, чем нужно команде');
+  assert.ok(first.every((i) => i.status === 'assigned' && i.autoRouted?.why));
+  const later = p.autoRoute(Date.now() + 3 * 60_000);
+  assert.equal(later.length, 1);
+  assert.equal(later[0].priority, 'P3');
+  assert.match(later[0].autoRouted!.why, /средний/);
+  // стена: «ИИ передал сам» — и Джарвис скажет почему
+  assert.match(voiceLine('auto', later[0], Date.now()), /передал/);
+});
+
+test('вопрос руководителю: в блоке «Вопросы» ждёт ответа, ответ команды — «ответили» и событие для Джарвиса', () => {
+  const { p, box } = setup();
+  const inc = p.incidents.get(runShow(p, box, 'leadQ', 'Коллега').id!)!;
+  const before = new Map([[inc.id, sigOf(inc, Date.now())]]);
+  let q = questionsOf(p.incidents.values(), Date.now()).find((x) => x.inc.id === inc.id)!;
+  assert.equal(q.dir, 'out');
+  assert.equal(q.answer, null);
+  assert.match(q.who, /руководитель/);
+  const lead = personById(teamById(inc.teamId)?.leadId);
+  p.comment(inc.id, { name: lead?.name ?? 'Руководитель', personId: lead?.id ?? null, side: 'team', teamId: inc.teamId }, 'Восстановим за 20 минут');
+  q = questionsOf(p.incidents.values(), Date.now()).find((x) => x.inc.id === inc.id)!;
+  assert.equal(q.answer, 'Восстановим за 20 минут');
+  const { found } = detect(before, [inc], Date.now(), new Set());
+  assert.ok(found.some((f) => f.kind === 'answer'));
 });
 
 test('новый критический — P1 на пункте с советом ИИ', () => {

@@ -816,3 +816,207 @@
     display: none;
   }
 }
+
+/* ─── блок «Вопросы»: команды ↔ пункт, ждём ответа или ответили ─── */
+.db-q {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.q-list {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 0.35em;
+  overflow: hidden;
+}
+.q-row {
+  --qc: var(--d-warn, #f2d16b);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.35em 0.55em;
+  border-radius: calc(var(--d-radius, 12px) * 0.6);
+  background: color-mix(in srgb, var(--qc) 13%, var(--d-panel2, #182133));
+  border-left: 0.3em solid var(--qc);
+  cursor: pointer;
+  --flash: var(--qc);
+}
+.q-row.q-late {
+  --qc: var(--d-crit, #ff5269);
+}
+.q-row.q-ok {
+  --qc: var(--d-ok, #3ecf8e);
+}
+.q-dir {
+  display: grid;
+  place-items: center;
+  width: 1.6em;
+  height: 1.6em;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--qc) 22%, transparent);
+  color: var(--qc);
+}
+.q-dir svg {
+  width: 1.05em;
+  height: 1.05em;
+}
+.q-main {
+  display: grid;
+  min-width: 0;
+}
+.q-main b,
+.q-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.q-main b {
+  font-size: var(--f-body);
+}
+.q-svc {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.12em;
+  color: var(--d-muted);
+}
+.q-main small {
+  color: var(--d-muted);
+  font-size: var(--f-cap);
+}
+.q-ok .q-main small {
+  color: var(--qc);
+}
+.q-st {
+  color: var(--qc);
+  font-weight: 800;
+  font-size: var(--f-body);
+  white-space: nowrap;
+}
+.q-st svg {
+  width: 1.2em;
+  height: 1.2em;
+}
+.q-late .q-st {
+  animation: q-late 1.6s ease-in-out infinite;
+}
+@keyframes q-late {
+  50% {
+    opacity: 0.45;
+  }
+}
+.q-more {
+  color: var(--d-muted);
+  font-size: var(--f-cap);
+  text-align: center;
+}
+.q-calm {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--d-ok, #3ecf8e);
+  opacity: 0.7;
+}
+.q-calm svg {
+  width: 2.2em;
+  height: 2.2em;
+}
+@container style(--motion: calm) {
+  .q-late .q-st {
+    animation: none;
+  }
+}
+
+/* ─── персонажи поверх стены: прозрачный фон, свободно двигать, крутить, менять размер ─── */
+.stk-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+.stk {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  animation: stk-in 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+@keyframes stk-in {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+.stk:active {
+  cursor: grabbing;
+}
+.stk img {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 0.6em 1.2em rgb(0 0 0 / 0.35));
+  pointer-events: none;
+}
+.stk.sel {
+  outline: 2px dashed var(--jv, #4e8cff);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.stk-rot,
+.stk-size {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--jv, #4e8cff);
+  color: #fff;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+}
+.stk-rot {
+  left: 50%;
+  top: -40px;
+  translate: -50% 0;
+  cursor: alias;
+}
+.stk-rot svg {
+  width: 15px;
+  height: 15px;
+}
+.stk-size {
+  right: -14px;
+  bottom: -14px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  cursor: nwse-resize;
+}
+.stk-tools {
+  position: absolute;
+  right: -6px;
+  top: -40px;
+  display: flex;
+  gap: 4px;
+}
+.stk-tools button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--d-line, #2b3650);
+  border-radius: 8px;
+  background: var(--d-panel, #141c2c);
+  color: var(--d-text, #eef2f8);
+  cursor: pointer;
+}
+.stk-tools button svg {
+  width: 15px;
+  height: 15px;
+}
+.stk-tools button:hover {
+  border-color: var(--jv, #4e8cff);
+}

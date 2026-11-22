@@ -3,10 +3,20 @@
 // дежурного играет другой ИИ (своя модель и свой голос) и говорит с Джарвисом: что случилось, объясни, кому дать, выдай →
 // команда берёт и решает → ИИ пишет разбор. Всё по-настоящему: те же данные и действия, что у живого дежурного.
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Clapperboard, Square, UserRound } from 'lucide-react';
+import { Bot, Square, UserRound } from 'lucide-react';
 import type { Incident, Review } from '../../shared/types';
-import { getState, select, setReplay, setTab } from '../store';
+import { getState, select, setReplay, setTab as setTabNow } from '../store';
 import { jarvisAsk, jarvisPrefs, jarvisSpeak, say, setScenarioMode, stopVoice, unlockJarvisAudio } from './Jarvis';
+import { ghostClick, ghostType } from './ghost';
+
+// Показ, а не блоки: вкладки переключает курсор Джарвиса, реплики дежурного печатаются в окне разговора.
+const setTab = (tab: string) => void ghostClick(`.stab[data-tab="${tab}"]`).finally(() => setTabNow(tab));
+/** Реплика ИИ-дежурного: курсор печатает её в поле Джарвиса, пока она звучит. */
+async function typeLine(line: string) {
+  window.dispatchEvent(new Event('radar:jarvis-panel'));
+  await new Promise((r) => setTimeout(r, 250));
+  await ghostType('.jv-panel input[aria-label="Вопрос Джарвису"]', line);
+}
 
 const STEPS = ['Абоненты жалуются', 'ИИ собрал инцидент — тревога', 'Дежурный спрашивает Джарвиса', 'Джарвис показывает и объясняет', 'Кому передать — советует ИИ', 'Дежурный решает — Джарвис выполняет', 'Команда берёт и решает', 'ИИ пишет разбор'];
 const ACTOR_VOICE = (jarvisVoice: string) => (jarvisVoice === 'el-matilda' ? 'el-brian' : 'el-matilda'); // голос ИИ-дежурного — не как у Джарвиса
@@ -101,7 +111,7 @@ export function Scenario() {
           .catch(() => fallback);
         check();
         setSt({ step, note: STEPS[step], who: 'actor', line });
-        await say(line, { voice: ACTOR_VOICE(jarvisPrefs.voice), asJarvis: false });
+        await Promise.all([say(line, { voice: ACTOR_VOICE(jarvisPrefs.voice), asJarvis: false }), typeLine(line)]); // звучит и печатается
         check();
         setSt({ step, note: 'Джарвис отвечает и действует на экране.', who: 'jarvis' });
         last = (await jarvisAsk(line)) || last;
@@ -113,7 +123,7 @@ export function Scenario() {
       if (getState().incidents.get(inc.id)?.status === 'coordinators') {
         const line = `Да, передай команде «${team}».`;
         setSt({ step: 5, note: STEPS[5], who: 'actor', line });
-        await say(line, { voice: ACTOR_VOICE(jarvisPrefs.voice), asJarvis: false });
+        await Promise.all([say(line, { voice: ACTOR_VOICE(jarvisPrefs.voice), asJarvis: false }), typeLine(line)]); // звучит и печатается
         check();
         setSt({ step: 5, note: 'Джарвис отвечает и действует на экране.', who: 'jarvis' });
         last = (await jarvisAsk(line)) || last;
@@ -157,42 +167,32 @@ export function Scenario() {
 
   if (!st) return null;
   return (
-    <div className={`scn ${st.done ? 'done' : ''}`} role="status" aria-live="polite">
-      <div className="scn-top">
-        <Clapperboard size={15} />
-        <b>Сценарий для жюри</b>
-        <span className="num muted">
-          {Math.min(st.step + 1, STEPS.length)} / {STEPS.length}
-        </span>
-        <span className="scn-sp" />
-        <button
-          className="icon-btn"
-          onClick={() => {
-            stopped.current = true;
-            stopVoice();
-            setSt(null);
-          }}
-          title="Остановить сценарий"
-          aria-label="Остановить сценарий"
-        >
-          <Square size={13} />
-        </button>
-      </div>
-      <div className="scn-steps">
-        {STEPS.map((s, k) => (
-          <i key={s} className={k < st.step ? 'ok' : k === st.step ? 'on' : ''} title={s} />
-        ))}
-      </div>
-      <div className="scn-title">{st.done ? 'Готово: инцидент прошёл весь путь' : STEPS[st.step]}</div>
-      <div className="scn-note">{st.err ?? st.note}</div>
-      {st.line && (
-        <div className={`scn-line ${st.who}`}>
-          {st.who === 'actor' ? <UserRound size={14} /> : <Bot size={14} />}
-          <span>
-            <b>{st.who === 'actor' ? 'Дежурный (ИИ)' : 'Джарвис'}:</b> {st.line}
-          </span>
-        </div>
-      )}
+    // Не панель с блоками, а строка-субтитр внизу: кто говорит и что; всё остальное видно на экране — курсор
+    // Джарвиса переключает вкладки, печатает реплики и нажимает.
+    <div className={`scn-sub ${st.done ? 'done' : ''} ${st.err ? 'err' : ''}`} role="status" aria-live="polite">
+      <i className="scn-prog" style={{ width: `${(Math.min(st.step + 1, STEPS.length) / STEPS.length) * 100}%` }} />
+      {st.who === 'actor' ? <UserRound size={18} /> : <Bot size={18} />}
+      <span className="scn-sub-text">
+        {st.line && !st.err ? (
+          <>
+            <b>{st.who === 'actor' ? 'Дежурный' : 'Джарвис'}:</b> {st.line}
+          </>
+        ) : (
+          (st.err ?? (st.done ? 'Готово: инцидент прошёл весь путь' : st.note))
+        )}
+      </span>
+      <button
+        className="scn-sub-x"
+        onClick={() => {
+          stopped.current = true;
+          stopVoice();
+          setSt(null);
+        }}
+        title="Остановить сценарий"
+        aria-label="Остановить сценарий"
+      >
+        <Square size={13} />
+      </button>
     </div>
   );
 }

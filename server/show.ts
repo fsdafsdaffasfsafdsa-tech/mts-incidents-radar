@@ -4,10 +4,12 @@ import type { Incident } from '../shared/types.ts';
 import type { Point } from './point.ts';
 import type { Mailbox } from './mail.ts';
 import { routeTeams } from './ai-point.ts';
-import { POINT_ID, isOn, membersOf, teamById } from './directory.ts';
+import { POINT_ID, isOn, membersOf, personById, teamById } from './directory.ts';
 
 const MIN = 60_000;
-export const SHOW_KINDS = ['crit', 'coord', 'recur', 'mailCrit', 'mailAsk', 'stuck', 'sla', 'pingpong', 'p1ask', 'above', 'teamNotOurs', 'teamHelp'] as const;
+export const SHOW_KINDS = ['crit', 'coord', 'recur', 'mailCrit', 'mailAsk', 'stuck', 'sla', 'pingpong', 'p1ask', 'above', 'teamNotOurs', 'teamHelp', 'leadQ', 'lows'] as const;
+/** Через сколько руководитель отвечает на вопрос пункта в показе. */
+export const LEAD_REPLY_MS = 15_000;
 export type ShowKind = (typeof SHOW_KINDS)[number];
 
 /** Режим показа: самотёк выключен (или снова включён). */
@@ -146,6 +148,31 @@ export function runShow(point: Point, mailbox: Mailbox, kind: ShowKind, actor: s
       }
       point.help(inc.id, eng.id, 'нет доступа к оборудованию узла, нужен инженер L2 по базовым станциям');
       return { text: `Команда просит помощи: ${inc.title}`, id: inc.id };
+    }
+    case 'leadQ': {
+      // Пункт спрашивает руководителя команды; через 15 секунд руководитель отвечает в переписке
+      const inc = point.scenarioIncident({ service: 'Мобильный интернет', regionId: 'krd', n: 17, priority: 'P2', slaMin: 35 });
+      const team = teamFor(point, inc);
+      point.route(inc.id, team, actor);
+      point.messageLead(inc.id, actor, 'Сколько ещё до восстановления? Срок через 35 минут — успеваете?');
+      const lead = personById(teamById(team)?.leadId);
+      setTimeout(() => {
+        if (!point.incidents.has(inc.id)) return; // смену очистили
+        try {
+          point.comment(inc.id, { name: lead?.name ?? 'Руководитель группы', personId: lead?.id ?? null, side: 'team', teamId: team }, 'Инженер уже на узле, восстановим минут за 20 — успеваем.');
+        } catch {
+          /* инцидент закрыт */
+        }
+      }, LEAD_REPLY_MS).unref(); // не держит процесс (тесты, остановка сервера)
+      return { text: `Спросили руководителя: ${inc.title}`, id: inc.id };
+    }
+    case 'lows': {
+      // Мелочь на распределение: два низких и средний, у которого до срока — как раз столько, сколько нужно команде.
+      // Пока горит критический, ИИ раздаст их сам (Point.autoRoute): низкие — сразу, средний — когда подойдёт срок.
+      point.scenarioIncident({ service: 'МТС Music', regionId: 'tom', n: 9, priority: 'P4' });
+      point.scenarioIncident({ service: 'Домашнее ТВ', regionId: 'krd', n: 9, priority: 'P4' });
+      const mid = point.scenarioIncident({ service: 'Мой МТС', regionId: 'nsk', n: 10, priority: 'P3', slaMin: 77 });
+      return { text: 'Мелкие: два низких и средний — при критическом ИИ раздаст их сам', id: mid.id };
     }
     case 'above': {
       // Важнее критического: у критического срок далеко, у высокого — через 12 минут

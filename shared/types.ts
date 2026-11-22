@@ -147,6 +147,8 @@ export interface Incident {
   pin?: IncidentPin | null; // избранное смены: кто закрепил, заметка, напоминание
   /** Вопрос команды пункту: «не наше — передайте» или «нужна помощь». Снимается, когда передали или решили. */
   teamAsk?: { kind: 'transfer' | 'help'; teamName: string; text: string; at: number; aiTeamId?: string | null } | null;
+  /** ИИ передал сам: низкий — пока дежурный занят критическими; средний — когда до срока осталось столько, сколько нужно команде. */
+  autoRouted?: { at: number; why: string; teamName: string } | null;
   recur?: IncidentRecur | null; // решили, а жалобы снова идут
   attentionAt?: number | null; // когда дежурный последний раз смотрел инцидент
   attentionBy?: string | null;

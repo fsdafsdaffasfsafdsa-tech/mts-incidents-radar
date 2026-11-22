@@ -26,6 +26,36 @@ export interface DashLayout {
   customStyles: DashStyle[]; // придуманные ChatGPT по описанию
   locked: boolean; // интерфейс закреплён: Джарвис и случайные нажатия ничего не меняют
   ver?: number; // версия раскладки по умолчанию: при новой базовой прежние один раз переводятся на неё
+  stickers: Sticker[]; // персонажи ChatGPT поверх стены — где угодно, любого размера и поворота
+}
+
+/** Персонаж на прозрачном фоне поверх стены. x, y — центр в долях стены, w — ширина в долях, rot — градусы. */
+export interface Sticker {
+  id: string;
+  src: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  rot: number;
+  flip?: boolean;
+}
+export const MAX_STICKERS = 6;
+function cleanStickers(x: unknown): Sticker[] {
+  if (!Array.isArray(x)) return [];
+  return x
+    .filter((s): s is Sticker => !!s && typeof s === 'object' && typeof (s as Sticker).src === 'string' && (s as Sticker).src.startsWith('data:image/') && (s as Sticker).src.length < 400_000)
+    .map((s) => ({
+      id: typeof s.id === 'string' && s.id ? s.id : newId(),
+      src: s.src,
+      name: typeof s.name === 'string' ? s.name.slice(0, 40) : 'Персонаж',
+      x: clamp(Number(s.x) || 0.5, 0, 1),
+      y: clamp(Number(s.y) || 0.5, 0, 1),
+      w: clamp(Number(s.w) || 0.15, 0.04, 0.8),
+      rot: ((Number(s.rot) || 0) % 360 + 360) % 360,
+      ...(s.flip ? { flip: true } : {}),
+    }))
+    .slice(-MAX_STICKERS);
 }
 
 const KEY = 'radar.dash.v1';
@@ -36,7 +66,7 @@ export const presetItems = (id: PresetId): GridItem[] => {
   return columnsToItems(p.columns);
 };
 /** Новая базовая раскладка — один раз заменяет прежние у тех, кто её не закрепил. */
-const LAYOUT_VER = 5;
+const LAYOUT_VER = 6;
 export const DEFAULT_DASH: DashLayout = {
   ver: LAYOUT_VER,
   preset: 'base',
@@ -55,6 +85,7 @@ export const DEFAULT_DASH: DashLayout = {
   jarvisEdit: true,
   customStyles: [],
   locked: false,
+  stickers: [],
 };
 
 const blockIds = new Set(BLOCKS.map((b) => b.id));
@@ -102,6 +133,8 @@ function clean(x: (Partial<DashLayout> & { columns?: DashColumn[] }) | null): Da
     }
     // v5: избранное смены ушло со стены — почта занимает его место (только базовая раскладка, закреплённые не трогаем)
     if ((d.ver ?? 0) < 5 && !d.locked && d.preset === 'base') d.items = presetItems('base');
+    // v6: блок «Вопросы» (командам и руководителям) — под почтой в базовой раскладке
+    if ((d.ver ?? 0) < 6 && !d.locked && d.preset === 'base') d.items = presetItems('base');
     d.ver = LAYOUT_VER;
   }
   delete d.columns;
@@ -109,6 +142,7 @@ function clean(x: (Partial<DashLayout> & { columns?: DashColumn[] }) | null): Da
   if (!DASH_STYLE_IDS.includes(d.style) && !d.customStyles.some((s) => s.id === d.style)) d.style = DEFAULT_DASH.style;
   d.rotateSec = clamp(d.rotateSec, 8, 120);
   d.pageSec = clamp(d.pageSec, 6, 60);
+  d.stickers = cleanStickers(d.stickers);
   return d;
 }
 
@@ -164,6 +198,7 @@ type Ev =
   | { type: 'settings'; open: boolean }
   | { type: 'test-alarm'; kind: AlertKind }
   | { type: 'designing'; text: string | null }
+  | { type: 'sticker'; id: string } // появился персонаж — выделить его, чтобы сразу двигать
   | { type: 'edit'; on: boolean; id?: string | null }
   | { type: 'gallery'; open: boolean; at?: { x: number; y: number } | null };
 const evSubs = new Set<(e: Ev) => void>();

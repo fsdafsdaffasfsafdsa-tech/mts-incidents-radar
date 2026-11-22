@@ -2,11 +2,11 @@
 import type { Incident, Person, Team } from '../../shared/types';
 import { forecast, forecastChip } from '../../shared/forecast';
 import { useStore } from '../store';
-import { SCHEDULE_TEXT, dutySlots, fmtTz, nextChange, onDuty, shiftLabel } from '../../shared/schedule';
+import { ETERNAL_SHIFT, SCHEDULE_TEXT, dutySlots, fmtTz, nextChange, onDuty, shiftLabel } from '../../shared/schedule';
 import { fmtClock } from '../lib/format';
 import { Initials } from './ui';
 
-export const isOn = (p: Person, now: number) => !p.away && onDuty(p.schedule, p.crew, p.tz, now);
+export const isOn = (p: Person, now: number) => ETERNAL_SHIFT || (!p.away && onDuty(p.schedule, p.crew, p.tz, now));
 
 export const ROLE_TEXT: Record<Person['role'], string> = {
   coordinator: 'дежурный пункта',

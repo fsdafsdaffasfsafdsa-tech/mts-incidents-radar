@@ -27,6 +27,8 @@ import { JarvisBlock } from './jarvisBlock';
 import { TeamLoadBlock } from './teams';
 import { CounterHeader } from './header';
 import { MailBlock } from './mail';
+import { QuestionsBlock } from './questions';
+import { Stickers } from './stickers';
 import { useBump, useFlip } from './anim';
 import { Handover } from './handover';
 import { ShowPanel } from './showPanel';
@@ -233,6 +235,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
         </div>
       )}
       <GridField d={d} ctx={ctx} inWall={inWall} editing={editing} setEditing={setEditing} />
+      <Stickers />
       {!editing.on && <ShowPanel />}
       <UrgentShow list={urgentNow} incidents={incidents} now={now} onAck={att.ack} />
       <Handover />
@@ -310,6 +313,8 @@ function Block({ id, ctx, skip, o, it }: { id: BlockId; ctx: BlockCtx; skip: Set
       return <FavsBlock2 ctx={ctx} />;
     case 'mail':
       return <MailBlock ctx={ctx} />;
+    case 'questions':
+      return <QuestionsBlock ctx={ctx} />;
     case 'teamload':
       return <TeamLoadBlock ctx={ctx} />;
     case 'custom':

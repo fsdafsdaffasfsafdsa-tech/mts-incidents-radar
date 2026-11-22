@@ -28,7 +28,9 @@ export type AlertKind =
   | 'taken' // команда взяла в работу
   | 'created' // новый некритический у команды
   | 'levelDown' // уровень понизили
-  | 'teamAsk'; // вопрос команды: «не наше — передайте» или «нужна помощь»
+  | 'teamAsk' // вопрос команды: «не наше — передайте» или «нужна помощь»
+  | 'answer' // команда или её руководитель ответили на вопрос пункта
+  | 'auto'; // ИИ передал сам низкий или средний, пока дежурный занят критическими
 
 export const ALERT_META: Record<AlertKind, { title: string; todo: string }> = {
   crit: { title: 'Новый критический', todo: 'Взять на себя и передать команде' },
@@ -50,6 +52,8 @@ export const ALERT_META: Record<AlertKind, { title: string; todo: string }> = {
   created: { title: 'Новый', todo: '' },
   levelDown: { title: 'Уровень ниже', todo: '' },
   teamAsk: { title: 'Вопрос команды', todo: 'Ответить команде' },
+  answer: { title: 'Ответ команды', todo: '' },
+  auto: { title: 'ИИ передал сам', todo: '' },
 };
 
 /** Насколько громко: зависит от вида и уровня инцидента. */
@@ -71,6 +75,8 @@ export function levelOf(kind: AlertKind, inc: Incident): Level {
     case 'fav':
     case 'forgot':
     case 'teamAsk':
+    case 'answer':
+    case 'auto':
       return 'attention';
     default:
       return 'info';
@@ -84,8 +90,51 @@ export interface Sig {
   p1: boolean;
   recur: boolean;
   ask: boolean;
+  tc?: number; // ответов команды в переписке
+  au?: boolean; // ИИ передал сам
 }
-export const sigOf = (i: Incident, now: number): Sig => ({ st: i.status, pr: i.priority, p1: !!i.p1Proposal, recur: isRecurring(i, now), ask: !!i.teamAsk });
+const teamReplies = (i: Incident) => (i.comments ?? []).filter((c) => c.side === 'team').length;
+export const sigOf = (i: Incident, now: number): Sig => ({ st: i.status, pr: i.priority, p1: !!i.p1Proposal, recur: isRecurring(i, now), ask: !!i.teamAsk, tc: teamReplies(i), au: !!i.autoRouted });
+
+/** Вопросы в переписке инцидента: пункт спросил команду или её руководителя — и ответили ли (блок «Вопросы»). */
+export interface Question {
+  id: string;
+  dir: 'in' | 'out'; // in — команда спрашивает пункт; out — пункт спросил команду или руководителя
+  inc: Incident;
+  who: string;
+  text: string;
+  at: number;
+  answer: string | null;
+  answerAt: number | null;
+}
+export function questionsOf(all: Iterable<Incident>, now: number, keep = 3 * 3_600_000): Question[] {
+  const out: Question[] = [];
+  for (const inc of all) {
+    if (inc.teamAsk && inc.status !== 'resolved')
+      out.push({ id: `in:${inc.id}`, dir: 'in', inc, who: inc.teamAsk.teamName, text: inc.teamAsk.text, at: inc.teamAsk.at, answer: null, answerAt: null });
+    const cs = inc.comments ?? [];
+    for (let k = cs.length - 1; k >= 0; k--) {
+      const c = cs[k];
+      if (c.side !== 'point') continue;
+      if (now - c.at > keep) break;
+      const lead = /^Руководителю(?:\s*\(([^)]+)\))?:\s*/.exec(c.text);
+      const reply = cs.slice(k + 1).find((x) => x.side === 'team');
+      out.push({
+        id: `out:${c.id}`,
+        dir: 'out',
+        inc,
+        who: lead ? `руководитель${lead[1] ? ` ${lead[1].split(' ')[0]}` : ''}` : inc.groupName ?? 'команда',
+        text: lead ? c.text.slice(lead[0].length) : c.text,
+        at: c.at,
+        answer: reply?.text ?? null,
+        answerAt: reply?.at ?? null,
+      });
+      break; // по инциденту — последний вопрос пункта
+    }
+  }
+  // ждут ответа — сверху, дольше ждут — выше; отвеченные — ниже, свежие ответы — выше
+  return out.sort((a, b) => (a.answer ? 1 : 0) - (b.answer ? 1 : 0) || (a.answer ? (b.answerAt ?? 0) - (a.answerAt ?? 0) : a.at - b.at));
+}
 
 export interface Found {
   kind: AlertKind;
@@ -129,6 +178,13 @@ export function detect(prev: Map<string, Sig> | null, all: Incident[], now: numb
       if (s.recur && !p.recur) found.push({ kind: 'recur', inc: i, text: recurText(i, now) });
       if (s.p1 && !p.p1 && s.st !== 'resolved') found.push({ kind: 'p1ask', inc: i, text: i.p1Proposal ?? undefined });
       if (s.ask && !p.ask && s.st !== 'resolved') found.push({ kind: 'teamAsk', inc: i, text: i.teamAsk?.text });
+      if (s.au && !p.au) found.push({ kind: 'auto', inc: i, text: i.autoRouted?.why });
+      // ответили на вопрос пункта: новая реплика команды после реплики пункта
+      if ((s.tc ?? 0) > (p.tc ?? 0)) {
+        const cs = i.comments ?? [];
+        const last = cs[cs.length - 1];
+        if (last?.side === 'team' && cs.slice(0, -1).some((c) => c.side === 'point')) found.push({ kind: 'answer', inc: i, text: `${last.author}: ${last.text}` });
+      }
       if (s.st === 'coordinators' && p.st !== 'coordinators' && s.pr !== 'P1') found.push({ kind: 'coord', inc: i, text: p.st === 'resolved' ? 'вернулся на пункт' : undefined });
       if (p.st === 'coordinators' && (s.st === 'assigned' || s.st === 'in_progress')) found.push({ kind: 'routed', inc: i, text: i.groupName ?? undefined });
       if (p.st === 'assigned' && s.st === 'in_progress') found.push({ kind: 'taken', inc: i, text: i.assigneeName ?? undefined });
@@ -204,6 +260,17 @@ export function voiceLine(kind: AlertKind, inc: Incident, now: number, teamOf: (
       return `${t} давно без внимания. Посмотрим?`;
     case 'fav':
       return `по избранному ${t} есть изменения.`;
+    case 'auto': {
+      const team = short(inc.autoRouted?.teamName ?? (inc.teamId ? teamOf(inc.teamId) : 'команде'));
+      return inc.priority === 'P3'
+        ? `средний ${t} я передал «${team}» сам: до срока осталось столько, сколько команде нужно на работу.`
+        : `пока вы заняты критическим, низкий ${t} я передал «${team}» сам.`;
+    }
+    case 'answer': {
+      const last = [...(inc.comments ?? [])].reverse().find((c) => c.side === 'team');
+      // имя — не первым словом: обращение «Сэр, …» делает первую букву строчной
+      return last ? `пришёл ответ по ${t}. ${last.author.split(' ').slice(0, 2).join(' ')}: ${last.text.replace(/[.!]+$/, '')}.` : `по ${t} ответила команда.`;
+    }
     case 'teamAsk': {
       const a = inc.teamAsk;
       const team = `команда «${short(a?.teamName ?? 'команда')}»`;

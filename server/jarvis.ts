@@ -82,7 +82,7 @@ export interface JarvisAsk {
 }
 /** Что Джарвис делает прямо сейчас — для окна «Работа Джарвиса» (поток событий во время ответа). */
 export type JarvisEvent =
-  | { type: 'step'; id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string }
+  | { type: 'step'; id: string; text: string; state: 'run' | 'done' | 'fail'; note?: string; tool?: string; target?: string | null }
   | { type: 'actions'; actions: ClientAction[] };
 export type Emit = (e: JarvisEvent) => void;
 
@@ -388,11 +388,13 @@ class Exec {
   run(name: string, a: Record<string, unknown>): string {
     const id = `t${++this.steps}`;
     const before = { actions: this.actions.length, done: this.done.length };
-    this.emit({ type: 'step', id, text: this.describe(name, a), state: 'run' });
+    // с чем работает шаг — стена показывает курсор Джарвиса на этой строке («нажимает» и «печатает»)
+    const target = typeof a.id === 'string' ? a.id : typeof a.mail === 'string' ? `mail:${a.mail}` : null;
+    this.emit({ type: 'step', id, text: this.describe(name, a), state: 'run', tool: name, target });
     try {
       const out = this.exec(name, a);
       const done = this.done.slice(before.done);
-      this.emit({ type: 'step', id, text: done.join('; ') || this.describe(name, a, true), state: 'done' });
+      this.emit({ type: 'step', id, text: done.join('; ') || this.describe(name, a, true), state: 'done', tool: name, target: target ?? this.focus });
       const fresh = this.actions.slice(before.actions);
       if (fresh.length) this.emit({ type: 'actions', actions: fresh });
       return out;
