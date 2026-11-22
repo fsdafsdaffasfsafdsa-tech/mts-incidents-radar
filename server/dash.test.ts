@@ -5,7 +5,7 @@ import { attention, dashSnapshot, groupsOf, isImportant, lastAttention, transfer
 import { dashRules, toDashOp } from './jarvis-dash.ts';
 import { contrast, toStyle } from './design.ts';
 import { PERSONAS, personaById } from '../shared/personas.ts';
-import { addItem, columnsToItems, free, normalize, overlap, removeItem, swapItems } from '../shared/dashGrid.ts';
+import { addItem, cleanDims, columnsToItems, findFree, free, normalize, overlap, regrid, removeItem, swapItems, type GridItem } from '../shared/dashGrid.ts';
 import { applyFilter, cleanSpec } from '../shared/dashCustom.ts';
 import { DASH_STYLES, findDashStyle } from '../shared/dashStyles.ts';
 import { Point } from './point.ts';
@@ -231,4 +231,44 @@ test('стилей больше двадцати, у всех разные id, �
   assert.equal(findDashStyle('включи неон')?.id, 'neon');
   assert.equal(findDashStyle('оформление северное сияние')?.id, 'aurora');
   assert.equal(findDashStyle('стиль солнечный светлый')?.id, 'solar-light');
+});
+
+test('сетка на три экрана: блоки того же размера, места больше; на меньшем поле ни один блок не пропадает', () => {
+  const items: GridItem[] = [
+    { id: 'a', block: 'action', x: 0, y: 0, w: 4, h: 12 },
+    { id: 'b', block: 'groups', x: 4, y: 0, w: 8, h: 8 },
+    { id: 'c', block: 'mail', x: 4, y: 8, w: 8, h: 4 },
+  ];
+  const three = { cols: 36, rows: 12 };
+  const big = regrid(items, { cols: 12, rows: 12 }, three);
+  assert.deepEqual(big.map((i) => [i.id, i.x, i.y, i.w, i.h]), items.map((i) => [i.id, i.x, i.y, i.w, i.h]), 'на большем поле блоки не растягиваются и не двигаются');
+  assert.ok(free(big, { x: 12, y: 0, w: 24, h: 12 }, undefined, three), 'два экрана справа свободны');
+  assert.equal(free(big, { x: 12, y: 0, w: 24, h: 12 }), false, 'на поле 12×12 туда не встать');
+  const more = addItem(big, { block: 'map' }, { w: 6, h: 8 }, three);
+  const map = more.find((i) => i.block === 'map')!;
+  assert.ok(map.x >= 12 && map.w === 6 && map.h === 8, 'новый блок встаёт на свободный экран своего размера');
+  assert.ok(findFree(more, { w: 12, h: 12 }, undefined, three));
+  // обратно на 12×12: всё влезает как было
+  assert.equal(regrid(items, three, { cols: 12, rows: 12 }).length, 3);
+  // на маленькое поле: сжимается, но все блоки на месте и без наложений
+  const small = regrid(more, three, { cols: 8, rows: 6 });
+  assert.equal(small.length, more.length);
+  for (const a of small) for (const b of small) if (a !== b) assert.equal(overlap(a, b), false);
+  assert.deepEqual(cleanDims({ cols: 100, rows: 1 }), { cols: 48, rows: 6 });
+  assert.deepEqual(cleanDims(null), { cols: 12, rows: 12 });
+});
+
+test('Джарвис: «сетка на три экрана», «сетка 30 на 10» — размер поля, а не растяжка блоков', () => {
+  const p = null as never;
+  assert.deepEqual(toDashOp({ op: 'grid', screens: 3 }, null, p).cmd, { op: 'grid', cols: 36, rows: 12 });
+  assert.deepEqual(toDashOp({ op: 'grid', cols: 100, rows: 2 }, null, p).cmd, { op: 'grid', cols: 48, rows: 6 });
+  assert.deepEqual(toDashOp({ op: 'grid', cols: 40 }, { preset: 'case', columns: [], style: '', filter: null, density: 'normal', grid: { cols: 36, rows: 10 } }, p).cmd, { op: 'grid', cols: 40, rows: 10 });
+  const said = (t: string) => {
+    let got: Record<string, unknown> | null = null;
+    dashRules(t.toLowerCase().replace(/ё/g, 'е'), null, (a) => ((got = a), 'ok'), true);
+    return got;
+  };
+  assert.deepEqual(said('Сделай сетку на три экрана'), { op: 'grid', screens: 3 });
+  assert.deepEqual(said('сетка на два монитора'), { op: 'grid', screens: 2 });
+  assert.deepEqual(said('поставь сетку 30 на 10'), { op: 'grid', cols: 30, rows: 10 });
 });

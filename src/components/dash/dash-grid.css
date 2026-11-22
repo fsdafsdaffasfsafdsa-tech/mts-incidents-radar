@@ -1,11 +1,11 @@
-/* ═══ Свободное поле 12×12, галерея «Добавить блок», новые блоки ═══ */
+/* ═══ Свободное поле (12×12 или своё — например, 36×12 на три экрана), галерея «Добавить блок», новые блоки ═══ */
 .dash-grid {
   position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-rows: repeat(12, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--dg-cols, 12), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--dg-rows, 12), minmax(0, 1fr));
   gap: var(--d-gap);
 }
 .dash-grid > .dash-col {

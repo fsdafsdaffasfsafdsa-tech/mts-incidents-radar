@@ -9,8 +9,8 @@ import { itsmLink, markSeen, openIncident, setTab, teamName, useStore } from '..
 import { heatFor } from '../../../shared/attention';
 import { fmtClock } from '../../lib/format';
 import { useNow } from '../../lib/hooks';
-import { applyDashOp, currentStyle, dashEvent, getDash, openWallWindow, openWork, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
-import { GRID_COLS, GRID_ROWS, fit, free, type GridItem, type Rect } from '../../../shared/dashGrid';
+import { applyDashOp, currentStyle, dashEvent, dimsOf, getDash, openWallWindow, openWork, useDash, useDashEvents, type DashLayout } from '../../lib/dashLayout';
+import { fit, free, type GridItem, type Rect } from '../../../shared/dashGrid';
 import { BlockGallery, CharacterBlock, ClockBlock, CountersBlock, CustomBlock, ForgotBlock, GroupBlock, NoteBlock, RiskBlock, RouteBlock, TeamsBlock } from './blocks2';
 import { BLOCK_OPTS } from './blockOpts';
 import { Jarvis, jarvisBusyRecently, useJarvisWork } from '../Jarvis';
@@ -976,9 +976,10 @@ function BlockEditor({ it, onClose }: { it: GridItem; onClose: () => void }) {
   const set = (patch: Partial<GridItem>) => applyDashOp({ op: 'item', id: it.id, patch });
   const setOpt = (key: string, v: boolean | number | string) => set({ opts: { ...(it.opts ?? {}), [key]: v } });
   const scale = it.scale ?? 1;
+  const g = dimsOf(getDash());
   const tryRect = (r: Partial<GridItem>) => {
     const next = { ...it, ...r };
-    if (free(getDash().items, next, it.id)) set(r);
+    if (free(getDash().items, next, it.id, g)) set(r);
   };
   return (
     <div className="dce dce-pop" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
@@ -1002,15 +1003,15 @@ function BlockEditor({ it, onClose }: { it: GridItem; onClose: () => void }) {
       )}
       <label>
         <span>
-          Ширина <b className="num">{it.w} из 12</b>
+          Ширина <b className="num">{it.w} из {g.cols}</b>
         </span>
-        <input type="range" min={2} max={12} step={1} value={it.w} onChange={(e) => tryRect({ w: +e.target.value, x: Math.min(it.x, 12 - +e.target.value) })} />
+        <input type="range" min={2} max={g.cols} step={1} value={it.w} onChange={(e) => tryRect({ w: +e.target.value, x: Math.min(it.x, g.cols - +e.target.value) })} />
       </label>
       <label>
         <span>
-          Высота <b className="num">{it.h} из 12</b>
+          Высота <b className="num">{it.h} из {g.rows}</b>
         </span>
-        <input type="range" min={2} max={12} step={1} value={it.h} onChange={(e) => tryRect({ h: +e.target.value, y: Math.min(it.y, 12 - +e.target.value) })} />
+        <input type="range" min={2} max={g.rows} step={1} value={it.h} onChange={(e) => tryRect({ h: +e.target.value, y: Math.min(it.y, g.rows - +e.target.value) })} />
       </label>
       <label>
         <span>
@@ -1065,15 +1066,17 @@ function BlockEditor({ it, onClose }: { it: GridItem; onClose: () => void }) {
 
 type Editing = { on: boolean; id: string | null };
 
-/** Свободное поле 12×12: блоки где угодно; в режиме изменения — перенос, размер, добавление в пустую клетку. */
+/** Свободное поле (12×12 или своё — d.gridCols × d.gridRows): блоки где угодно; в режиме изменения — перенос,
+ *  размер, добавление в пустую клетку. Блоки задаются в клетках: поле больше — блоки того же вида, места больше. */
 function GridField({ d, ctx, inWall, editing, setEditing }: { d: DashLayout; ctx: BlockCtx; inWall: Set<BlockId>; editing: Editing; setEditing: (v: Editing) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<{ id: string; r: Rect; ok: boolean } | null>(null);
+  const g = dimsOf(d);
   const cell = () => {
     const el = ref.current!;
     const box = el.getBoundingClientRect();
     const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
-    return { box, cw: (box.width + gap) / GRID_COLS, ch: (box.height + gap) / GRID_ROWS };
+    return { box, cw: (box.width + gap) / g.cols, ch: (box.height + gap) / g.rows };
   };
   const start = (e: React.PointerEvent, it: GridItem, mode: 'move' | 'size') => {
     e.preventDefault();
@@ -1085,8 +1088,8 @@ function GridField({ d, ctx, inWall, editing, setEditing }: { d: DashLayout; ctx
     const move = (ev: PointerEvent) => {
       const dx = Math.round((ev.clientX - x0) / cw);
       const dy = Math.round((ev.clientY - y0) / ch);
-      const r = mode === 'move' ? fit({ x: it.x + dx, y: it.y + dy, w: it.w, h: it.h }) : fit({ x: it.x, y: it.y, w: it.w + dx, h: it.h + dy });
-      const ok = free(getDash().items, r, it.id);
+      const r = mode === 'move' ? fit({ x: it.x + dx, y: it.y + dy, w: it.w, h: it.h }, g) : fit({ x: it.x, y: it.y, w: it.w + dx, h: it.h + dy }, g);
+      const ok = free(getDash().items, r, it.id, g);
       last = { r, ok };
       setDrag({ id: it.id, r, ok });
     };
@@ -1105,15 +1108,15 @@ function GridField({ d, ctx, inWall, editing, setEditing }: { d: DashLayout; ctx
     }, { once: true });
   };
   const busy = new Set<number>();
-  for (const it of d.items) for (let y = it.y; y < it.y + it.h; y++) for (let x = it.x; x < it.x + it.w; x++) busy.add(y * GRID_COLS + x);
+  for (const it of d.items) for (let y = it.y; y < it.y + it.h; y++) for (let x = it.x; x < it.x + it.w; x++) busy.add(y * g.cols + x);
   const area = (r: Rect) => ({ gridColumn: `${r.x + 1} / span ${r.w}`, gridRow: `${r.y + 1} / span ${r.h}` });
   const sel = editing.on ? d.items.find((i) => i.id === editing.id) : undefined;
   return (
-    <div ref={ref} className={`dash-grid ${editing.on ? 'editing' : ''}`}>
+    <div ref={ref} className={`dash-grid ${editing.on ? 'editing' : ''}`} style={{ '--dg-cols': g.cols, '--dg-rows': g.rows } as React.CSSProperties}>
       {editing.on &&
-        Array.from({ length: GRID_COLS * GRID_ROWS }, (_, k) =>
+        Array.from({ length: g.cols * g.rows }, (_, k) =>
           busy.has(k) ? null : (
-            <button key={`c${k}`} className="dg-cell" style={{ gridColumn: (k % GRID_COLS) + 1, gridRow: Math.floor(k / GRID_COLS) + 1 }} onClick={() => dashEvent({ type: 'gallery', open: true, at: { x: k % GRID_COLS, y: Math.floor(k / GRID_COLS) } })} title="Добавить блок сюда">
+            <button key={`c${k}`} className="dg-cell" style={{ gridColumn: (k % g.cols) + 1, gridRow: Math.floor(k / g.cols) + 1 }} onClick={() => dashEvent({ type: 'gallery', open: true, at: { x: k % g.cols, y: Math.floor(k / g.cols) } })} title="Добавить блок сюда">
               <Plus size={14} />
             </button>
           ),
@@ -1154,7 +1157,7 @@ function GridField({ d, ctx, inWall, editing, setEditing }: { d: DashLayout; ctx
       ))}
       {drag && <div className={`dg-ghost ${drag.ok ? 'ok' : 'bad'}`} style={area(drag.r)} />}
       {sel && (
-        <div className="dce-pop-wrap" style={area({ x: sel.x + sel.w + 3 <= GRID_COLS ? sel.x + sel.w : Math.max(0, sel.x - 3), y: 0, w: 3, h: GRID_ROWS })}>
+        <div className="dce-pop-wrap" style={area({ x: sel.x + sel.w + 3 <= g.cols ? sel.x + sel.w : Math.max(0, sel.x - 3), y: 0, w: 3, h: g.rows })}>
           <BlockEditor it={sel} onClose={() => setEditing({ on: true, id: null })} />
         </div>
       )}

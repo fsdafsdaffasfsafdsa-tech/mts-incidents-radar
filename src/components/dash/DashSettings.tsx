@@ -1,9 +1,9 @@
 // «Настройки дашборда»: раскладка блоков (готовая или своя), стиль из 26, тревоги, Джарвис и поведение.
 // Всё сохраняется в этом браузере и сразу доходит до окна стены.
 import { useState } from 'react';
-import { Lock, Plus, RotateCcw, Sparkles, Unlock, X } from 'lucide-react';
+import { Lock, Monitor, MoveHorizontal, MoveVertical, Plus, RotateCcw, Sparkles, Unlock, X } from 'lucide-react';
 import { BLOCK_NAME, DASH_GROUPS, PRESETS, type DashGroup } from '../../../shared/dash';
-import { readingOrder } from '../../../shared/dashGrid';
+import { GRID_LIMITS, GRID_SCREENS, readingOrder } from '../../../shared/dashGrid';
 import { DASH_STYLES, type DashStyle } from '../../../shared/dashStyles';
 import { DEFAULT_DASH, applyDashOp, dashEvent, presetItems, setDash, useDash } from '../../lib/dashLayout';
 import { applyDesign, askDesign, type DesignTurn } from '../../lib/dashDesign';
@@ -61,10 +61,15 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
           </div>
         </section>
 
+        {d.preset !== 'legacy' && <GridSize cols={d.gridCols} rows={d.gridRows} />}
+
         {d.preset !== 'legacy' && (
           <section>
             <h3>
-              Блоки на поле <small>{d.items.length} · поле 12×12</small>
+              Блоки на поле{' '}
+              <small>
+                {d.items.length} · поле {d.gridCols}×{d.gridRows}
+              </small>
             </h3>
             <div className="dset-items">
               {readingOrder(d.items).map((it) => (
@@ -247,7 +252,7 @@ export function DashSettings({ onClose }: { onClose: () => void }) {
 
         </fieldset>
         <footer className="dset-f">
-          <button className="dset-btn" onClick={() => setDash({ ...DEFAULT_DASH, items: presetItems('case') })}>
+          <button className="dset-btn" onClick={() => setDash({ ...DEFAULT_DASH, items: presetItems('case'), gridCols: d.gridCols, gridRows: d.gridRows })}>
             <RotateCcw size={14} /> Вернуть всё по умолчанию
           </button>
         </footer>
@@ -377,5 +382,59 @@ function DesignBox() {
         {err && <span className="dset-err">{err}</span>}
       </div>
     </div>
+  );
+}
+
+/** Размер сетки стены: под 1, 2 или 3 экрана 16:9 и вручную по клеткам. Блоки сохраняют размер в клетках —
+ *  на большем поле они не растягиваются, а появляется место под новые. */
+function GridSize({ cols, rows }: { cols: number; rows: number }) {
+  const grid = (c: number, r: number) => applyDashOp({ op: 'grid', cols: c, rows: r });
+  const L = GRID_LIMITS;
+  return (
+    <section>
+      <h3>
+        Сетка <small className="num">{cols}×{rows}</small>
+      </h3>
+      <div className="dset-screens">
+        {GRID_SCREENS.map((s) => (
+          <button key={s.n} className={cols === s.cols && rows === s.rows ? 'on' : ''} onClick={() => grid(s.cols, s.rows)} title={`Экранов 16:9: ${s.n} — поле ${s.cols}×${s.rows}`}>
+            <span className="dset-mon">
+              {Array.from({ length: s.n }, (_, k) => (
+                <Monitor key={k} size={18} />
+              ))}
+            </span>
+            <small className="num">
+              {s.cols}×{s.rows}
+            </small>
+          </button>
+        ))}
+      </div>
+      <div className="dset-row">
+        <span title="Клеток по горизонтали">
+          <MoveHorizontal size={15} />
+        </span>
+        <span className="dset-w">
+          <button onClick={() => grid(cols - 1, rows)} disabled={cols <= L.cols.min} aria-label="Меньше колонок">
+            −
+          </button>
+          <b>{cols}</b>
+          <button onClick={() => grid(cols + 1, rows)} disabled={cols >= L.cols.max} aria-label="Больше колонок">
+            +
+          </button>
+        </span>
+        <span title="Клеток по вертикали">
+          <MoveVertical size={15} />
+        </span>
+        <span className="dset-w">
+          <button onClick={() => grid(cols, rows - 1)} disabled={rows <= L.rows.min} aria-label="Меньше строк">
+            −
+          </button>
+          <b>{rows}</b>
+          <button onClick={() => grid(cols, rows + 1)} disabled={rows >= L.rows.max} aria-label="Больше строк">
+            +
+          </button>
+        </span>
+      </div>
+    </section>
   );
 }

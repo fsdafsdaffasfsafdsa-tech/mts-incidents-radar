@@ -5,12 +5,14 @@ import { useEffect, useState } from 'react';
 import type { AlertKind } from '../../shared/attention';
 import { BLOCKS, PRESETS, type BlockId, type DashColumn, type DashGroup, type DashOp, type PresetId } from '../../shared/dash';
 import { DASH_STYLE_IDS, dashStyleById, type DashStyle } from '../../shared/dashStyles';
-import { DEFAULT_SIZE, addItem, columnsToItems, newId, normalize, readingOrder, removeItem, swapItems, widen, type GridItem } from '../../shared/dashGrid';
+import { DEFAULT_GRID, DEFAULT_SIZE, addItem, cleanDims, columnsToItems, newId, normalize, readingOrder, regrid, removeItem, swapItems, widen, type GridDims, type GridItem } from '../../shared/dashGrid';
 import { cleanSpec } from '../../shared/dashCustom';
 
 export interface DashLayout {
   preset: PresetId | 'custom';
-  items: GridItem[]; // блоки на поле 12×12
+  items: GridItem[]; // блоки на поле gridCols × gridRows
+  gridCols: number; // клеток по горизонтали (12 — один экран 16:9, 36 — три экрана)
+  gridRows: number; // клеток по вертикали
   counters: boolean; // полоса счётчиков сверху
   ticker: boolean; // бегущая строка снизу
   filter: DashGroup | null;
@@ -71,6 +73,8 @@ export const DEFAULT_DASH: DashLayout = {
   ver: LAYOUT_VER,
   preset: 'base',
   items: presetItems('base'),
+  gridCols: DEFAULT_GRID.cols,
+  gridRows: DEFAULT_GRID.rows,
   counters: true,
   ticker: false, // бегущая строка мешает читать стену — по умолчанию выключена
   filter: null,
@@ -112,8 +116,11 @@ function clean(x: (Partial<DashLayout> & { columns?: DashColumn[] }) | null): Da
       }
       return it;
     })
-    .slice(0, 24);
-  d.items = normalize(items);
+    .slice(0, 48);
+  const g = cleanDims({ cols: d.gridCols, rows: d.gridRows });
+  d.gridCols = g.cols;
+  d.gridRows = g.rows;
+  d.items = normalize(items, g);
   if (!d.items.length && d.preset !== 'legacy') d.items = presetItems('base');
   if ((d.ver ?? 0) < LAYOUT_VER) {
     if ((d.ver ?? 0) < 2 && !d.locked) {
@@ -217,18 +224,29 @@ export function useDashEvents(f: (e: Ev) => void) {
 }
 
 const sizeOf = (b: BlockId) => DEFAULT_SIZE[b] ?? { w: 4, h: 6 };
+/** Размер поля стены. */
+export const dimsOf = (d: DashLayout): GridDims => ({ cols: d.gridCols, rows: d.gridRows });
+/** Готовая раскладка рассчитана на поле 12×12: на большем поле она встаёт в угол блоками того же размера. */
+const presetOn = (id: PresetId, g: GridDims) => regrid(presetItems(id), DEFAULT_GRID, g);
 /** Применить действие (от Джарвиса, из настроек или с поля). Возвращает, что получилось, — человеческим языком. */
 export function applyDashOp(o: DashOp): string {
   const d = state;
   if (d.locked && o.op !== 'focus' && o.op !== 'settings') return 'интерфейс закреплён — сначала открепите его в настройках дашборда';
+  const g = dimsOf(d);
   const ordered = readingOrder(d.items);
   const at = (k: number) => ordered[k < 0 ? ordered.length + k : k];
   const put = (items: GridItem[], extra: Partial<DashLayout> = {}) => setDash({ preset: 'custom', items, ...extra });
   switch (o.op) {
+    case 'grid': {
+      const to = cleanDims({ cols: o.cols ?? d.gridCols, rows: o.rows ?? d.gridRows });
+      if (to.cols === g.cols && to.rows === g.rows) return `сетка уже ${to.cols}×${to.rows}`;
+      setDash({ gridCols: to.cols, gridRows: to.rows, items: regrid(d.items, g, to) });
+      return `сетка ${to.cols}×${to.rows}`;
+    }
     case 'preset': {
       const p = PRESETS.find((x) => x.id === o.preset);
       if (!p) return 'нет такой раскладки';
-      setDash({ preset: p.id, items: p.columns.length || p.grid ? presetItems(p.id) : d.items, filter: p.filter ?? null, density: p.density ?? 'normal' });
+      setDash({ preset: p.id, items: p.columns.length || p.grid ? presetOn(p.id, g) : d.items, filter: p.filter ?? null, density: p.density ?? 'normal' });
       return `раскладка «${p.name}»`;
     }
     case 'show':
@@ -236,7 +254,7 @@ export function applyDashOp(o: DashOp): string {
       if (o.op === 'show' && d.items.some((i) => i.block === o.block)) return 'уже на стене';
       const size = sizeOf(o.block);
       const extra = o.op === 'add' ? { opts: o.opts, custom: o.custom, ...(o.x !== undefined ? { x: o.x, y: o.y } : {}), w: o.w ?? size.w, h: o.h ?? size.h } : { w: size.w, h: size.h };
-      const next = addItem(d.items, { block: o.block, ...extra }, size);
+      const next = addItem(d.items, { block: o.block, ...extra }, size, g);
       if (next.length === d.items.length) return 'на поле нет места — уменьшите или уберите блок';
       put(next);
       return 'добавил блок';
@@ -272,7 +290,7 @@ export function applyDashOp(o: DashOp): string {
     case 'wider': {
       const it = d.items.find((i) => i.block === o.block);
       if (!it) return 'этого блока нет на стене';
-      put(widen(d.items, it.id, Math.round(o.by * 3) || (o.by > 0 ? 1 : -1)));
+      put(widen(d.items, it.id, Math.round(o.by * 3) || (o.by > 0 ? 1 : -1), g));
       return o.by > 0 ? 'сделал шире' : 'сделал уже';
     }
     case 'filter':
@@ -285,7 +303,7 @@ export function applyDashOp(o: DashOp): string {
     case 'customStyle': {
       const list = [...d.customStyles.filter((s) => s.id !== o.style.id), { ...o.style, custom: true }].slice(-12);
       const p = o.preset ? PRESETS.find((x) => x.id === o.preset) : undefined;
-      setDash({ customStyles: list, style: o.style.id, ...(p && (p.columns.length || p.grid) ? { preset: p.id, items: presetItems(p.id) } : {}), ...(o.density ? { density: o.density } : {}) });
+      setDash({ customStyles: list, style: o.style.id, ...(p && (p.columns.length || p.grid) ? { preset: p.id, items: presetOn(p.id, g) } : {}), ...(o.density ? { density: o.density } : {}) });
       return `свой стиль «${o.style.name}»`;
     }
     case 'removeStyle':
@@ -308,7 +326,8 @@ export function applyDashOp(o: DashOp): string {
       dashEvent({ type: 'settings', open: o.open });
       return o.open ? 'открыл настройки дашборда' : 'закрыл настройки';
     case 'reset':
-      setDash({ ...DEFAULT_DASH, items: presetItems('case'), style: d.style, customStyles: d.customStyles });
+      // экраны те же — размер сетки сохраняем
+      setDash({ ...DEFAULT_DASH, items: presetOn('case', g), gridCols: g.cols, gridRows: g.rows, style: d.style, customStyles: d.customStyles });
       return 'вернул раскладку по умолчанию';
   }
 }
@@ -347,5 +366,5 @@ export const currentStyle = (d: DashLayout) => d.customStyles.find((s) => s.id =
 /** Коротко для Джарвиса: что сейчас на стене (блоки в порядке чтения: слева направо). */
 export function dashSummary() {
   const d = state;
-  return { preset: d.preset, columns: readingOrder(d.items).map((i) => i.block), style: d.style, filter: d.filter, density: d.density, locked: d.locked };
+  return { preset: d.preset, columns: readingOrder(d.items).map((i) => i.block), style: d.style, filter: d.filter, density: d.density, locked: d.locked, grid: { cols: d.gridCols, rows: d.gridRows } };
 }

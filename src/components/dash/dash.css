@@ -2338,3 +2338,35 @@ body.dash-resizing * {
 .dset-item small {
   color: var(--text-3);
 }
+
+/* сетка стены: 1, 2, 3 экрана 16:9 */
+.dset-screens {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.dset-screens button {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 9px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.dset-screens button small {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.dset-screens button.on {
+  border-color: var(--coord, #ff3150);
+  box-shadow: 0 0 0 1px var(--coord, #ff3150);
+}
+.dset-mon {
+  display: inline-flex;
+  gap: 2px;
+}

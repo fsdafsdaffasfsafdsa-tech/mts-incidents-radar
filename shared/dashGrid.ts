@@ -1,10 +1,31 @@
-// Свободное поле стены: сетка 12×12, блоки ставятся куда угодно и любого размера, не налезая друг на друга.
+// Свободное поле стены: сетка (по умолчанию 12×12, размер настраивается — например, 36×12 на три экрана 16:9),
+// блоки ставятся куда угодно и любого размера, не налезая друг на друга. Размер блока — в клетках: если поле
+// сделать больше, блоки не растягиваются, а появляется место под новые.
 // Чистые функции — их используют стена, настройки, Джарвис и тесты.
 import type { BlockId, DashColumn } from './dash.ts';
 import type { CustomSpec } from './dashCustom.ts';
 
 export const GRID_COLS = 12;
 export const GRID_ROWS = 12;
+
+/** Размер поля в клетках. */
+export interface GridDims {
+  cols: number;
+  rows: number;
+}
+export const DEFAULT_GRID: GridDims = { cols: GRID_COLS, rows: GRID_ROWS };
+export const GRID_LIMITS = { cols: { min: 6, max: 48 }, rows: { min: 6, max: 24 } } as const;
+/** Готовые поля под экраны 16:9: клетка того же вида, что у 12×12 на одном экране. */
+export const GRID_SCREENS: { n: number; cols: number; rows: number }[] = [
+  { n: 1, cols: 12, rows: 12 },
+  { n: 2, cols: 24, rows: 12 },
+  { n: 3, cols: 36, rows: 12 },
+];
+/** Размер поля в допустимых пределах. */
+export function cleanDims(x: Partial<GridDims> | null | undefined): GridDims {
+  const n = (v: unknown, d: number, lim: { min: number; max: number }) => clampI(Number(v) || d, lim.min, lim.max);
+  return { cols: n(x?.cols, GRID_COLS, GRID_LIMITS.cols), rows: n(x?.rows, GRID_ROWS, GRID_LIMITS.rows) };
+}
 
 export interface Rect {
   x: number;
@@ -24,15 +45,15 @@ export const newId = () => `b${Date.now().toString(36)}${Math.random().toString(
 const clampI = (v: number, a: number, b: number) => Math.min(b, Math.max(a, Math.round(v)));
 
 /** Прямоугольник внутри поля: не меньше 2×2, не выходит за края. */
-export function fit(r: Rect): Rect {
-  const w = clampI(r.w, 2, GRID_COLS);
-  const h = clampI(r.h, 2, GRID_ROWS);
-  return { x: clampI(r.x, 0, GRID_COLS - w), y: clampI(r.y, 0, GRID_ROWS - h), w, h };
+export function fit(r: Rect, g: GridDims = DEFAULT_GRID): Rect {
+  const w = clampI(r.w, 2, g.cols);
+  const h = clampI(r.h, 2, g.rows);
+  return { x: clampI(r.x, 0, g.cols - w), y: clampI(r.y, 0, g.rows - h), w, h };
 }
 export const overlap = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 /** Можно ли поставить прямоугольник: в поле и ни на кого не налезает (кроме самого себя). */
-export function free(items: GridItem[], r: Rect, except?: string): boolean {
-  if (r.x < 0 || r.y < 0 || r.x + r.w > GRID_COLS || r.y + r.h > GRID_ROWS) return false;
+export function free(items: GridItem[], r: Rect, except?: string, g: GridDims = DEFAULT_GRID): boolean {
+  if (r.x < 0 || r.y < 0 || r.x + r.w > g.cols || r.y + r.h > g.rows) return false;
   return !items.some((i) => i.id !== except && overlap(i, r));
 }
 
@@ -52,14 +73,14 @@ export function columnsToItems(cols: DashColumn[]): GridItem[] {
 export const readingOrder = (items: GridItem[]) => [...items].sort((a, b) => a.x - b.x || a.y - b.y);
 
 /** Самое большое свободное место, начиная с клетки (или где угодно), не больше want. */
-export function findFree(items: GridItem[], want: { w: number; h: number }, at?: { x: number; y: number }): Rect | null {
+export function findFree(items: GridItem[], want: { w: number; h: number }, at?: { x: number; y: number }, g: GridDims = DEFAULT_GRID): Rect | null {
   const tries: Rect[] = [];
-  const starts = at ? [at] : Array.from({ length: GRID_ROWS * GRID_COLS }, (_, k) => ({ x: k % GRID_COLS, y: Math.floor(k / GRID_COLS) }));
+  const starts = at ? [at] : Array.from({ length: g.rows * g.cols }, (_, k) => ({ x: k % g.cols, y: Math.floor(k / g.cols) }));
   for (const s of starts) {
-    for (let w = Math.min(want.w, GRID_COLS - s.x); w >= 2; w--)
-      for (let h = Math.min(want.h, GRID_ROWS - s.y); h >= 2; h--) {
+    for (let w = Math.min(want.w, g.cols - s.x); w >= 2; w--)
+      for (let h = Math.min(want.h, g.rows - s.y); h >= 2; h--) {
         const r = { x: s.x, y: s.y, w, h };
-        if (free(items, r)) tries.push(r);
+        if (free(items, r, undefined, g)) tries.push(r);
       }
   }
   if (!tries.length) return null;
@@ -69,10 +90,10 @@ export function findFree(items: GridItem[], want: { w: number; h: number }, at?:
 }
 
 /** Добавить блок: в свободное место, а если места нет — делим пополам самый большой блок. */
-export function addItem(items: GridItem[], item: Omit<GridItem, keyof Rect | 'id'> & Partial<Rect> & { id?: string }, want = { w: 4, h: 6 }): GridItem[] {
+export function addItem(items: GridItem[], item: Omit<GridItem, keyof Rect | 'id'> & Partial<Rect> & { id?: string }, want = { w: 4, h: 6 }, g: GridDims = DEFAULT_GRID): GridItem[] {
   const id = item.id ?? newId();
   const at = item.x !== undefined && item.y !== undefined ? { x: item.x, y: item.y } : undefined;
-  let r = findFree(items, { w: item.w ?? want.w, h: item.h ?? want.h }, at) ?? (at ? findFree(items, { w: item.w ?? want.w, h: item.h ?? want.h }) : null);
+  let r = findFree(items, { w: item.w ?? want.w, h: item.h ?? want.h }, at, g) ?? (at ? findFree(items, { w: item.w ?? want.w, h: item.h ?? want.h }, undefined, g) : null);
   let next = items.map((i) => ({ ...i }));
   if (!r) {
     const big = [...next].sort((a, b) => b.w * b.h - a.w * a.h)[0];
@@ -116,7 +137,7 @@ export function swapItems(items: GridItem[], a: string, b: string): GridItem[] {
 }
 
 /** Шире/уже на n клеток: сначала в свободное место, иначе за счёт соседа справа или слева. */
-export function widen(items: GridItem[], id: string, n: number): GridItem[] {
+export function widen(items: GridItem[], id: string, n: number, g: GridDims = DEFAULT_GRID): GridItem[] {
   const it = items.find((i) => i.id === id);
   if (!it) return items;
   const next = items.map((i) => ({ ...i }));
@@ -128,8 +149,8 @@ export function widen(items: GridItem[], id: string, n: number): GridItem[] {
   for (let k = 0; k < n; k++) {
     const right = { x: me.x + me.w, y: me.y, w: 1, h: me.h };
     const left = { x: me.x - 1, y: me.y, w: 1, h: me.h };
-    if (free(next, right, id)) me.w++;
-    else if (free(next, left, id)) (me.x--, me.w++);
+    if (free(next, right, id, g)) me.w++;
+    else if (free(next, left, id, g)) (me.x--, me.w++);
     else {
       const nb = next.find((i) => i.id !== id && i.x === me.x + me.w && i.w > 2 && i.y <= me.y && i.y + i.h >= me.y + me.h);
       const nl = next.find((i) => i.id !== id && i.x + i.w === me.x && i.w > 2 && i.y <= me.y && i.y + i.h >= me.y + me.h);
@@ -142,18 +163,33 @@ export function widen(items: GridItem[], id: string, n: number): GridItem[] {
 }
 
 /** Привести сохранённое к порядку: в поле, без наложений (налезающие ставим в свободное место). */
-export function normalize(items: GridItem[]): GridItem[] {
+export function normalize(items: GridItem[], g: GridDims = DEFAULT_GRID): GridItem[] {
   const out: GridItem[] = [];
   for (const raw of items) {
-    const r = fit(raw);
+    const r = fit(raw, g);
     const it = { ...raw, ...r };
-    if (free(out, it)) out.push(it);
+    if (free(out, it, undefined, g)) out.push(it);
     else {
-      const spot = findFree(out, { w: it.w, h: it.h });
+      const spot = findFree(out, { w: it.w, h: it.h }, undefined, g);
       if (spot) out.push({ ...it, ...spot });
     }
   }
   return out;
+}
+
+/**
+ * Поменять размер поля. Блоки остаются того же размера в клетках и на своих местах — на большем поле просто
+ * появляется свободное место (блоки не растягиваются). На меньшем — что не влезает, переезжает в свободное
+ * место; если блоки не помещаются совсем, раскладка сжимается пропорционально, чтобы ни один не пропал.
+ */
+export function regrid(items: GridItem[], from: GridDims, to: GridDims): GridItem[] {
+  const kept = normalize(items, to);
+  if (kept.length === items.length) return kept;
+  const sx = to.cols / from.cols;
+  const sy = to.rows / from.rows;
+  const scaled = items.map((i) => ({ ...i, x: Math.floor(i.x * sx), y: Math.floor(i.y * sy), w: Math.max(2, Math.round(i.w * sx)), h: Math.max(2, Math.round(i.h * sy)) }));
+  const out = normalize(scaled, to);
+  return out.length >= kept.length ? out : kept;
 }
 
 /** Размер по умолчанию для нового блока. */

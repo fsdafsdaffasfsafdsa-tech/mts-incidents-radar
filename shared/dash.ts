@@ -369,4 +369,5 @@ export type DashOp =
   | { op: 'add'; block: BlockId; x?: number; y?: number; w?: number; h?: number; opts?: Record<string, boolean | number | string>; custom?: import('./dashCustom.ts').CustomSpec }
   | { op: 'item'; id: string; patch: Partial<import('./dashGrid.ts').GridItem> }
   | { op: 'remove'; id: string }
+  | { op: 'grid'; cols?: number; rows?: number } // размер поля в клетках: блоки не растягиваются, места больше
   | { op: 'reset' };

@@ -4,6 +4,7 @@ import { BLOCKS, BLOCK_NAME, DASH_GROUPS, GROUP_NAME, PRESETS, PRESET_NAME, dash
 import { DASH_STYLES, dashStyleById, findDashStyle } from '../shared/dashStyles.ts';
 import type { Point } from './point.ts';
 import { teamById } from './directory.ts';
+import { GRID_COLS, GRID_ROWS, cleanDims, type GridDims } from '../shared/dashGrid.ts';
 
 export interface DashCtx {
   preset: string;
@@ -12,6 +13,7 @@ export interface DashCtx {
   filter: DashGroup | null;
   density: 'normal' | 'large';
   locked?: boolean;
+  grid?: GridDims;
 }
 const blockIds = BLOCKS.map((b) => b.id);
 const presetIds = PRESETS.map((p) => p.id);
@@ -29,6 +31,7 @@ export function parseDashCtx(x: unknown): DashCtx | null {
     filter: typeof o.filter === 'string' && (groupIds as string[]).includes(o.filter) ? (o.filter as DashGroup) : null,
     density: o.density === 'large' ? 'large' : 'normal',
     locked: o.locked === true,
+    grid: o.grid && typeof o.grid === 'object' ? cleanDims(o.grid as Partial<GridDims>) : undefined,
   };
 }
 
@@ -42,9 +45,12 @@ export const DASH_TOOL = {
       properties: {
         op: {
           type: 'string',
-          enum: ['preset', 'show', 'hide', 'swap', 'replace', 'wider', 'narrower', 'filter', 'style', 'density', 'focus', 'toggle', 'settings', 'reset', 'popup'],
-          description: 'popup — показать блок окном поверх стены (block; value=large — на весь экран; on=false — закрыть окно), раскладку не меняет',
+          enum: ['preset', 'show', 'hide', 'swap', 'replace', 'wider', 'narrower', 'filter', 'style', 'density', 'focus', 'toggle', 'settings', 'reset', 'popup', 'grid'],
+          description: 'popup — показать блок окном поверх стены (block; value=large — на весь экран; on=false — закрыть окно), раскладку не меняет. grid — размер сетки стены в клетках (screens — под 1–3 экрана 16:9, или cols/rows): блоки не растягиваются, места под блоки больше',
         },
+        screens: { type: 'number', description: 'для grid: сколько экранов 16:9 рядом (1–3) — сетка 12×12 на каждый' },
+        cols: { type: 'number', description: 'для grid: клеток по горизонтали (6–48)' },
+        rows: { type: 'number', description: 'для grid: клеток по вертикали (6–24)' },
         preset: { type: 'string', enum: presetIds, description: `готовая раскладка: ${PRESETS.map((p) => `${p.id} — ${p.name}`).join('; ')}` },
         block: { type: 'string', enum: blockIds, description: `блок: ${BLOCKS.map((b) => `${b.id} — ${b.name}`).join('; ')}` },
         block2: { type: 'string', enum: blockIds, description: 'второй блок — для swap' },
@@ -80,11 +86,11 @@ export const BLOCK_TOOL = {
   },
 };
 
-export const DASH_NOTE = `Видеостену (дашборд координатора) перестраивай инструментом dashboard — это главный экран пункта. Примеры: «поменяй местами левый и правый блоки» → op=swap, position=left, position2=right; «покажи только критические» → op=filter, group=crit; «покажи все» → group=all; «добавь карту» → op=show, block=map; «убери ленту» → op=hide, block=events; «замени справа на историю передач» → op=replace, position=right, block=transfers; «сделай неон» → op=style; «крупнее» → op=density, value=large; «покажи крупно самый срочный» → op=focus, id=top; «раскладка четыре группы» → op=preset; «верни как было» → op=reset; «настройки дашборда» → op=settings. Если просят своё оформление словами, которого нет в списке стилей, — design_dashboard с описанием. Если просят новый блок, которого нет среди готовых, или нового персонажа — create_block. После действия скажи одной короткой фразой, что изменилось на стене.`;
+export const DASH_NOTE = `Видеостену (дашборд координатора) перестраивай инструментом dashboard — это главный экран пункта. Примеры: «поменяй местами левый и правый блоки» → op=swap, position=left, position2=right; «покажи только критические» → op=filter, group=crit; «покажи все» → group=all; «добавь карту» → op=show, block=map; «убери ленту» → op=hide, block=events; «замени справа на историю передач» → op=replace, position=right, block=transfers; «сделай неон» → op=style; «крупнее» → op=density, value=large; «покажи крупно самый срочный» → op=focus, id=top; «раскладка четыре группы» → op=preset; «сетка на три экрана» → op=grid, screens=3; «сетка 30 на 10» → op=grid, cols=30, rows=10; «больше клеток по горизонтали» → op=grid, cols на 4 больше текущих; «верни как было» → op=reset; «настройки дашборда» → op=settings. Если просят своё оформление словами, которого нет в списке стилей, — design_dashboard с описанием. Если просят новый блок, которого нет среди готовых, или нового персонажа — create_block. После действия скажи одной короткой фразой, что изменилось на стене.`;
 
 export function dashContextLine(c: DashCtx | null): string {
   if (!c) return '';
-  return `${c.locked ? 'Интерфейс закреплён (менять стену нельзя). ' : ''}Видеостена: раскладка «${PRESET_NAME[c.preset as PresetId] ?? 'своя'}», колонки слева направо: ${c.columns.map((b) => BLOCK_NAME[b]).join(', ') || '—'}; стиль «${dashStyleById(c.style).name}»${c.filter ? `; фильтр: только «${GROUP_NAME[c.filter]}»` : ''}${c.density === 'large' ? '; крупный шрифт' : ''}.`;
+  return `${c.locked ? 'Интерфейс закреплён (менять стену нельзя). ' : ''}Видеостена: раскладка «${PRESET_NAME[c.preset as PresetId] ?? 'своя'}», колонки слева направо: ${c.columns.map((b) => BLOCK_NAME[b]).join(', ') || '—'}; стиль «${dashStyleById(c.style).name}»${c.filter ? `; фильтр: только «${GROUP_NAME[c.filter]}»` : ''}${c.density === 'large' ? '; крупный шрифт' : ''}; сетка ${c.grid?.cols ?? GRID_COLS}×${c.grid?.rows ?? GRID_ROWS} клеток.`;
 }
 
 function pos(v: unknown, c: DashCtx | null, fallback: number): number {
@@ -173,6 +179,12 @@ export function toDashOp(a: Record<string, unknown>, c: DashCtx | null, point: P
       const full = a.value === 'large';
       return { cmd: { op: 'popup', block: b, full }, done: `Стена: «${BLOCK_NAME[b]}» ${full ? 'на весь экран' : 'окном'}` };
     }
+    case 'grid': {
+      const screens = Math.round(Number(a.screens) || 0);
+      const cur = c?.grid ?? { cols: GRID_COLS, rows: GRID_ROWS };
+      const g = screens >= 1 ? cleanDims({ cols: GRID_COLS * Math.min(4, screens), rows: GRID_ROWS }) : cleanDims({ cols: Number(a.cols) || cur.cols, rows: Number(a.rows) || cur.rows });
+      return { cmd: { op: 'grid', cols: g.cols, rows: g.rows }, done: `Стена: сетка ${g.cols}×${g.rows}${screens >= 1 ? ` (экранов: ${screens})` : ''}` };
+    }
     case 'reset':
       return { cmd: { op: 'reset' }, done: 'Стена: раскладка по умолчанию' };
   }
@@ -214,6 +226,14 @@ export function dashRules(t: string, c: DashCtx | null, run: (a: Record<string, 
   if (!/раскладк|режим|вид стены/.test(t) && /(четыре|4) групп|групп[ыа]? (на весь экран|окном|крупно)|(покажи|открой|разверни) групп/.test(t)) {
     const full = /весь экран|крупно|разверни/.test(t);
     return ok(run({ op: 'popup', block: 'groups', value: full ? 'large' : 'normal' }), full ? 'Четыре группы на весь экран, сэр.' : 'Четыре группы окном, сэр.');
+  }
+  // сетка: «сетка на три экрана», «сетку 36 на 12» — блоки не растягиваются, места больше
+  if (/сетк/.test(t)) {
+    const nm = /(\d{1,2})\s*(?:на|x|х|×|\*)\s*(\d{1,2})/.exec(t);
+    const sc = /(один|одного|1|два|двух|2|три|трёх|трех|3)\s*(экран|монитор)/.exec(t);
+    const n = sc ? ({ один: 1, одного: 1, '1': 1, два: 2, двух: 2, '2': 2, три: 3, трёх: 3, трех: 3, '3': 3 } as Record<string, number>)[sc[1]] : 0;
+    if (nm) return ok(run({ op: 'grid', cols: Number(nm[1]), rows: Number(nm[2]) }), `Сетка ${nm[1]} на ${nm[2]}, сэр.`);
+    if (n) return ok(run({ op: 'grid', screens: n }), `Сетка на ${n === 1 ? 'один экран' : n === 2 ? 'два экрана' : 'три экрана'}, сэр.`);
   }
   if (/(сбрось|верни как было|по умолчанию)/.test(t) && (aboutWall || onWall || /как было/.test(t))) return ok(run({ op: 'reset' }), 'Вернул стену как было, сэр.');
   if (/прежн|стар(ую|ая) стен|как раньше/.test(t)) return ok(run({ op: 'preset', preset: 'legacy' }), 'Включил прежнюю стену, сэр.');
