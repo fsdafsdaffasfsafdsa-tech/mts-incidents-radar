@@ -4,7 +4,7 @@
 // («покажи только критические»); щелчок мышью по группе — тоже фильтр.
 import { CheckCircle2, Clapperboard, Flame, LayoutGrid, Network, Radar, RotateCcw, Siren, Timer, UserX, X, type LucideIcon } from 'lucide-react';
 import { DASH_GROUPS, GROUP_NAME, type DashGroup, type DashSnapshot } from '../../../shared/dash';
-import { openWork, setDash, type DashLayout } from '../../lib/dashLayout';
+import { applyDashOp, openWork, setDash, type DashLayout } from '../../lib/dashLayout';
 import { fmtClock } from '../../lib/format';
 import { openHandover } from './handover';
 
@@ -43,15 +43,24 @@ export function CounterHeader({ snap, now, d, home }: { snap: DashSnapshot; now:
         {hero.g !== 'calm' && <b className="num">{hero.n}</b>}
         <span>{hero.word}</span>
       </div>
-      <div className="wh-chips">
-        {GROUPS.filter((g) => g !== hero.g).map((g) => {
+      {/* «Четыре группы» маленькой плашкой: щелчок или «Джарвис, покажи четыре группы» — окном, «…на весь экран» — крупно */}
+      <div
+        className="wh-groups"
+        role="button"
+        tabIndex={0}
+        onClick={() => applyDashOp({ op: 'popup', block: 'groups' })}
+        onDoubleClick={() => applyDashOp({ op: 'popup', block: 'groups', full: true })}
+        title="Четыре группы кейса. Щелчок — окном, двойной — на весь экран (или «Джарвис, покажи четыре группы»)"
+      >
+        {GROUPS.map((g) => {
           const Icon = GROUP_ICON[g];
           return (
-            <span key={g} role="button" tabIndex={0} className={`wh-chip g-${g} ${c[g] ? '' : 'zero'} ${d.filter === g ? 'sel' : ''}`} onClick={() => toggle(g)} title={`${GROUP_SHORT[g]}: ${c[g]}. ${hint(g)}`}>
+            <span key={g} className={`whg g-${g} ${c[g] ? '' : 'zero'} ${d.filter === g ? 'sel' : ''}`} title={`${GROUP_SHORT[g]}: ${c[g]}. ${hint(g)}`}>
               <Icon />
               <b className="num" key={c[g]}>
                 {c[g]}
               </b>
+              <small>{DASH_GROUPS.find((x) => x.id === g)!.short}</small>
             </span>
           );
         })}

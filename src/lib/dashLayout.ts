@@ -199,6 +199,7 @@ type Ev =
   | { type: 'test-alarm'; kind: AlertKind }
   | { type: 'designing'; text: string | null }
   | { type: 'sticker'; id: string } // появился персонаж — выделить его, чтобы сразу двигать
+  | { type: 'popup'; block: BlockId | null; full: boolean } // блок окном поверх стены
   | { type: 'edit'; on: boolean; id?: string | null }
   | { type: 'gallery'; open: boolean; at?: { x: number; y: number } | null };
 const evSubs = new Set<(e: Ev) => void>();
@@ -277,6 +278,10 @@ export function applyDashOp(o: DashOp): string {
     case 'filter':
       setDash({ filter: o.group });
       return o.group ? 'фильтр по группе' : 'показываю все группы';
+    case 'popup':
+      // окно поверх стены: раскладку не трогаем — блок показывается крупно и закрывается щелчком мимо или Esc
+      dashEvent({ type: 'popup', block: o.block, full: !!o.full });
+      return o.block ? 'показал окном' : 'закрыл окно';
     case 'customStyle': {
       const list = [...d.customStyles.filter((s) => s.id !== o.style.id), { ...o.style, custom: true }].slice(-12);
       const p = o.preset ? PRESETS.find((x) => x.id === o.preset) : undefined;

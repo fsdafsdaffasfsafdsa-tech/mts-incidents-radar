@@ -11,6 +11,7 @@ import { PERSONAS, personaById } from '../../shared/personas';
 import { applyDashOp, closeWork, dashSummary, getDash, isWorkOpen, openWork, useDash, useWorkOpen, wallWindowOpen } from '../lib/dashLayout';
 import { claimJarvis, isJarvisLeader, onJarvisLeader, useJarvisLeader } from '../lib/jarvisLeader';
 import { ghostStep } from './ghost';
+import { ACK_RE, RESUME_RE, SLEEP_RE, afterWake as afterWakeIn, bargeIn, forMeWithoutName, isEcho as isEchoOf, looksForMe, lowRu, sameRequest, wakeRe } from '../../shared/hearing';
 
 type Phase = 'idle' | 'listen' | 'think' | 'speak';
 type Line = { role: 'user' | 'assistant'; content: string; llm?: boolean; done?: string[]; event?: boolean };
@@ -406,27 +407,7 @@ function usePause() {
   }, []);
   return jarvisPause;
 }
-const lowRu = (t: string) => t.toLowerCase().replace(/ё/g, 'е').trim();
-const STOP_RE = /(^|[\s,.!?])(стоп|хватит|стой|достаточно|замолчи|помолчи|тихо|прекрати)([\s,.!?]|$)/;
-// Пауза — только по явной просьбе про самого Джарвиса. «Пока не надо», «не надо» — это ответ на его вопрос
-// («Завести инцидент?»), а не «замолчи»: раньше он уходил в паузу и переставал слушать.
-const SLEEP_RE = /(^|[\s,.!?])(пауза|не слушай|отдохни|отключись|помолчи пока|выключи микрофон|не мешай)([\s,.!?]|$)/;
-const RESUME_RE = /(продолж|возвращайся|вернись|работаем|просыпайся|проснись|включись|снова в работу)/;
-const ACK_RE = /^(принял|принято|понял|вижу|ясно|ок|окей|хорошо|увидел)[.!]*$/;
-// Без слова «Джарвис» (в окне после его вопроса или ответа) берём только то, что похоже на ответ ему: коротко или с
-// просьбой. Разговор людей между собой («лучше, чем было, но всё равно») — мимо, без ответа.
-const ANSWER_RE =
-  /(^|[\s,.!?])(да|нет|ага|угу|давай|давайте|конечно|согласен|подтверждаю|не надо|не нужно|отмена|отмени|заведи|заводи|завести|создай|передай|передавай|отдай|выдай|назначь|возьми|беру|взял|подними|понизь|отклони|напиши|скажи|сообщи|открой|покажи|убери|закрой|верни|переназначь|закрепи|напомни|прочитай|объясни|расскажи|разберись|займись|проверь|посмотри|найди|сделай|отправь|подскажи|помоги|сколько|кому)([\s,.!?]|$)/;
-const looksForMe = (t: string) => {
-  const low = lowRu(t);
-  return low.split(/\s+/).filter(Boolean).length <= 3 || ANSWER_RE.test(low);
-};
-// Фраза начинается с команды — это Джарвису и без его имени («покажи, что горит», «привет, разберись с МТС Банком»).
-const CMD_START_RE =
-  /^(покажи|открой|заведи|создай|передай|назначь|подними|понизь|отклони|напиши|сообщи|закрой|верни|переназначь|закрепи|напомни|прочитай|объясни|расскажи|разберись|займись|проверь|посмотри|найди|сделай|отправь|подскажи|помоги|что горит|что важнее|что я упускаю|что с |сколько|кому )/;
-/** Приветствия и связки в начале («привет», «слушай», «так») не мешают узнать команду. */
-const coreOf = (low: string) => low.replace(/^((привет|здравствуй|слушай|так|ну|а|окей|ок|эй|смотри|давай)[,.!\s]+)+/, '');
-const isCommand = (t: string) => CMD_START_RE.test(coreOf(lowRu(t)));
+// Что из услышанного — ему, что — эхо, что — перебили: shared/hearing.ts (там же — почему и тесты на живых фразах).
 /** Модель решила, что реплика не ей, — молчим. */
 const NOT_FOR_ME = /^[\s—–-]*$/;
 
@@ -435,7 +416,7 @@ type Rec = {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
-  start(): void;
+  start(track?: MediaStreamTrack): void;
   stop(): void;
   abort(): void;
   onresult: ((e: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null;
@@ -448,6 +429,18 @@ type Rec = {
 const W = window as unknown as { SpeechRecognition?: new () => Rec; webkitSpeechRecognition?: new () => Rec };
 const RecCtor = W.SpeechRecognition ?? W.webkitSpeechRecognition;
 export const canListen = !!RecCtor;
+
+// Шумоподавление. Сам распознаватель браузера обработку звука не включает, но Chrome 135+ принимает в start()
+// готовую дорожку микрофона — с шумоподавлением, эхоподавлением (голос Джарвиса из колонок вычитается, и он не
+// перебивает сам себя) и выравниванием громкости. Дорожка держится открытой, пока он слушает: перезапуски
+// распознавания не открывают микрофон заново. В других браузерах — как раньше, микрофон берёт распознаватель.
+const chromiumMajor = (() => {
+  const b = (navigator as Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } }).userAgentData?.brands;
+  const v = b?.find((x) => /Chromium|Google Chrome|Microsoft Edge/.test(x.brand))?.version ?? /Chrom(?:e|ium)\/(\d+)/.exec(navigator.userAgent)?.[1];
+  return Number(v) || 0;
+})();
+const CLEAN_MIC = chromiumMajor >= 135 && !!navigator.mediaDevices?.getUserMedia;
+const MIC_CONSTRAINTS: MediaTrackConstraints & Record<string, unknown> = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, voiceIsolation: true };
 
 type EarState = 'off' | 'starting' | 'on' | 'error';
 /**
@@ -469,7 +462,39 @@ class Ear {
   // а пробуем снова — сами через растущую паузу и сразу при любом щелчке, клавише, возврате на вкладку.
   private blockedUntil = 0;
   private blockFails = 0;
+  // дорожка микрофона с шумо- и эхоподавлением (CLEAN_MIC); null — распознаватель берёт микрофон сам
+  private stream: MediaStream | null = null;
+  private asking = false;
+  private clean = CLEAN_MIC;
   h: { result: (t: string, final: boolean) => void; state: (s: EarState, err?: string) => void } | null = null;
+
+  /** Чистая дорожка микрофона: запросить один раз и держать, пока слушаем. */
+  private async ensureTrack(): Promise<MediaStreamTrack | null> {
+    if (!this.clean) return null;
+    const live = this.stream?.getAudioTracks().find((t) => t.readyState === 'live');
+    if (live) return live;
+    if (this.asking) return null;
+    this.asking = true;
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS as MediaTrackConstraints });
+      const t = this.stream.getAudioTracks()[0];
+      t?.addEventListener('ended', () => {
+        this.stream = null;
+        if (this.want) this.retry(); // микрофон сменили или отключили — берём заново
+      });
+      return t ?? null;
+    } catch {
+      this.clean = false; // не дали или не умеет — слушаем как раньше
+      return null;
+    } finally {
+      this.asking = false;
+    }
+  }
+  /** Отпустить микрофон (выключили, свернули вкладку, другое окно стало ведущим). */
+  private release() {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+  }
 
   /** Попробовать снова прямо сейчас (действие человека, вкладка снова видна, микрофон разрешили). */
   retry() {
@@ -482,7 +507,10 @@ class Ear {
   set(want: boolean) {
     this.want = want;
     if (want) this.kick();
-    else if (this.rec) this.abort();
+    else {
+      if (this.rec) this.abort();
+      this.release();
+    }
   }
   private abort() {
     this.abortAt = Date.now();
@@ -500,6 +528,12 @@ class Ear {
       setTimeout(() => this.kick(), wait + 30);
       return;
     }
+    // сначала — чистая дорожка микрофона (один раз), потом распознавание на ней
+    if (this.clean && !this.stream?.getAudioTracks().some((t) => t.readyState === 'live')) {
+      if (!this.asking) void this.ensureTrack().then(() => this.kick());
+      return;
+    }
+    const track = this.stream?.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
     const r = new RecCtor();
     r.lang = 'ru-RU';
     r.continuous = true;
@@ -546,11 +580,17 @@ class Ear {
     this.abortAt = 0;
     this.h?.state('starting');
     try {
-      r.start();
+      if (track) r.start(track);
+      else r.start();
     } catch {
+      if (track) {
+        // браузер не принял дорожку — слушаем как раньше, микрофон берёт распознаватель
+        this.clean = false;
+        this.release();
+      }
       this.rec = null;
       this.running = false;
-      setTimeout(() => this.kick(), 1000);
+      setTimeout(() => this.kick(), track ? 50 : 1000);
     }
   }
   /** Сторож. */
@@ -580,20 +620,16 @@ class Ear {
 const ear = new Ear();
 // Зовут по имени персонажа или по-старому «Джарвис».
 let wakeFor = '';
-let wakeRe = /$^/;
+let wakeCache = /$^/;
 function wake() {
   if (wakeFor !== jarvisPrefs.persona) {
     wakeFor = jarvisPrefs.persona;
-    const words = [...new Set([...personaById(jarvisPrefs.persona).wake, ...PERSONAS[0].wake])].sort((a, b) => b.length - a.length);
-    wakeRe = new RegExp(`(?:^|\\s)(${words.join('|')})[,.!?\\s]*`, 'i');
+    wakeCache = wakeRe([...personaById(jarvisPrefs.persona).wake, ...PERSONAS[0].wake]);
   }
-  return wakeRe;
+  return wakeCache;
 }
-const WAKE = { test: (t: string) => wake().test(t), exec: (t: string) => wake().exec(t) };
-const afterWake = (t: string) => {
-  const m = WAKE.exec(t);
-  return m ? t.slice(m.index + m[0].length).trim() : t.trim();
-};
+const WAKE = { test: (t: string) => wake().test(lowRu(t)) };
+const afterWake = (t: string) => afterWakeIn(t, wake());
 const FOLLOW_MS = 9000; // после ответа можно продолжать без слова «Джарвис»
 
 const TABS = ['map', 'inbox', 'teams', 'done', 'reviews', 'requests', 'signals', 'shift', 'ai', 'wall', 'directory', 'desk'];
@@ -729,6 +765,8 @@ export function Jarvis() {
   const pause = usePause();
   const speakEnd = useRef(0); // когда закончил говорить — хвост собственного голоса не принимаем за команду
   const bargeAt = useRef(0); // когда человек перебил его голосом
+  const currentQ = useRef(''); // о чём он думает сейчас — повтор той же просьбы не выполняем второй раз
+  const pending = useRef<string | null>(null); // попросили, пока думал, — выполним сразу после ответа
   const [, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('idle');
   const [lines, setLines] = useState<Line[]>([]);
@@ -870,6 +908,7 @@ export function Jarvis() {
       return 'Принято.';
     }
     busy.current = true;
+    currentQ.current = question;
     setErr('');
     setHeard('');
     setAwaiting(false);
@@ -939,6 +978,10 @@ export function Jarvis() {
       return '';
     } finally {
       busy.current = false;
+      // пока думал, попросили другое — выполняем сразу, без «скажите ещё раз»
+      const next = pending.current;
+      pending.current = null;
+      if (next) setTimeout(() => void askRef.current(next), 250);
     }
   }
   const askRef = useRef(ask);
@@ -990,14 +1033,6 @@ export function Jarvis() {
   }
 
   /** Распознал собственную реплику (колонки → микрофон) — не команда. */
-  function isEcho(t: string) {
-    const last = [...linesRef.current].reverse().find((l) => l.role === 'assistant');
-    if (!last || Date.now() - speakEnd.current > 6000) return false;
-    const words = lowRu(t).split(/[^а-яa-z0-9]+/).filter((w) => w.length > 3);
-    if (words.length < 3) return false;
-    const said = lowRu(last.content);
-    return words.filter((w) => said.includes(w)).length / words.length >= 0.6;
-  }
   function resume() {
     setPause({ sleep: false });
     openPanel();
@@ -1058,33 +1093,27 @@ export function Jarvis() {
   // Фраза со словом «Джарвис» — команда; после ответа несколько секунд можно продолжать без него.
   function onHeard(t: string, final: boolean) {
     const low = lowRu(t);
-    // Говорит, а человек заговорил — замолкает и слушает. Своё эхо из колонок отличаем: перебили, если прозвучали
-    // хотя бы два новых слова, которых нет в его фразе, или «стоп», «хватит».
-    if (phase === 'speak' || bargeAt.current > Date.now() - 1500) {
-      const spoken = lowRu(speakingText);
-      const fresh = low.split(/[^а-яa-z0-9]+/).filter((w) => w.length > 2 && !spoken.includes(w));
-      const m = STOP_RE.exec(low);
-      const stopWord = !!m && low.split(/\s+/).length <= 3 && !spoken.includes(m[2]);
-      if (!stopWord && fresh.length < 2 && phase === 'speak') return;
-      if (phase === 'speak') {
-        stopVoice();
-        setPhase('idle');
-        bargeAt.current = Date.now();
-        speakEnd.current = 0; // это не хвост его голоса — фразу человека не отбрасываем
-      }
-      if (stopWord) {
+    const now = Date.now();
+    const recentSpoken = now - speakEnd.current < 8000 || phase === 'speak';
+    // 1. Говорит, а человек заговорил — замолкает и слушает (shared/hearing: эхо и шум не обрывают).
+    if (phase === 'speak') {
+      const b = bargeIn(t, speakingText) ?? (WAKE.test(t) && !isEchoOf(t, speakingText) ? 'talk' : null);
+      if (!b) return;
+      stopVoice();
+      setPhase('idle');
+      bargeAt.current = now;
+      speakEnd.current = 0; // это не хвост его голоса — фразу человека не отбрасываем
+      if (b === 'stop') {
         setHeard('');
         follow();
         return;
       }
-      // перебили — значит, говорят ему: дослушиваем и выполняем без слова «Джарвис»
       if (final) return void askRef.current(afterWake(t) || t.trim());
       setHeard(afterWake(t));
       follow(8000);
       return;
     }
-    // Пауза — ждём только «продолжаем работу».
-    // Пауза — ждём «продолжаем работу» или обращение по имени («Джарвис, …» — сразу и выполняет).
+    // 2. Пауза — ждём «продолжаем работу» или обращение по имени («Джарвис, …» — сразу и выполняет).
     if (jarvisPause.sleep) {
       if (!final) return;
       if (WAKE.test(t)) {
@@ -1096,42 +1125,45 @@ export function Jarvis() {
       if (RESUME_RE.test(low)) resume();
       return;
     }
-    if (busy.current || phase !== 'idle') return;
-    const now = Date.now();
-    if (now - speakEnd.current < 1200) return; // хвост собственного голоса
-    if (final && isEcho(t)) return;
+    // 3. Его же голос из колонок — не команда (длинный кусок его реплики; ответ со словами из вопроса — не эхо).
+    if (recentSpoken && isEchoOf(t, speakingText)) return;
+    // 4. Думает — слух не выключаем: новую просьбу запомним и выполним сразу после ответа, повтор той же — пропустим.
+    if (busy.current || phase === 'think') {
+      if (!final) return;
+      const said = afterWake(t) || t.trim();
+      if (said.length < 2 || sameRequest(said, currentQ.current)) return;
+      if (WAKE.test(t) || looksForMe(said) || forMeWithoutName(said)) {
+        pending.current = said;
+        setHeard(said);
+      }
+      return;
+    }
+    if (phase !== 'idle') return;
+    // 5. Только что перебил его — дослушиваем и выполняем без слова «Джарвис».
+    const barged = now - bargeAt.current < 10_000;
     const live = now < followUntil.current;
     if (!final) {
-      if (live) {
+      if (live || barged || WAKE.test(t) || forMeWithoutName(t)) {
         setHeard(afterWake(t));
         followUntil.current = Math.max(followUntil.current, now + 4000); // человек говорит — окно не закрываем
         setAwaiting(true);
-      } else if (WAKE.test(t)) {
-        openPanel();
-        setHeard(afterWake(t));
-        follow(6000);
       }
       return;
     }
     const said = t.trim();
-    if (live && said.length >= 2) {
-      // перебил Джарвиса — точно говорят ему
-      if (WAKE.test(said) || looksForMe(said) || isCommand(said) || now - bargeAt.current < 10_000) return void askRef.current(said);
-      setHeard(''); // говорят не ему — не отвечаем и окно не продлеваем
-      return;
-    }
-    if (isCommand(said)) {
-      openPanel();
-      return void askRef.current(said);
-    }
+    if (said.length < 2) return;
     if (WAKE.test(said)) {
       const rest = afterWake(said);
-      openPanel();
       if (rest.length > 2) return void askRef.current(rest);
       setHeard('');
       return follow(); // «Джарвис» — и пауза: ждём команду
     }
-    if (!live) setHeard('');
+    // в разговоре — короткий ответ или просьба; вне разговора — просьба или вопрос о деле («что горит?»)
+    if (barged || (live ? looksForMe(said) : forMeWithoutName(said))) {
+      bargeAt.current = 0;
+      return void askRef.current(said);
+    }
+    setHeard(''); // говорят не ему — не отвечаем
   }
   const onHeardRef = useRef(onHeard);
   onHeardRef.current = onHeard;
@@ -1165,7 +1197,7 @@ export function Jarvis() {
   useEffect(() => {
     // «Нет микрофона» не выключает слух: Ear сам пробует снова (см. retry) — иначе после входа на сайт его надо «протыкивать».
     // Слушает только ведущее окно: два окна с распознаванием мешают друг другу, и ни одно ничего не делает.
-    ear.set(!!RecCtor && control && leader && tabVisible && !prefs.scenario && !pause.mute && (phase === 'idle' || phase === 'speak'));
+    ear.set(!!RecCtor && control && leader && tabVisible && !prefs.scenario && !pause.mute && (phase === 'idle' || phase === 'speak' || phase === 'think')); // и пока думает — слышит
   }, [control, leader, tabVisible, phase, prefs.scenario, pause.mute]);
   // Сторож: раз в 2 с поднимает слух, если браузер его уронил; любой щелчок, клавиша, возврат на вкладку или
   // выданное разрешение микрофона — пробуем сразу.

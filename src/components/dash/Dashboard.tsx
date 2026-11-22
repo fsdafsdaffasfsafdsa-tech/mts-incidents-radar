@@ -236,6 +236,7 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
       )}
       <GridField d={d} ctx={ctx} inWall={inWall} editing={editing} setEditing={setEditing} />
       <Stickers />
+      <BlockPopup ctx={ctx} />
       {!editing.on && <ShowPanel />}
       <UrgentShow list={urgentNow} incidents={incidents} now={now} onAck={att.ack} />
       <Handover />
@@ -643,15 +644,22 @@ function WorkBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   );
 }
 
+/** Четыре группы кейса. Узкий блок — 2×2, а не четыре тонкие колонки; узкая колонка — короткое название, число всегда видно. */
 function GroupsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
   const { snap, now } = ctx;
   return (
     <div className="db db-groups">
+      <div className="dg-grid">
       {DASH_GROUPS.filter((g) => ob(o, `g_${g.id}`)).map((g) => (
-        <div key={g.id} className={`dg g-${g.id}`} title={g.hint}>
+        <div key={g.id} className={`dg g-${g.id} ${snap.byGroup[g.id].length ? '' : 'zero'}`} title={g.hint}>
           <div className="dg-head">
-            <b>{g.label}</b>
-            <span className="num">{snap.byGroup[g.id].length}</span>
+            <b>
+              <span className="dg-long">{g.label}</span>
+              <span className="dg-short">{g.short}</span>
+            </b>
+            <span className="num" key={snap.byGroup[g.id].length}>
+              {snap.byGroup[g.id].length}
+            </span>
           </div>
           <div className="dg-list">
             {g.id === 'crit' &&
@@ -674,10 +682,42 @@ function GroupsBlock({ ctx, o }: { ctx: BlockCtx; o?: Opts }) {
                 <span className={`num dg-left ${i.slaDeadline - now < 30 * MIN ? 'hot' : ''}`}>{leftText(i, now)}</span>
               </button>
             ))}
-            {!snap.byGroup[g.id].length && !(g.id === 'crit' && snap.resolvedCrit.length) && <div className="db-empty small">нет</div>}
+            {!snap.byGroup[g.id].length && !(g.id === 'crit' && snap.resolvedCrit.length) && (
+              <div className="dg-calm" title="Пусто">
+                <CheckCircle2 />
+              </div>
+            )}
           </div>
         </div>
       ))}
+      </div>
+    </div>
+  );
+}
+
+/** Блок окном поверх стены — по просьбе Джарвису («покажи четыре группы», «…на весь экран») или щелчком по плашке. */
+function BlockPopup({ ctx }: { ctx: BlockCtx }) {
+  const [p, setP] = useState<{ block: BlockId; full: boolean } | null>(null);
+  useDashEvents(
+    useCallback((e) => {
+      if (e.type === 'popup') setP(e.block ? { block: e.block, full: e.full } : null);
+    }, []),
+  );
+  useEffect(() => {
+    if (!p) return;
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && setP(null);
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [p]);
+  if (!p) return null;
+  return (
+    <div className={`bp-wrap ${p.full ? 'full' : ''}`} onClick={() => setP(null)}>
+      <div className="bp" onClick={(e) => e.stopPropagation()}>
+        <span className="bp-x" role="button" tabIndex={0} onClick={() => setP(null)} title="Закрыть (Esc или «Джарвис, закрой окно»)">
+          <X />
+        </span>
+        <Block id={p.block} ctx={ctx} skip={new Set()} />
+      </div>
     </div>
   );
 }

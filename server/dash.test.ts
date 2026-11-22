@@ -152,6 +152,10 @@ test('Джарвис без модели понимает команды сте�
   assert.deepEqual(said('верни прежнюю стену').got, { op: 'preset', preset: 'legacy' });
   assert.deepEqual(said('добавь блок избранное').got, { op: 'show', block: 'favs' });
   assert.deepEqual(said('добавь блок не забыть').got, { op: 'show', block: 'forgot' });
+  // четыре группы окном поверх стены — раскладку не трогаем
+  assert.deepEqual(said('покажи четыре группы').got, { op: 'popup', block: 'groups', value: 'normal' });
+  assert.deepEqual(said('четыре группы на весь экран').got, { op: 'popup', block: 'groups', value: 'large' });
+  assert.deepEqual(said('закрой окно').got, { op: 'popup', on: false });
   assert.equal(said('что в избранном').reply, null, 'вопрос об избранном — не команда стене');
   assert.equal(said('кому передать этот инцидент').reply, null, 'обычные вопросы не перехватывает');
 });

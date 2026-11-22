@@ -40,7 +40,11 @@ export const DASH_TOOL = {
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['preset', 'show', 'hide', 'swap', 'replace', 'wider', 'narrower', 'filter', 'style', 'density', 'focus', 'toggle', 'settings', 'reset'] },
+        op: {
+          type: 'string',
+          enum: ['preset', 'show', 'hide', 'swap', 'replace', 'wider', 'narrower', 'filter', 'style', 'density', 'focus', 'toggle', 'settings', 'reset', 'popup'],
+          description: 'popup — показать блок окном поверх стены (block; value=large — на весь экран; on=false — закрыть окно), раскладку не меняет',
+        },
         preset: { type: 'string', enum: presetIds, description: `готовая раскладка: ${PRESETS.map((p) => `${p.id} — ${p.name}`).join('; ')}` },
         block: { type: 'string', enum: blockIds, description: `блок: ${BLOCKS.map((b) => `${b.id} — ${b.name}`).join('; ')}` },
         block2: { type: 'string', enum: blockIds, description: 'второй блок — для swap' },
@@ -163,6 +167,12 @@ export function toDashOp(a: Record<string, unknown>, c: DashCtx | null, point: P
     }
     case 'settings':
       return { cmd: { op: 'settings', open: a.on !== false }, done: a.on !== false ? 'Открыл настройки дашборда' : 'Закрыл настройки дашборда' };
+    case 'popup': {
+      if (a.on === false || !a.block) return { cmd: { op: 'popup', block: null }, done: 'Стена: закрыл окно' };
+      const b = block(a.block);
+      const full = a.value === 'large';
+      return { cmd: { op: 'popup', block: b, full }, done: `Стена: «${BLOCK_NAME[b]}» ${full ? 'на весь экран' : 'окном'}` };
+    }
     case 'reset':
       return { cmd: { op: 'reset' }, done: 'Стена: раскладка по умолчанию' };
   }
@@ -199,6 +209,12 @@ export function dashRules(t: string, c: DashCtx | null, run: (a: Record<string, 
   const aboutWall = /стен|дашборд|табло|блок|колонк|раскладк|стил|оформлен/.test(t);
   if (/настройк/.test(t) && /дашборд|стен/.test(t)) return ok(run({ op: 'settings', on: !/закрой/.test(t) }), 'Настройки дашборда, сэр.');
   if (/крупно|крупным планом|на весь экран/.test(t) && /срочн|главн|важн|критич|инцидент/.test(t)) return ok(run({ op: 'focus', id: 'top' }), 'Показываю крупно самый срочный, сэр.');
+  // окно поверх стены: «покажи четыре группы», «группы на весь экран», «закрой окно» — раскладку не трогаем
+  if (/(закрой|убери|сверни) (окно|групп)/.test(t)) return ok(run({ op: 'popup', on: false }), 'Закрыл, сэр.');
+  if (!/раскладк|режим|вид стены/.test(t) && /(четыре|4) групп|групп[ыа]? (на весь экран|окном|крупно)|(покажи|открой|разверни) групп/.test(t)) {
+    const full = /весь экран|крупно|разверни/.test(t);
+    return ok(run({ op: 'popup', block: 'groups', value: full ? 'large' : 'normal' }), full ? 'Четыре группы на весь экран, сэр.' : 'Четыре группы окном, сэр.');
+  }
   if (/(сбрось|верни как было|по умолчанию)/.test(t) && (aboutWall || onWall || /как было/.test(t))) return ok(run({ op: 'reset' }), 'Вернул стену как было, сэр.');
   if (/прежн|стар(ую|ая) стен|как раньше/.test(t)) return ok(run({ op: 'preset', preset: 'legacy' }), 'Включил прежнюю стену, сэр.');
   const style = findDashStyle(t);

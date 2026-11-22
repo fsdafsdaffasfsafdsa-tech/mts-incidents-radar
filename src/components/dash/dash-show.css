@@ -1020,3 +1020,200 @@
 .stk-tools button:hover {
   border-color: var(--jv, #4e8cff);
 }
+
+/* ─── «Четыре группы»: узкий блок — 2×2; узкая колонка — короткое название; число всегда видно ─── */
+.db.db-groups {
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+.dg-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--d-gap);
+}
+@container (max-width: 760px) {
+  .dg-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.dg-grid .dg {
+  min-height: 0;
+}
+.dg-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.4em;
+}
+.dg-head b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-short {
+  display: none;
+}
+@container (max-width: 300px) {
+  .dg-long {
+    display: none;
+  }
+  .dg-short {
+    display: inline;
+  }
+}
+.dg-head .num {
+  animation: hard-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.5);
+}
+.dg.zero .dg-head .num {
+  opacity: 0.45;
+}
+.dg-calm {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--gc, var(--d-ok));
+  opacity: 0.35;
+}
+.dg-calm svg {
+  width: 1.8em;
+  height: 1.8em;
+}
+
+/* ─── плашка «Четыре группы» в шапке ─── */
+.dash .wh-groups {
+  align-self: center;
+  display: flex;
+  gap: 0.35em;
+  padding: 0.3em;
+  border-radius: var(--d-radius);
+  background: var(--d-panel);
+  border: 1px solid var(--d-line);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.dash .wh-groups:hover {
+  border-color: var(--jv, var(--d-accent));
+}
+.dash .wh-groups:active {
+  transform: scale(0.97);
+}
+.whg {
+  --gc: var(--d-line);
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.3em;
+  align-items: center;
+  min-width: 4.2em;
+  padding: 0.2em 0.55em 0.25em;
+  border-radius: calc(var(--d-radius) * 0.6);
+  border-top: 0.22em solid var(--gc);
+  background: color-mix(in srgb, var(--gc) 12%, var(--d-panel2));
+}
+.whg.g-crit {
+  --gc: var(--d-crit);
+}
+.whg.g-coord {
+  --gc: var(--d-warn);
+}
+.whg.g-high {
+  --gc: var(--d-high);
+}
+.whg.g-research {
+  --gc: var(--d-accent);
+}
+.whg svg {
+  width: 1em;
+  height: 1em;
+  color: var(--gc);
+}
+.whg b {
+  font-size: 1.25em;
+  line-height: 1;
+  color: var(--gc);
+  animation: hard-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.5);
+}
+.whg small {
+  grid-column: 1 / 3;
+  color: var(--d-muted);
+  font-size: 0.72em;
+  white-space: nowrap;
+}
+.whg.zero {
+  opacity: 0.55;
+}
+.whg.sel {
+  outline: 2px solid var(--gc);
+  outline-offset: -2px;
+}
+
+/* ─── блок окном поверх стены ─── */
+.bp-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: 4vh 4vw;
+  background: rgb(5 8 14 / 0.55);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: dur-in 0.25s ease-out;
+}
+.bp {
+  position: relative;
+  display: flex;
+  width: min(1400px, 92vw);
+  height: min(70vh, 720px);
+  border-radius: calc(var(--d-radius) * 1.3);
+  box-shadow: 0 2em 5em rgb(0 0 0 / 0.5);
+  animation: hard-in-bp 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.bp > :not(.bp-x) {
+  flex: 1;
+  min-width: 0;
+}
+.bp-wrap.full {
+  padding: 1.2vh 1.2vw;
+}
+.bp-wrap.full .bp {
+  width: 100%;
+  height: 100%;
+  font-size: 1.25em;
+}
+@keyframes hard-in-bp {
+  from {
+    opacity: 0;
+    transform: scale(0.8) translateY(4%);
+  }
+}
+.bp-x {
+  position: absolute;
+  right: -0.6em;
+  top: -0.6em;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 2.2em;
+  height: 2.2em;
+  border-radius: 50%;
+  background: var(--d-panel);
+  border: 1px solid var(--d-line);
+  color: var(--d-text);
+  cursor: pointer;
+  box-shadow: 0 0.4em 1em rgb(0 0 0 / 0.3);
+}
+.bp-x svg {
+  width: 1.1em;
+  height: 1.1em;
+}
+.bp-wrap.full .bp-x {
+  right: 0.6em;
+  top: 0.6em;
+}

@@ -361,6 +361,7 @@ export type DashOp =
   | { op: 'style'; style: string }
   | { op: 'density'; value: 'normal' | 'large' }
   | { op: 'focus'; id: string | null }
+  | { op: 'popup'; block: BlockId | null; full?: boolean } // показать блок окном поверх стены (full — на весь экран); null — закрыть
   | { op: 'toggle'; what: 'counters' | 'ticker' | 'onlyFile' | 'sound'; on: boolean }
   | { op: 'settings'; open: boolean }
   | { op: 'customStyle'; style: import('./dashStyles.ts').DashStyle; preset?: PresetId | null; density?: 'normal' | 'large' | null }

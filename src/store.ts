@@ -222,13 +222,15 @@ export function connect() {
   es.onopen = () => setState({ connected: true, everConnected: true });
   es.onerror = () => {
     setState({ connected: false });
-    void fetch('/api/me').then((r) => {
-      if (r.status === 401) {
-        es?.close();
-        es = null;
-        setState({ me: null });
-      }
-    });
+    void fetch('/api/me')
+      .then((r) => {
+        if (r.status === 401) {
+          es?.close();
+          es = null;
+          setState({ me: null });
+        }
+      })
+      .catch(() => undefined); // сервер перезапускается — поток переподключится сам
   };
   es.onmessage = (e) => {
     try {
