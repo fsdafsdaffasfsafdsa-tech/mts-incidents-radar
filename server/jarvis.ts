@@ -213,7 +213,7 @@ export async function speak(text: string, voiceId: string): Promise<Spoken | nul
 // ─── данные пункта человеческим языком ─────────────────────────────────────
 
 const TAB_NAMES: Record<string, string> = {
-  desk: '«Мой стол»',
+  desk: '«Мой стол» (личный кабинет координатора)',
   map: '«Жалобы» (карта)',
   inbox: '«Входящие»',
   teams: '«У команд»',
@@ -892,7 +892,7 @@ async function llm(point: Point, me: Me, q: JarvisAsk, emit: Emit = () => undefi
 
 const TAB_WORDS: [RegExp, string][] = [
   [/видеостен|стен[уы]/, 'wall'],
-  [/мой стол|стол/, 'desk'],
+  [/мой стол|стол|кабинет|рабоч\S* мест/, 'desk'],
   [/карт|перемот/, 'map'],
   [/входящ/, 'inbox'],
   [/у команд/, 'teams'],

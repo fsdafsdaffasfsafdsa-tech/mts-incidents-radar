@@ -164,6 +164,12 @@ export function Dashboard({ standalone = false, home = false }: { standalone?: b
   );
 }
 
+/** Личный кабинет координатора: рабочее место сразу на «Моём столе». */
+function openCabinet() {
+  openWork();
+  setTab('desk');
+}
+
 /** Открыть всё рабочее место: вкладки, карточки инцидентов, справочник, смену. */
 function WorkButton() {
   return (
@@ -246,6 +252,11 @@ function DashWall({ d, standalone, home, settings, setSettings, focusId, setFocu
       {settings && <DashSettings onClose={() => setSettings(false)} />}
       {!full && (
         <div className="dash-tools">
+          {home && (
+            <button className="dt-cabinet" onClick={openCabinet} title="Личный кабинет координатора: «Мой стол», входящие, карточки инцидентов, справочник, смена">
+              <LayoutGrid size={15} /> Кабинет
+            </button>
+          )}
           <button onClick={() => setSettings(true)} title="Блоки, стиль, тревоги, Джарвис">
             <Settings2 size={15} /> Настройки
           </button>

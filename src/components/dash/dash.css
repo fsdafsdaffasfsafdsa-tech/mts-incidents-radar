@@ -2370,3 +2370,11 @@ body.dash-resizing * {
   display: inline-flex;
   gap: 2px;
 }
+
+/* «Кабинет» — личный кабинет координатора (рабочее место на «Моём столе»): первой кнопкой и в цвет акцента */
+.dash-tools button.dt-cabinet {
+  background: var(--d-accent, #4e8cff);
+  border-color: var(--d-accent, #4e8cff);
+  color: var(--d-on-accent, #fff);
+  font-weight: 700;
+}
